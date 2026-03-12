@@ -7,6 +7,4 @@ psycopg2-binary
 redis
 rq
 ffmpeg-python
-stripe
 python-dotenv
-Pillow
