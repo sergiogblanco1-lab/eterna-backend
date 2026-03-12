@@ -2,7 +2,7 @@ from fastapi import FastAPI
 import uvicorn
 import os
 
-app = FastAPI(),
+app = FastAPI()
 
 @app.get("/")
 def home():
