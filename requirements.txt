@@ -1,10 +1,2 @@
 fastapi
 uvicorn
-python-multipart
-pydantic
-sqlalchemy
-psycopg2-binary
-redis
-rq
-ffmpeg-python
-python-dotenv
