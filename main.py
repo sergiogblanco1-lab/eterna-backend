@@ -1,5 +1,4 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from typing import List
 import os
 import uuid
 import subprocess
@@ -23,7 +22,12 @@ async def crear_eterna(
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
-    fotos: List[UploadFile] = File(...)
+    foto1: UploadFile = File(...),
+    foto2: UploadFile = File(...),
+    foto3: UploadFile = File(...),
+    foto4: UploadFile = File(...),
+    foto5: UploadFile = File(...),
+    foto6: UploadFile = File(...)
 ):
 
     eterna_id = str(uuid.uuid4())
@@ -37,11 +41,15 @@ async def crear_eterna(
         for frase in frases:
             f.write(frase + "\n")
 
+    fotos = [foto1, foto2, foto3, foto4, foto5, foto6]
+
     imagenes = []
 
-    for foto in fotos:
+    for i, foto in enumerate(fotos, start=1):
+
         contenido = await foto.read()
-        ruta = os.path.join(folder, foto.filename)
+
+        ruta = os.path.join(folder, f"foto{i}.jpg")
 
         with open(ruta, "wb") as f:
             f.write(contenido)
@@ -72,7 +80,7 @@ async def crear_eterna(
         "eterna_id": eterna_id,
         "video": video_path,
         "message": "Tu ETERNA ha sido creada",
-        "numero_fotos": len(fotos)
+        "numero_fotos": 6
     }
 
 
@@ -80,4 +88,5 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("PORT", 10000))
+
     uvicorn.run(app, host="0.0.0.0", port=port)
