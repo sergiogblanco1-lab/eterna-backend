@@ -51,6 +51,7 @@ async def crear_eterna(
     return {
         "ok": True,
         "eterna_id": eterna_id,
+        "video": video_path,
         "message": "Tu ETERNA ha sido guardada",
         "numero_fotos": 6
     }
