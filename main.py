@@ -6,20 +6,29 @@ import subprocess
 
 app = FastAPI()
 
-# Carpeta donde se guardan las eternas
-STORAGE = "storage"
+# ==========================
+# CREAR CARPETA STORAGE
+# ==========================
 
-# Crear la carpeta si no existe (IMPORTANTE)
+STORAGE = "storage"
 os.makedirs(STORAGE, exist_ok=True)
 
-# Permitir acceso a archivos desde internet
+# Permitir acceder a archivos desde internet
 app.mount("/storage", StaticFiles(directory=STORAGE), name="storage")
 
+
+# ==========================
+# HOME
+# ==========================
 
 @app.get("/")
 def home():
     return {"status": "ETERNA backend alive"}
 
+
+# ==========================
+# CREAR ETERNA
+# ==========================
 
 @app.post("/crear-eterna")
 async def crear_eterna(
@@ -54,6 +63,7 @@ async def crear_eterna(
     for i, foto in enumerate(fotos, start=1):
 
         extension = os.path.splitext(foto.filename)[1]
+
         if extension == "":
             extension = ".jpg"
 
@@ -67,10 +77,14 @@ async def crear_eterna(
 
         imagenes.append(ruta)
 
-    # Crear lista para ffmpeg
+    # ==========================
+    # CREAR LISTA PARA FFMPEG
+    # ==========================
+
     lista_path = os.path.join(folder, "lista.txt")
 
     with open(lista_path, "w") as f:
+
         for imagen in imagenes:
             f.write(f"file '{os.path.abspath(imagen)}'\n")
             f.write("duration 2\n")
@@ -91,7 +105,14 @@ async def crear_eterna(
         video_path
     ]
 
-    subprocess.run(comando)
+    try:
+        subprocess.run(comando, check=True)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": "Error ejecutando ffmpeg",
+            "detalle": str(e)
+        }
 
     base_url = str(request.base_url).rstrip("/")
 
