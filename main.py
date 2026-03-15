@@ -1,12 +1,16 @@
-from fastapi import FastAPI, UploadFile, File, Form
+from fastapi import FastAPI, UploadFile, File, Form, Request
+from fastapi.staticfiles import StaticFiles
+from typing import List
 import os
 import uuid
 import subprocess
 
 app = FastAPI()
 
-STORAGE = "storage"
+# Esto permite ver archivos de la carpeta storage desde internet
+app.mount("/storage", StaticFiles(directory="storage"), name="storage")
 
+STORAGE = "storage"
 os.makedirs(STORAGE, exist_ok=True)
 
 
@@ -17,6 +21,7 @@ def home():
 
 @app.post("/crear-eterna")
 async def crear_eterna(
+    request: Request,
     nombre: str = Form(...),
     email: str = Form(...),
     frase1: str = Form(...),
@@ -29,64 +34,88 @@ async def crear_eterna(
     foto5: UploadFile = File(...),
     foto6: UploadFile = File(...)
 ):
+    try:
+        eterna_id = str(uuid.uuid4())
+        folder = os.path.join(STORAGE, eterna_id)
+        os.makedirs(folder, exist_ok=True)
 
-    eterna_id = str(uuid.uuid4())
-    folder = os.path.join(STORAGE, eterna_id)
+        frases = [frase1, frase2, frase3]
 
-    os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "frases.txt"), "w", encoding="utf-8") as f:
+            for frase in frases:
+                f.write(frase + "\n")
 
-    frases = [frase1, frase2, frase3]
+        fotos = [foto1, foto2, foto3, foto4, foto5, foto6]
+        imagenes = []
 
-    with open(os.path.join(folder, "frases.txt"), "w") as f:
-        for frase in frases:
-            f.write(frase + "\n")
+        for i, foto in enumerate(fotos, start=1):
+            extension = os.path.splitext(foto.filename)[1].lower()
 
-    fotos = [foto1, foto2, foto3, foto4, foto5, foto6]
+            if extension == "":
+                extension = ".jpg"
 
-    imagenes = []
+            nombre_archivo = f"foto{i}{extension}"
+            ruta = os.path.join(folder, nombre_archivo)
 
-    for i, foto in enumerate(fotos, start=1):
+            contenido = await foto.read()
 
-        contenido = await foto.read()
+            with open(ruta, "wb") as f:
+                f.write(contenido)
 
-        ruta = os.path.join(folder, f"foto{i}.jpg")
+            imagenes.append(ruta)
 
-        with open(ruta, "wb") as f:
-            f.write(contenido)
+        # Crear archivo lista para ffmpeg
+        lista_path = os.path.join(folder, "lista.txt")
 
-        imagenes.append(ruta)
+        with open(lista_path, "w", encoding="utf-8") as f:
+            for imagen in imagenes:
+                f.write(f"file '{os.path.abspath(imagen)}'\n")
+                f.write("duration 2\n")
 
-    lista_path = os.path.join(folder, "lista.txt")
+            # Repetimos la última para que ffmpeg no corte antes de tiempo
+            f.write(f"file '{os.path.abspath(imagenes[-1])}'\n")
 
-    with open(lista_path, "w") as f:
-        for img in imagenes:
-            f.write(f"file '{img}'\n")
-            f.write("duration 2\n")
+        video_path = os.path.join(folder, "video.mp4")
 
-    video_path = os.path.join(folder, "video.mp4")
+        comando = [
+            "ffmpeg",
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", lista_path,
+            "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
+            "-r", "25",
+            "-pix_fmt", "yuv420p",
+            video_path
+        ]
 
-    subprocess.run([
-        "ffmpeg",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", lista_path,
-        "-vsync", "vfr",
-        "-pix_fmt", "yuv420p",
-        video_path
-    ])
+        resultado = subprocess.run(
+            comando,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
 
-    return {
-        "ok": True,
-        "eterna_id": eterna_id,
-        "video": video_path,
-        "message": "Tu ETERNA ha sido creada",
-        "numero_fotos": 6
-    }
+        if resultado.returncode != 0:
+            return {
+                "ok": False,
+                "error": "ffmpeg no pudo crear el vídeo",
+                "detalle": resultado.stderr
+            }
 
+        base_url = str(request.base_url).rstrip("/")
+        video_url = f"{base_url}/storage/{eterna_id}/video.mp4"
 
-if __name__ == "__main__":
-    import uvicorn
+        return {
+            "ok": True,
+            "eterna_id": eterna_id,
+            "video": video_url,
+            "mensaje": "Tu ETERNA ha sido creada",
+            "numero_fotos": len(imagenes)
+        }
 
-    port = int(os.environ.get("PORT", 10000))
-
-    uvicorn.run(app, host="0.0.0.0", port=port)
+    except Exception as e:
+        return {
+            "ok": False,
+            "error": str(e)
+        }
