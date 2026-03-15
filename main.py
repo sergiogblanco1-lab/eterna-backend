@@ -103,7 +103,7 @@ async def crear_eterna(
         "-f", "concat",
         "-safe", "0",
         "-i", lista_path,
-        "-vf", "scale=720:1280:force_original_aspect_ratio=decrease,pad=720:1280:(ow-iw)/2:(oh-ih)/2",
+        "-vf", "scale=480:-2",
         "-pix_fmt", "yuv420p",
         "-r", "25",
         video_path
