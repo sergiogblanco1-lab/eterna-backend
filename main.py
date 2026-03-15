@@ -3,6 +3,7 @@ from fastapi.staticfiles import StaticFiles
 import os
 import uuid
 import subprocess
+import imageio_ffmpeg
 
 app = FastAPI()
 
@@ -13,7 +14,7 @@ app = FastAPI()
 STORAGE = "storage"
 os.makedirs(STORAGE, exist_ok=True)
 
-# Permitir acceder a archivos desde internet
+# Permitir acceso a archivos desde internet
 app.mount("/storage", StaticFiles(directory=STORAGE), name="storage")
 
 
@@ -93,8 +94,11 @@ async def crear_eterna(
 
     video_path = os.path.join(folder, "video.mp4")
 
+    # usar ffmpeg incluido en imageio
+    ffmpeg_path = imageio_ffmpeg.get_ffmpeg_exe()
+
     comando = [
-        "ffmpeg",
+        ffmpeg_path,
         "-y",
         "-f", "concat",
         "-safe", "0",
