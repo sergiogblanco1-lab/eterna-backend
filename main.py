@@ -1,7 +1,6 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, BackgroundTasks
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-import os
 import uuid
 from pathlib import Path
 
@@ -18,6 +17,10 @@ ASSETS.mkdir(exist_ok=True)
 
 app.mount("/storage", StaticFiles(directory=str(STORAGE)), name="storage")
 
+
+# =========================================================
+# HOME
+# =========================================================
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -97,15 +100,6 @@ def home():
                 font-size: 14px;
                 text-align: center;
             }
-            .note {
-                margin-top: 16px;
-                padding: 14px;
-                border-radius: 12px;
-                background: #0f1720;
-                border: 1px solid #273243;
-                color: #d8e2f0;
-                text-align: center;
-            }
         </style>
     </head>
     <body>
@@ -149,9 +143,7 @@ def home():
                     <input type="file" name="foto6" accept=".jpg,.jpeg,.png,.webp" required>
 
                     <button type="submit">Crear mi ETERNA</button>
-
                     <div class="mini">Usa fotos JPG si puedes. Irán más rápido.</div>
-                    <div class="note">Al pulsar el botón, la página tardará un poco mientras se crea el vídeo. Es normal.</div>
                 </form>
             </div>
 
@@ -169,49 +161,46 @@ def healthz():
     return {"ok": True}
 
 
-@app.post("/crear-eterna")
-async def crear_eterna_api(
-    nombre: str = Form(...),
-    email: str = Form(...),
-    frase1: str = Form(...),
-    frase2: str = Form(...),
-    frase3: str = Form(...),
-    foto1: UploadFile = File(...),
-    foto2: UploadFile = File(...),
-    foto3: UploadFile = File(...),
-    foto4: UploadFile = File(...),
-    foto5: UploadFile = File(...),
-    foto6: UploadFile = File(...),
-):
-    return await _procesar_eterna(
-        nombre, email, frase1, frase2, frase3,
-        foto1, foto2, foto3, foto4, foto5, foto6,
-        devolver_html=False,
-    )
+# =========================================================
+# GENERACIÓN EN SEGUNDO PLANO
+# =========================================================
+
+def generar_video_background(folder_str: str, frases: list[str]) -> None:
+    folder = Path(folder_str)
+    image_paths = []
+
+    for path in sorted(folder.glob("foto_*")):
+        image_paths.append(str(path))
+
+    video_path = folder / "video.mp4"
+    music_path = str(ASSETS / "music.mp3")
+    status_path = folder / "status.txt"
+
+    try:
+        status_path.write_text("processing", encoding="utf-8")
+
+        generate_eterna_video(
+            image_paths=image_paths,
+            frases=frases,
+            output_path=str(video_path),
+            music_path=music_path if Path(music_path).exists() else None,
+            intro_text="Hay momentos que merecen quedarse para siempre",
+            outro_text="ETERNA",
+            end_message="Para siempre",
+        )
+
+        status_path.write_text("done", encoding="utf-8")
+
+    except Exception as e:
+        status_path.write_text("error", encoding="utf-8")
+        (folder / "error.txt").write_text(str(e), encoding="utf-8")
 
 
-@app.post("/crear-eterna-web", response_class=HTMLResponse)
-async def crear_eterna_web(
-    nombre: str = Form(...),
-    email: str = Form(...),
-    frase1: str = Form(...),
-    frase2: str = Form(...),
-    frase3: str = Form(...),
-    foto1: UploadFile = File(...),
-    foto2: UploadFile = File(...),
-    foto3: UploadFile = File(...),
-    foto4: UploadFile = File(...),
-    foto5: UploadFile = File(...),
-    foto6: UploadFile = File(...),
-):
-    return await _procesar_eterna(
-        nombre, email, frase1, frase2, frase3,
-        foto1, foto2, foto3, foto4, foto5, foto6,
-        devolver_html=True,
-    )
+# =========================================================
+# PROCESAR FORMULARIO
+# =========================================================
 
-
-async def _procesar_eterna(
+async def guardar_eterna(
     nombre,
     email,
     frase1,
@@ -223,13 +212,14 @@ async def _procesar_eterna(
     foto4,
     foto5,
     foto6,
-    devolver_html=False,
 ):
     eterna_id = str(uuid.uuid4())
     folder = STORAGE / eterna_id
     folder.mkdir(parents=True, exist_ok=True)
 
     frases = [frase1.strip(), frase2.strip(), frase3.strip()]
+
+    (folder / "status.txt").write_text("queued", encoding="utf-8")
 
     with open(folder / "frases.txt", "w", encoding="utf-8") as f:
         for frase in frases:
@@ -240,7 +230,6 @@ async def _procesar_eterna(
         f.write(f"email={email}\\n")
 
     fotos = [foto1, foto2, foto3, foto4, foto5, foto6]
-    image_paths = []
 
     for i, foto in enumerate(fotos, start=1):
         extension = Path(foto.filename).suffix.lower() if foto.filename else ".jpg"
@@ -256,32 +245,226 @@ async def _procesar_eterna(
         with open(img_path, "wb") as f:
             f.write(contenido)
 
-        image_paths.append(str(img_path))
+    return eterna_id, folder, frases
 
+
+# =========================================================
+# API
+# =========================================================
+
+@app.post("/crear-eterna")
+async def crear_eterna_api(
+    background_tasks: BackgroundTasks,
+    nombre: str = Form(...),
+    email: str = Form(...),
+    frase1: str = Form(...),
+    frase2: str = Form(...),
+    frase3: str = Form(...),
+    foto1: UploadFile = File(...),
+    foto2: UploadFile = File(...),
+    foto3: UploadFile = File(...),
+    foto4: UploadFile = File(...),
+    foto5: UploadFile = File(...),
+    foto6: UploadFile = File(...),
+):
+    eterna_id, folder, frases = await guardar_eterna(
+        nombre, email, frase1, frase2, frase3,
+        foto1, foto2, foto3, foto4, foto5, foto6
+    )
+
+    background_tasks.add_task(
+        generar_video_background,
+        str(folder),
+        frases,
+    )
+
+    return JSONResponse({
+        "ok": True,
+        "eterna_id": eterna_id,
+        "status": "queued",
+        "check_url": f"/estado/{eterna_id}",
+        "video_url": f"/storage/{eterna_id}/video.mp4"
+    })
+
+
+# =========================================================
+# WEB
+# =========================================================
+
+@app.post("/crear-eterna-web", response_class=HTMLResponse)
+async def crear_eterna_web(
+    background_tasks: BackgroundTasks,
+    nombre: str = Form(...),
+    email: str = Form(...),
+    frase1: str = Form(...),
+    frase2: str = Form(...),
+    frase3: str = Form(...),
+    foto1: UploadFile = File(...),
+    foto2: UploadFile = File(...),
+    foto3: UploadFile = File(...),
+    foto4: UploadFile = File(...),
+    foto5: UploadFile = File(...),
+    foto6: UploadFile = File(...),
+):
+    eterna_id, folder, frases = await guardar_eterna(
+        nombre, email, frase1, frase2, frase3,
+        foto1, foto2, foto3, foto4, foto5, foto6
+    )
+
+    background_tasks.add_task(
+        generar_video_background,
+        str(folder),
+        frases,
+    )
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>Preparando tu ETERNA</title>
+        <style>
+            body {{
+                margin: 0;
+                font-family: Arial, sans-serif;
+                background: #000;
+                color: white;
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 20px;
+            }}
+            .wrap {{
+                max-width: 420px;
+                width: 100%;
+                text-align: center;
+            }}
+            h1 {{
+                font-size: 30px;
+                margin-bottom: 10px;
+            }}
+            p {{
+                color: #cfcfd6;
+            }}
+            .spinner {{
+                width: 34px;
+                height: 34px;
+                border: 4px solid #333;
+                border-top: 4px solid #fff;
+                border-radius: 50%;
+                margin: 24px auto;
+                animation: spin 1s linear infinite;
+            }}
+            @keyframes spin {{
+                0% {{ transform: rotate(0deg); }}
+                100% {{ transform: rotate(360deg); }}
+            }}
+            .box {{
+                background: #121218;
+                border: 1px solid #2b2b38;
+                border-radius: 18px;
+                padding: 24px;
+            }}
+            .small {{
+                color: #9ea0ad;
+                font-size: 14px;
+                margin-top: 14px;
+            }}
+            a {{
+                color: white;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <div class="box">
+                <h1>Estamos creando tu ETERNA...</h1>
+                <p>Esto puede tardar un poco. Cuando esté lista aparecerá automáticamente.</p>
+                <div class="spinner"></div>
+                <div class="small">No cierres esta página.</div>
+            </div>
+        </div>
+
+        <script>
+            const eternaId = "{eterna_id}";
+            const estadoUrl = "/estado/" + eternaId;
+            const videoUrl = "/ver/" + eternaId;
+
+            async function revisarEstado() {{
+                try {{
+                    const res = await fetch(estadoUrl);
+                    const data = await res.json();
+
+                    if (data.status === "done") {{
+                        window.location.href = videoUrl;
+                        return;
+                    }}
+
+                    if (data.status === "error") {{
+                        document.body.innerHTML = `
+                            <div style="font-family:Arial;background:#000;color:white;min-height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;">
+                                <div style="max-width:420px;width:100%;text-align:center;background:#121218;border:1px solid #2b2b38;border-radius:18px;padding:24px;">
+                                    <h1>Error al crear la ETERNA</h1>
+                                    <p>Ha ocurrido un problema generando el vídeo.</p>
+                                    <p><a href="/">Volver</a></p>
+                                </div>
+                            </div>
+                        `;
+                        return;
+                    }}
+
+                    setTimeout(revisarEstado, 3000);
+                }} catch (e) {{
+                    setTimeout(revisarEstado, 3000);
+                }}
+            }}
+
+            setTimeout(revisarEstado, 3000);
+        </script>
+    </body>
+    </html>
+    """
+
+
+# =========================================================
+# ESTADO
+# =========================================================
+
+@app.get("/estado/{eterna_id}")
+def estado_eterna(eterna_id: str):
+    folder = STORAGE / eterna_id
+    status_path = folder / "status.txt"
+    error_path = folder / "error.txt"
     video_path = folder / "video.mp4"
-    music_path = str(ASSETS / "music.mp3")
 
-    try:
-        generate_eterna_video(
-            image_paths=image_paths,
-            frases=frases,
-            output_path=str(video_path),
-            music_path=music_path,
-            intro_text="Hay momentos que merecen quedarse para siempre",
-            outro_text="ETERNA",
-            end_message="Para siempre",
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"No se pudo generar el vídeo: {str(e)}")
+    if not folder.exists():
+        raise HTTPException(status_code=404, detail="ETERNA no encontrada")
 
+    status = "queued"
+    if status_path.exists():
+        status = status_path.read_text(encoding="utf-8").strip()
+
+    response = {
+        "eterna_id": eterna_id,
+        "status": status,
+        "video_url": f"/storage/{eterna_id}/video.mp4" if video_path.exists() else None
+    }
+
+    if error_path.exists():
+        response["error"] = error_path.read_text(encoding="utf-8")
+
+    return response
+
+
+# =========================================================
+# VER VIDEO
+# =========================================================
+
+@app.get("/ver/{eterna_id}", response_class=HTMLResponse)
+def ver_eterna(eterna_id: str):
     video_url = f"/storage/{eterna_id}/video.mp4"
-
-    if not devolver_html:
-        return {
-            "ok": True,
-            "eterna_id": eterna_id,
-            "video": video_url,
-        }
 
     return f"""
     <!DOCTYPE html>
