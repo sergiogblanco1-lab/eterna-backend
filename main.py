@@ -17,11 +17,9 @@ APP_NAME = "ETERNA"
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE = BASE_DIR / "storage"
-TEMP = BASE_DIR / "temp"
 DB = BASE_DIR / "eterna.db"
 
 STORAGE.mkdir(exist_ok=True)
-TEMP.mkdir(exist_ok=True)
 
 FFMPEG = os.getenv("FFMPEG_BIN", "ffmpeg")
 
@@ -97,7 +95,7 @@ async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int) -> N
     await upload.close()
 
 
-async def run_ffmpeg(cmd: List[str]) -> None:
+async def run_ffmpeg_async(cmd: List[str]) -> None:
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -198,8 +196,18 @@ def page(title: str, body: str) -> HTMLResponse:
                 color: white;
                 text-decoration: none;
             }}
-            .space {{
-                height: 8px;
+            .small-cam {{
+                position: fixed;
+                right: 14px;
+                bottom: 14px;
+                width: 92px;
+                height: 132px;
+                object-fit: cover;
+                border-radius: 12px;
+                border: 1px solid rgba(255,255,255,.15);
+                box-shadow: 0 10px 24px rgba(0,0,0,.35);
+                background: #000;
+                z-index: 9999;
             }}
             @media (max-width: 640px) {{
                 .row {{
@@ -218,61 +226,94 @@ def page(title: str, body: str) -> HTMLResponse:
 def cleanup_folder(folder: Path) -> None:
     if not folder.exists():
         return
+
     for child in folder.rglob("*"):
         if child.is_file():
             child.unlink(missing_ok=True)
+
     for child in sorted(folder.rglob("*"), reverse=True):
         if child.is_dir():
             child.rmdir()
+
     folder.rmdir()
 
 
 # =====================================================
-# VIDEO GENERATOR - STABLE FOR IPHONE / SAFARI
+# VIDEO GENERATOR
 # =====================================================
 
 async def generar_video(imagenes: List[Path], salida: Path) -> None:
     """
-    Versión estable:
-    - 6 fotos
-    - 4 segundos por foto
-    - zoom suave
-    - vertical móvil
-    - mp4 compatible con iPhone/Safari
+    Generador cinematográfico estable:
+    - usa las 6 fotos
+    - zoom lento en cada foto
+    - transiciones fade entre fotos
+    - formato vertical móvil
+    - mp4 compatible con iPhone
+
+    Con 6 fotos:
+    7 segundos por foto - 1 segundo de transición entre cada una
+    duración aproximada final: 37-42 segundos
     """
 
-    if not imagenes:
-        raise ValueError("No hay imágenes para generar el vídeo.")
+    if len(imagenes) != 6:
+        raise ValueError("Deben llegar exactamente 6 imágenes.")
 
     fps = 30
-    duracion_foto = 4
+    duracion_foto = 7.0
+    transicion = 1.0
     ancho = 720
     alto = 1280
 
-    lista = TEMP / f"{uuid.uuid4().hex}.txt"
+    input_args = []
+    filters = []
 
-    with lista.open("w", encoding="utf-8") as f:
-        for img in imagenes:
-            f.write(f"file '{img}'\n")
-            f.write(f"duration {duracion_foto}\n")
-        f.write(f"file '{imagenes[-1]}'\n")
+    for i, img in enumerate(imagenes):
+        input_args.extend([
+            "-loop", "1",
+            "-t", str(duracion_foto),
+            "-i", str(img)
+        ])
 
-    filtro = (
-        f"scale={ancho}:{alto}:force_original_aspect_ratio=decrease,"
-        f"pad={ancho}:{alto}:(ow-iw)/2:(oh-ih)/2,"
-        f"zoompan=z='min(zoom+0.0008,1.08)':d={duracion_foto * fps}:s={ancho}x{alto}:fps={fps},"
-        f"format=yuv420p"
-    )
+        filters.append(
+            f"[{i}:v]"
+            f"scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
+            f"crop={ancho}:{alto},"
+            f"zoompan="
+            f"z='min(zoom+0.0007,1.08)':"
+            f"d={int(duracion_foto * fps)}:"
+            f"s={ancho}x{alto}:"
+            f"fps={fps},"
+            f"setsar=1,"
+            f"format=yuv420p"
+            f"[v{i}]"
+        )
+
+    current = "v0"
+    offset = duracion_foto - transicion
+
+    for i in range(1, len(imagenes)):
+        out = f"x{i}"
+        filters.append(
+            f"[{current}][v{i}]"
+            f"xfade=transition=fade:duration={transicion}:offset={offset}"
+            f"[{out}]"
+        )
+        current = out
+        offset += duracion_foto - transicion
+
+    filter_complex = ";".join(filters)
 
     cmd = [
         FFMPEG,
         "-y",
-        "-f", "concat",
-        "-safe", "0",
-        "-i", str(lista),
-        "-vf", filtro,
+        *input_args,
+        "-filter_complex", filter_complex,
+        "-map", f"[{current}]",
         "-r", str(fps),
         "-c:v", "libx264",
+        "-preset", "medium",
+        "-crf", "20",
         "-profile:v", "main",
         "-level", "3.1",
         "-pix_fmt", "yuv420p",
@@ -280,10 +321,7 @@ async def generar_video(imagenes: List[Path], salida: Path) -> None:
         str(salida)
     ]
 
-    try:
-        await run_ffmpeg(cmd)
-    finally:
-        lista.unlink(missing_ok=True)
+    await run_ffmpeg_async(cmd)
 
 
 # =====================================================
@@ -310,7 +348,6 @@ def healthz():
         "status": "ok",
         "app": APP_NAME,
         "storage_exists": STORAGE.exists(),
-        "temp_exists": TEMP.exists(),
         "db_exists": DB.exists(),
         "ffmpeg_bin": FFMPEG,
     }
@@ -394,7 +431,10 @@ async def crear_eterna(
         <div class="card">
             <div class="pill">ETERNA creada</div>
             <h2>Tu recuerdo ya está listo</h2>
-            <p class="muted">Ahora puedes verlo o ir directamente a la pantalla de reacción.</p>
+            <p class="muted">
+                Mira el recuerdo y, después, graba tu reacción para enviársela
+                a quien te ha mandado esto.
+            </p>
 
             <div class="row">
                 <a href="/ver/{eterna_id}">
@@ -425,15 +465,13 @@ def ver_video(eterna_id: str):
         <div class="pill">ETERNA</div>
         <h2>Este momento fue creado para ti</h2>
         <p class="muted">
-            Mira el recuerdo y, después, graba tu reacción para enviársela
-            a quien te ha mandado esto.
+            Mira el recuerdo con calma. Después podrás grabar tu reacción
+            para enviársela a quien lo creó.
         </p>
 
         <video controls playsinline preload="metadata">
             <source src="/video/{eterna_id}" type="video/mp4">
         </video>
-
-        <div class="space"></div>
 
         <a href="/reaccion/{eterna_id}">
             <button>Grabar reacción</button>
@@ -477,10 +515,10 @@ def reaccion_page(eterna_id: str):
         </video>
 
         <p class="muted">
-            Cuando termines de verlo, pulsa el botón de abajo.
+            La cámara se verá pequeña para no romper la emoción del vídeo.
         </p>
 
-        <video id="cam" autoplay muted playsinline style="display:none"></video>
+        <video id="cam" class="small-cam" autoplay muted playsinline style="display:none"></video>
 
         <button id="start">Grabar mi reacción</button>
         <button id="stop" style="display:none">Enviar reacción</button>
