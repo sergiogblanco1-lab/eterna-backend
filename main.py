@@ -1,33 +1,36 @@
 import os
 import uuid
-import shutil
+import html
 import sqlite3
 import asyncio
 from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse, JSONResponse
 
 # =====================================================
 # CONFIG
 # =====================================================
 
-BASE_DIR = Path(__file__).resolve().parent
+APP_NAME = "ETERNA"
 
+BASE_DIR = Path(__file__).resolve().parent
 STORAGE = BASE_DIR / "storage"
 TEMP = BASE_DIR / "temp"
+DB = BASE_DIR / "eterna.db"
 
 STORAGE.mkdir(exist_ok=True)
 TEMP.mkdir(exist_ok=True)
 
-DB = BASE_DIR / "eterna.db"
-
-FFMPEG = "ffmpeg"
+FFMPEG = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 MAX_FOTOS = 6
+MAX_IMAGE_BYTES = 8 * 1024 * 1024
+MAX_REACTION_BYTES = 120 * 1024 * 1024
 
 ALLOWED_IMAGE_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp"}
+ALLOWED_REACTION_EXTENSIONS = {".webm", ".mp4", ".mov"}
 
 app = FastAPI(title="ETERNA")
 
@@ -36,10 +39,8 @@ app = FastAPI(title="ETERNA")
 # DATABASE
 # =====================================================
 
-def init_db():
-
+def init_db() -> None:
     conn = sqlite3.connect(DB)
-
     conn.execute("""
     CREATE TABLE IF NOT EXISTS eternas(
         eterna_id TEXT PRIMARY KEY,
@@ -47,16 +48,16 @@ def init_db():
         email TEXT,
         frase1 TEXT,
         frase2 TEXT,
-        frase3 TEXT
+        frase3 TEXT,
+        created_at TEXT
     )
     """)
-
     conn.commit()
     conn.close()
 
 
 @app.on_event("startup")
-def startup():
+def startup() -> None:
     init_db()
 
 
@@ -64,383 +65,594 @@ def startup():
 # HELPERS
 # =====================================================
 
-def safe_filename(name):
-
-    name = os.path.basename(name)
-
-    name = name.replace(" ", "_")
-
-    return "".join(c for c in name if c.isalnum() or c in "._-")
+def safe_text(value: str) -> str:
+    return html.escape((value or "").strip())
 
 
-async def save_file(upload: UploadFile, path: Path):
+def safe_filename(name: str) -> str:
+    base = os.path.basename(name or "archivo")
+    base = base.replace(" ", "_")
+    cleaned = "".join(c for c in base if c.isalnum() or c in "._-")
+    return cleaned or "archivo"
+
+
+async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int) -> None:
+    total = 0
 
     with path.open("wb") as buffer:
-
         while True:
-
             chunk = await upload.read(1024 * 1024)
-
             if not chunk:
                 break
+
+            total += len(chunk)
+
+            if total > max_bytes:
+                buffer.close()
+                path.unlink(missing_ok=True)
+                raise HTTPException(status_code=413, detail="Archivo demasiado grande")
 
             buffer.write(chunk)
 
     await upload.close()
 
 
-async def run_ffmpeg(cmd):
+async def run_ffmpeg(cmd: List[str]) -> None:
+    process = await asyncio.create_subprocess_exec(
+        *cmd,
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE
+    )
 
-    process = await asyncio.create_subprocess_exec(*cmd)
+    stdout, stderr = await process.communicate()
 
-    await process.communicate()
+    if process.returncode != 0:
+        raise RuntimeError(
+            f"FFmpeg falló.\n"
+            f"STDOUT:\n{stdout.decode(errors='ignore')}\n"
+            f"STDERR:\n{stderr.decode(errors='ignore')}"
+        )
+
+
+def page(title: str, body: str) -> HTMLResponse:
+    return HTMLResponse(f"""
+    <!doctype html>
+    <html lang="es">
+    <head>
+        <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1" />
+        <title>{html.escape(title)} | {APP_NAME}</title>
+        <style>
+            * {{
+                box-sizing: border-box;
+            }}
+            body {{
+                margin: 0;
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                background: #0d0d0d;
+                color: white;
+                max-width: 760px;
+                margin-inline: auto;
+                padding: 24px 16px 40px;
+                line-height: 1.5;
+            }}
+            .card {{
+                background: #171717;
+                border: 1px solid #2b2b2b;
+                border-radius: 18px;
+                padding: 20px;
+                box-shadow: 0 10px 30px rgba(0,0,0,.20);
+            }}
+            .pill {{
+                display: inline-block;
+                padding: 6px 10px;
+                border-radius: 999px;
+                background: #222;
+                border: 1px solid #333;
+                font-size: 13px;
+                margin-bottom: 14px;
+            }}
+            h1, h2, h3, p {{
+                margin-top: 0;
+            }}
+            input, textarea, button {{
+                width: 100%;
+                padding: 14px;
+                margin-top: 8px;
+                margin-bottom: 16px;
+                border-radius: 12px;
+                border: 1px solid #333;
+                background: #111;
+                color: white;
+                font-size: 16px;
+            }}
+            textarea {{
+                min-height: 90px;
+                resize: vertical;
+            }}
+            button {{
+                background: white;
+                color: black;
+                font-weight: 700;
+                cursor: pointer;
+            }}
+            button:hover {{
+                opacity: .96;
+            }}
+            video {{
+                width: 100%;
+                margin-top: 14px;
+                border-radius: 14px;
+                background: black;
+            }}
+            .muted {{
+                color: #b8b8b8;
+                font-size: 14px;
+            }}
+            .row {{
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 12px;
+            }}
+            a {{
+                color: white;
+                text-decoration: none;
+            }}
+            .space {{
+                height: 8px;
+            }}
+            @media (max-width: 640px) {{
+                .row {{
+                    grid-template-columns: 1fr;
+                }}
+            }}
+        </style>
+    </head>
+    <body>
+        {body}
+    </body>
+    </html>
+    """)
+
+
+def cleanup_folder(folder: Path) -> None:
+    if not folder.exists():
+        return
+    for child in folder.rglob("*"):
+        if child.is_file():
+            child.unlink(missing_ok=True)
+    for child in sorted(folder.rglob("*"), reverse=True):
+        if child.is_dir():
+            child.rmdir()
+    folder.rmdir()
 
 
 # =====================================================
-# GENERADOR DE VIDEO ETERNA
+# VIDEO GENERATOR - STABLE FOR IPHONE / SAFARI
 # =====================================================
 
-async def generar_video(imagenes, salida):
+async def generar_video(imagenes: List[Path], salida: Path) -> None:
+    """
+    Versión estable:
+    - 6 fotos
+    - 4 segundos por foto
+    - zoom suave
+    - vertical móvil
+    - mp4 compatible con iPhone/Safari
+    """
+
+    if not imagenes:
+        raise ValueError("No hay imágenes para generar el vídeo.")
 
     fps = 30
-    duracion_foto = 4.0
-    transicion = 1.0
-
+    duracion_foto = 4
     ancho = 720
     alto = 1280
 
-    inputs = []
-    filtros = []
+    lista = TEMP / f"{uuid.uuid4().hex}.txt"
 
-    # INTRO NEGRA
+    with lista.open("w", encoding="utf-8") as f:
+        for img in imagenes:
+            f.write(f"file '{img}'\n")
+            f.write(f"duration {duracion_foto}\n")
+        f.write(f"file '{imagenes[-1]}'\n")
 
-    filtros.append(
-        f"color=c=black:s={ancho}x{alto}:d=1[intro]"
+    filtro = (
+        f"scale={ancho}:{alto}:force_original_aspect_ratio=decrease,"
+        f"pad={ancho}:{alto}:(ow-iw)/2:(oh-ih)/2,"
+        f"zoompan=z='min(zoom+0.0008,1.08)':d={duracion_foto * fps}:s={ancho}x{alto}:fps={fps},"
+        f"format=yuv420p"
     )
-
-    # PREPARAR IMÁGENES
-
-    for i, img in enumerate(imagenes):
-
-        inputs.extend([
-            "-loop", "1",
-            "-t", str(duracion_foto),
-            "-i", str(img)
-        ])
-
-        filtros.append(
-            f"[{i}:v]"
-            f"scale={ancho}:{alto}:force_original_aspect_ratio=increase,"
-            f"crop={ancho}:{alto},"
-            f"zoompan=z='min(zoom+0.0012,1.12)':"
-            f"d={int(duracion_foto * fps)}:"
-            f"s={ancho}x{alto}:"
-            f"fps={fps},"
-            f"setsar=1"
-            f"[v{i}]"
-        )
-
-    # CROSSFADE ENTRE FOTOS
-
-    last = "v0"
-    offset = duracion_foto - transicion
-
-    for i in range(1, len(imagenes)):
-
-        nuevo = f"mix{i}"
-
-        filtros.append(
-            f"[{last}][v{i}]"
-            f"xfade=transition=fade:"
-            f"duration={transicion}:"
-            f"offset={offset}"
-            f"[{nuevo}]"
-        )
-
-        last = nuevo
-        offset += duracion_foto - transicion
-
-    # PANTALLA FINAL
-
-    filtros.append(
-        f"color=c=black:s={ancho}x{alto}:d=3[final];"
-        f"[final]"
-        f"drawtext=text='Hay momentos':"
-        f"fontcolor=white:fontsize=48:x=(w-text_w)/2:y=(h/2)-80,"
-        f"drawtext=text='que merecen quedarse para siempre':"
-        f"fontcolor=white:fontsize=36:x=(w-text_w)/2:y=(h/2),"
-        f"drawtext=text='ETERNA':"
-        f"fontcolor=white:fontsize=42:x=(w-text_w)/2:y=(h/2)+120"
-        f"[outro]"
-    )
-
-    filtros.append(
-        f"[{last}][outro]concat=n=2:v=1:a=0[video]"
-    )
-
-    filter_complex = ";".join(filtros)
 
     cmd = [
         FFMPEG,
         "-y",
-        *inputs,
-        "-filter_complex", filter_complex,
-        "-map", "[video]",
+        "-f", "concat",
+        "-safe", "0",
+        "-i", str(lista),
+        "-vf", filtro,
+        "-r", str(fps),
         "-c:v", "libx264",
+        "-profile:v", "main",
+        "-level", "3.1",
         "-pix_fmt", "yuv420p",
-        "-crf", "20",
-        "-preset", "medium",
         "-movflags", "+faststart",
         str(salida)
     ]
 
-    await run_ffmpeg(cmd)
+    try:
+        await run_ffmpeg(cmd)
+    finally:
+        lista.unlink(missing_ok=True)
 
 
 # =====================================================
-# HOME
+# ROUTES
 # =====================================================
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-
-    return HTMLResponse("""
-
-    <h1>ETERNA</h1>
-
-    <p>Convierte 6 fotos en un recuerdo eterno.</p>
-
-    <a href="/crear">
-
-    <button>Crear mi ETERNA</button>
-
-    </a>
-
+    return page("ETERNA", """
+    <div class="card">
+        <div class="pill">ETERNA</div>
+        <h1>Hay momentos que merecen quedarse para siempre.</h1>
+        <p>Convierte 6 fotos y 3 frases en un recuerdo emocional.</p>
+        <a href="/crear">
+            <button>Crear mi ETERNA</button>
+        </a>
+    </div>
     """)
 
 
-# =====================================================
-# FORM
-# =====================================================
+@app.get("/healthz")
+def healthz():
+    return {
+        "status": "ok",
+        "app": APP_NAME,
+        "storage_exists": STORAGE.exists(),
+        "temp_exists": TEMP.exists(),
+        "db_exists": DB.exists(),
+        "ffmpeg_bin": FFMPEG,
+    }
+
 
 @app.get("/crear", response_class=HTMLResponse)
-def crear():
+def crear_form():
+    return page("Crear ETERNA", """
+    <div class="card">
+        <div class="pill">Crear ETERNA</div>
+        <h2>Sube 6 fotos y escribe 3 frases</h2>
 
-    return HTMLResponse("""
+        <form action="/crear-eterna" method="post" enctype="multipart/form-data">
+            <input name="nombre" placeholder="Tu nombre" required />
+            <input name="email" placeholder="Tu email" required />
 
-    <h2>Nueva ETERNA</h2>
+            <textarea name="frase1" placeholder="Frase 1"></textarea>
+            <textarea name="frase2" placeholder="Frase 2"></textarea>
+            <textarea name="frase3" placeholder="Frase 3"></textarea>
 
-    <form action="/crear-eterna" method="post" enctype="multipart/form-data">
+            <input type="file" name="fotos" accept=".jpg,.jpeg,.png,.webp" multiple required />
 
-    <input name="nombre" placeholder="Tu nombre" required>
+            <button>Crear mi ETERNA</button>
+        </form>
 
-    <input name="email" placeholder="Email" required>
-
-    <textarea name="frase1" placeholder="Frase 1"></textarea>
-
-    <textarea name="frase2" placeholder="Frase 2"></textarea>
-
-    <textarea name="frase3" placeholder="Frase 3"></textarea>
-
-    <input type="file" name="fotos" multiple required>
-
-    <button>Crear</button>
-
-    </form>
-
+        <p class="muted">Usa exactamente 6 fotos.</p>
+    </div>
     """)
 
-
-# =====================================================
-# CREAR ETERNA
-# =====================================================
 
 @app.post("/crear-eterna", response_class=HTMLResponse)
 async def crear_eterna(
-        nombre: str = Form(...),
-        email: str = Form(...),
-        frase1: str = Form(""),
-        frase2: str = Form(""),
-        frase3: str = Form(""),
-        fotos: List[UploadFile] = File(...)
+    nombre: str = Form(...),
+    email: str = Form(...),
+    frase1: str = Form(""),
+    frase2: str = Form(""),
+    frase3: str = Form(""),
+    fotos: List[UploadFile] = File(...)
 ):
-
     if len(fotos) != MAX_FOTOS:
-        raise HTTPException(400, "Debes subir 6 fotos")
+        raise HTTPException(status_code=400, detail="Debes subir exactamente 6 fotos")
 
     eterna_id = uuid.uuid4().hex
+    folder = STORAGE / eterna_id
+    images_folder = folder / "imagenes"
+    images_folder.mkdir(parents=True, exist_ok=True)
 
-    carpeta = STORAGE / eterna_id
-    imgs = carpeta / "imagenes"
+    image_paths: List[Path] = []
 
-    imgs.mkdir(parents=True)
+    try:
+        for idx, foto in enumerate(fotos):
+            original_name = safe_filename(foto.filename or f"foto_{idx}.jpg")
+            ext = Path(original_name).suffix.lower()
 
-    paths = []
+            if ext not in ALLOWED_IMAGE_EXTENSIONS:
+                raise HTTPException(status_code=400, detail=f"Formato no permitido: {original_name}")
 
-    for i, foto in enumerate(fotos):
+            dest = images_folder / f"img{idx}{ext}"
+            await save_file_limited(foto, dest, MAX_IMAGE_BYTES)
+            image_paths.append(dest)
 
-        ext = Path(foto.filename).suffix.lower()
+        video_path = folder / "video.mp4"
+        await generar_video(image_paths, video_path)
 
-        if ext not in ALLOWED_IMAGE_EXTENSIONS:
-            raise HTTPException(400, "Formato imagen no permitido")
+        conn = sqlite3.connect(DB)
+        conn.execute(
+            "INSERT INTO eternas VALUES (?,?,?,?,?,?,datetime('now'))",
+            (
+                eterna_id,
+                safe_text(nombre),
+                safe_text(email),
+                safe_text(frase1),
+                safe_text(frase2),
+                safe_text(frase3),
+            )
+        )
+        conn.commit()
+        conn.close()
 
-        dest = imgs / f"img{i}{ext}"
+        return page("ETERNA creada", f"""
+        <div class="card">
+            <div class="pill">ETERNA creada</div>
+            <h2>Tu recuerdo ya está listo</h2>
+            <p class="muted">Ahora puedes verlo o ir directamente a la pantalla de reacción.</p>
 
-        await save_file(foto, dest)
+            <div class="row">
+                <a href="/ver/{eterna_id}">
+                    <button>Ver recuerdo</button>
+                </a>
 
-        paths.append(dest)
+                <a href="/reaccion/{eterna_id}">
+                    <button>Ir a reacción</button>
+                </a>
+            </div>
+        </div>
+        """)
 
-    video = carpeta / "video.mp4"
+    except Exception:
+        cleanup_folder(folder)
+        raise
 
-    await generar_video(paths, video)
-
-    db = sqlite3.connect(DB)
-
-    db.execute(
-        "INSERT INTO eternas VALUES (?,?,?,?,?,?)",
-        (eterna_id, nombre, email, frase1, frase2, frase3)
-    )
-
-    db.commit()
-    db.close()
-
-    return HTMLResponse(f"""
-
-    <h2>ETERNA creada</h2>
-
-    <a href="/ver/{eterna_id}">
-
-    <button>Ver vídeo</button>
-
-    </a>
-
-    <a href="/reaccion/{eterna_id}">
-
-    <button>Grabar reacción</button>
-
-    </a>
-
-    """)
-
-
-# =====================================================
-# VER VIDEO
-# =====================================================
 
 @app.get("/ver/{eterna_id}", response_class=HTMLResponse)
-def ver(eterna_id: str):
+def ver_video(eterna_id: str):
+    path = STORAGE / eterna_id / "video.mp4"
 
-    return HTMLResponse(f"""
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
-    <video controls width="100%">
+    return page("Ver recuerdo", f"""
+    <div class="card">
+        <div class="pill">ETERNA</div>
+        <h2>Este momento fue creado para ti</h2>
+        <p class="muted">
+            Mira el recuerdo y, después, graba tu reacción para enviársela
+            a quien te ha mandado esto.
+        </p>
 
-    <source src="/video/{eterna_id}">
+        <video controls playsinline preload="metadata">
+            <source src="/video/{eterna_id}" type="video/mp4">
+        </video>
 
-    </video>
+        <div class="space"></div>
 
-    <a href="/reaccion/{eterna_id}">
-
-    <button>Grabar reacción</button>
-
-    </a>
-
+        <a href="/reaccion/{eterna_id}">
+            <button>Grabar reacción</button>
+        </a>
+    </div>
     """)
 
 
 @app.get("/video/{eterna_id}")
-def video(eterna_id: str):
-
+def video_file(eterna_id: str):
     path = STORAGE / eterna_id / "video.mp4"
 
     if not path.exists():
-        raise HTTPException(404)
+        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
-    return FileResponse(path)
+    return FileResponse(
+        path,
+        media_type="video/mp4",
+        filename="video.mp4"
+    )
 
-
-# =====================================================
-# GRABAR REACCION
-# =====================================================
 
 @app.get("/reaccion/{eterna_id}", response_class=HTMLResponse)
-def reaccion(eterna_id: str):
+def reaccion_page(eterna_id: str):
+    path = STORAGE / eterna_id / "video.mp4"
 
-    return HTMLResponse(f"""
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
-    <video controls width="100%">
+    return page("Grabar reacción", f"""
+    <div class="card">
+        <div class="pill">Reacción</div>
+        <h2>Este momento fue creado para ti</h2>
+        <p>
+            Mira el recuerdo y, cuando quieras, graba tu reacción
+            para enviársela a quien lo creó.
+        </p>
 
-    <source src="/video/{eterna_id}">
+        <video id="recuerdo" controls playsinline preload="metadata">
+            <source src="/video/{eterna_id}" type="video/mp4">
+        </video>
 
-    </video>
+        <p class="muted">
+            Cuando termines de verlo, pulsa el botón de abajo.
+        </p>
 
-    <video id="cam" autoplay muted style="display:none"></video>
+        <video id="cam" autoplay muted playsinline style="display:none"></video>
 
-    <button id="start">Grabar</button>
+        <button id="start">Grabar mi reacción</button>
+        <button id="stop" style="display:none">Enviar reacción</button>
 
-    <button id="stop" style="display:none">Enviar</button>
+        <p id="estado" class="muted"></p>
 
-<script>
+        <script>
+        let recorder;
+        let chunks = [];
+        let currentStream = null;
 
-let recorder
-let chunks=[]
+        const cam = document.getElementById("cam");
+        const startBtn = document.getElementById("start");
+        const stopBtn = document.getElementById("stop");
+        const estado = document.getElementById("estado");
 
-const cam=document.getElementById("cam")
+        startBtn.onclick = async () => {{
+            try {{
+                estado.textContent = "Pidiendo permiso para cámara y micrófono...";
+                currentStream = await navigator.mediaDevices.getUserMedia({{ video: true, audio: true }});
 
-start.onclick=async()=>{{
+                cam.srcObject = currentStream;
+                cam.style.display = "block";
+                chunks = [];
 
-const stream=await navigator.mediaDevices.getUserMedia({{video:true,audio:true}})
+                let mimeType = "";
+                if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {{
+                    mimeType = "video/webm;codecs=vp9,opus";
+                }} else if (MediaRecorder.isTypeSupported("video/webm")) {{
+                    mimeType = "video/webm";
+                }} else if (MediaRecorder.isTypeSupported("video/mp4")) {{
+                    mimeType = "video/mp4";
+                }}
 
-cam.srcObject=stream
-cam.style.display="block"
+                recorder = mimeType ? new MediaRecorder(currentStream, {{ mimeType }}) : new MediaRecorder(currentStream);
 
-recorder=new MediaRecorder(stream)
+                recorder.ondataavailable = (e) => {{
+                    if (e.data && e.data.size > 0) {{
+                        chunks.push(e.data);
+                    }}
+                }};
 
-recorder.ondataavailable=e=>chunks.push(e.data)
+                recorder.onstop = async () => {{
+                    try {{
+                        estado.textContent = "Subiendo reacción...";
+                        const finalMime = recorder.mimeType || "video/webm";
+                        const ext = finalMime.includes("mp4") ? "mp4" : "webm";
+                        const blob = new Blob(chunks, {{ type: finalMime }});
 
-recorder.onstop=async()=>{{
+                        const fd = new FormData();
+                        fd.append("video", blob, "reaccion." + ext);
 
-const blob=new Blob(chunks)
+                        const response = await fetch("/subir-reaccion/{eterna_id}", {{
+                            method: "POST",
+                            body: fd
+                        }});
 
-const fd=new FormData()
+                        if (!response.ok) {{
+                            const text = await response.text();
+                            throw new Error(text || "No se pudo subir la reacción");
+                        }}
 
-fd.append("video",blob)
+                        estado.textContent = "Reacción enviada correctamente.";
+                        alert("Reacción enviada");
+                    }} catch (err) {{
+                        estado.textContent = "Error al subir la reacción.";
+                        alert("Error al subir la reacción");
+                    }} finally {{
+                        if (currentStream) {{
+                            currentStream.getTracks().forEach(track => track.stop());
+                        }}
+                        cam.style.display = "none";
+                        startBtn.style.display = "block";
+                        stopBtn.style.display = "none";
+                    }}
+                }};
 
-await fetch("/subir-reaccion/{eterna_id}",{{method:"POST",body:fd}})
+                recorder.start();
+                estado.textContent = "Grabando reacción...";
+                startBtn.style.display = "none";
+                stopBtn.style.display = "block";
+            }} catch (err) {{
+                estado.textContent = "No se pudo acceder a cámara o micrófono.";
+                alert("No se pudo acceder a cámara o micrófono");
+            }}
+        }};
 
-alert("Reacción enviada")
-
-}}
-
-recorder.start()
-
-start.style.display="none"
-stop.style.display="block"
-
-}}
-
-stop.onclick=()=>recorder.stop()
-
-</script>
-
+        stopBtn.onclick = () => {{
+            if (recorder) {{
+                recorder.stop();
+            }}
+        }};
+        </script>
+    </div>
     """)
 
 
-# =====================================================
-# SUBIR REACCION
-# =====================================================
-
 @app.post("/subir-reaccion/{eterna_id}")
 async def subir_reaccion(
-        eterna_id: str,
-        video: UploadFile = File(...)
+    eterna_id: str,
+    video: UploadFile = File(...)
 ):
+    folder = STORAGE / eterna_id
 
-    carpeta = STORAGE / eterna_id / "reaccion"
+    if not folder.exists():
+        raise HTTPException(status_code=404, detail="ETERNA no encontrada")
 
-    carpeta.mkdir(exist_ok=True)
+    ext = Path(video.filename or "reaccion.webm").suffix.lower()
 
-    dest = carpeta / "reaccion.webm"
+    if ext not in ALLOWED_REACTION_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Formato de reacción no permitido")
 
-    await save_file(video, dest)
+    reaction_folder = folder / "reaccion"
+    reaction_folder.mkdir(exist_ok=True)
 
-    return {"ok": True}
+    dest = reaction_folder / f"reaccion{ext}"
+    await save_file_limited(video, dest, MAX_REACTION_BYTES)
+
+    return JSONResponse({"ok": True})
+
+
+@app.get("/ver-reaccion/{eterna_id}", response_class=HTMLResponse)
+def ver_reaccion(eterna_id: str):
+    reaction_folder = STORAGE / eterna_id / "reaccion"
+
+    candidates = [
+        reaction_folder / "reaccion.mp4",
+        reaction_folder / "reaccion.webm",
+        reaction_folder / "reaccion.mov",
+    ]
+
+    chosen = None
+    mime = "video/webm"
+
+    for item in candidates:
+        if item.exists():
+            chosen = item
+            if item.suffix.lower() == ".mp4":
+                mime = "video/mp4"
+            elif item.suffix.lower() == ".mov":
+                mime = "video/quicktime"
+            break
+
+    if chosen is None:
+        raise HTTPException(status_code=404, detail="Reacción no encontrada")
+
+    return page("Ver reacción", f"""
+    <div class="card">
+        <div class="pill">Reacción</div>
+        <h2>Vídeo de reacción</h2>
+
+        <video controls playsinline preload="metadata">
+            <source src="/archivo-reaccion/{eterna_id}/{chosen.name}" type="{mime}">
+        </video>
+    </div>
+    """)
+
+
+@app.get("/archivo-reaccion/{eterna_id}/{filename}")
+def archivo_reaccion(eterna_id: str, filename: str):
+    safe_name = safe_filename(filename)
+    path = STORAGE / eterna_id / "reaccion" / safe_name
+
+    if not path.exists():
+        raise HTTPException(status_code=404, detail="Archivo no encontrado")
+
+    media_type = "application/octet-stream"
+    if path.suffix.lower() == ".mp4":
+        media_type = "video/mp4"
+    elif path.suffix.lower() == ".webm":
+        media_type = "video/webm"
+    elif path.suffix.lower() == ".mov":
+        media_type = "video/quicktime"
+
+    return FileResponse(path, media_type=media_type, filename=path.name)
