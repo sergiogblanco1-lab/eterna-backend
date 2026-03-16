@@ -3,14 +3,13 @@ from datetime import datetime
 from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import Customer, Recipient, EternaOrder
 from schemas import HealthResponse
 from storage_service import StorageService
-from video_engine import VideoEngine
 
 
 app = FastAPI(title="ETERNA backend")
@@ -18,7 +17,99 @@ app = FastAPI(title="ETERNA backend")
 Base.metadata.create_all(bind=engine)
 
 storage = StorageService()
-video_engine = VideoEngine()
+
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            body {
+                background: #0b0b0b;
+                color: white;
+                font-family: Arial, sans-serif;
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 30px 20px;
+            }
+            h1 {
+                margin-bottom: 8px;
+            }
+            p {
+                color: #cccccc;
+                margin-bottom: 24px;
+            }
+            form {
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }
+            input, textarea, button {
+                padding: 14px;
+                border-radius: 10px;
+                border: 1px solid #333;
+                font-size: 16px;
+            }
+            input, textarea {
+                background: #171717;
+                color: white;
+            }
+            textarea {
+                min-height: 90px;
+                resize: vertical;
+            }
+            button {
+                background: #e7c27d;
+                color: black;
+                border: none;
+                font-weight: bold;
+                cursor: pointer;
+            }
+            .box {
+                background: #111;
+                padding: 20px;
+                border-radius: 16px;
+                border: 1px solid #222;
+            }
+            .note {
+                font-size: 14px;
+                color: #aaa;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>ETERNA</h1>
+        <p>Hay momentos que merecen quedarse para siempre.</p>
+
+        <div class="box">
+            <form action="/crear-eterna" method="post" enctype="multipart/form-data">
+                <input name="nombre" placeholder="Tu nombre" required>
+                <input name="email" type="email" placeholder="Tu email" required>
+                <input name="telefono_regalante" placeholder="Tu teléfono" required>
+
+                <input name="nombre_destinatario" placeholder="Nombre destinatario" required>
+                <input name="telefono_destinatario" placeholder="Teléfono destinatario" required>
+
+                <textarea name="frase1" placeholder="Frase 1" required></textarea>
+                <textarea name="frase2" placeholder="Frase 2" required></textarea>
+                <textarea name="frase3" placeholder="Frase 3" required></textarea>
+
+                <label>Sube exactamente 6 fotos</label>
+                <input name="fotos" type="file" accept="image/*" multiple required>
+
+                <div class="note">Selecciona 6 imágenes en ese botón.</div>
+
+                <button type="submit">Crear mi ETERNA</button>
+            </form>
+        </div>
+    </body>
+    </html>
+    """
 
 
 @app.get("/health", response_model=HealthResponse)
@@ -34,16 +125,12 @@ async def crear_eterna(
     nombre: str = Form(...),
     email: str = Form(...),
     telefono_regalante: str = Form(...),
-
     nombre_destinatario: str = Form(...),
     telefono_destinatario: str = Form(...),
-
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
-
-    fotos: List[UploadFile] = File(..., description="Sube exactamente 6 fotos"),
-
+    fotos: List[UploadFile] = File(...),
     db: Session = Depends(get_db)
 ):
     if len(fotos) != 6:
@@ -121,7 +208,7 @@ def orders(db: Session = Depends(get_db)):
             "estado": o.state,
             "cliente": o.customer.name if o.customer else None,
             "destinatario": o.recipient.name if o.recipient else None,
-            "fecha": o.created_at
+            "fecha": o.created_at.isoformat() if o.created_at else None
         })
 
     return resultado
