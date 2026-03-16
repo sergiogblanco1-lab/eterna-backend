@@ -86,10 +86,6 @@ def home():
             button:hover {
                 opacity: 0.92;
             }
-            button:disabled {
-                opacity: 0.6;
-                cursor: not-allowed;
-            }
             .mini {
                 font-size: 14px;
                 color: #9b9baa;
@@ -101,28 +97,14 @@ def home():
                 font-size: 14px;
                 text-align: center;
             }
-            .loading-box {
-                display: none;
-                margin-top: 18px;
+            .note {
+                margin-top: 16px;
                 padding: 14px;
                 border-radius: 12px;
                 background: #0f1720;
                 border: 1px solid #273243;
                 color: #d8e2f0;
                 text-align: center;
-            }
-            .spinner {
-                width: 24px;
-                height: 24px;
-                border: 3px solid #3a4658;
-                border-top: 3px solid white;
-                border-radius: 50%;
-                margin: 0 auto 10px auto;
-                animation: spin 1s linear infinite;
-            }
-            @keyframes spin {
-                0% { transform: rotate(0deg); }
-                100% { transform: rotate(360deg); }
             }
         </style>
     </head>
@@ -132,7 +114,7 @@ def home():
             <p>Convierte 6 fotos y 3 frases en un recuerdo emocional.</p>
 
             <div class="card">
-                <form action="/crear-eterna-web" method="post" enctype="multipart/form-data" onsubmit="mostrarCarga()">
+                <form action="/crear-eterna-web" method="post" enctype="multipart/form-data">
                     <label>Nombre</label>
                     <input type="text" name="nombre" required>
 
@@ -166,16 +148,10 @@ def home():
                     <label>Foto 6</label>
                     <input type="file" name="foto6" accept=".jpg,.jpeg,.png,.webp" required>
 
-                    <button id="crearBtn" type="submit">Crear mi ETERNA</button>
-                    <div class="mini">Usa fotos JPG si puedes. Irán más rápido.</div>
+                    <button type="submit">Crear mi ETERNA</button>
 
-                    <div id="loadingBox" class="loading-box">
-                        <div class="spinner"></div>
-                        <div><strong>Estamos creando tu ETERNA...</strong></div>
-                        <div style="margin-top:6px; font-size:14px; color:#aeb8c7;">
-                            Puede tardar entre 20 y 60 segundos.
-                        </div>
-                    </div>
+                    <div class="mini">Usa fotos JPG si puedes. Irán más rápido.</div>
+                    <div class="note">Al pulsar el botón, la página tardará un poco mientras se crea el vídeo. Es normal.</div>
                 </form>
             </div>
 
@@ -183,16 +159,6 @@ def home():
                 Hay momentos que merecen quedarse para siempre.
             </div>
         </div>
-
-        <script>
-            function mostrarCarga() {
-                const btn = document.getElementById("crearBtn");
-                const box = document.getElementById("loadingBox");
-                btn.disabled = true;
-                btn.innerText = "Creando tu ETERNA...";
-                box.style.display = "block";
-            }
-        </script>
     </body>
     </html>
     """
