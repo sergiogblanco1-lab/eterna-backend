@@ -6,10 +6,6 @@ from pathlib import Path
 from typing import List, Optional
 
 
-# =========================================================
-# ETERNA VIDEO ENGINE — VERSION MEJORADA
-# =========================================================
-
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
@@ -17,6 +13,7 @@ FPS = 30
 INTRO_SECONDS = 3.2
 OUTRO_SECONDS = 4.0
 PHOTO_SECONDS = 4.2
+LAST_PHOTO_EXTRA_SECONDS = 1.4
 FADE_DURATION = 0.8
 TEXT_FADE = 0.7
 
@@ -35,10 +32,6 @@ FONT_CANDIDATES = [
     "/usr/share/fonts/dejavu/DejaVuSans.ttf",
 ]
 
-
-# =========================================================
-# HELPERS
-# =========================================================
 
 def _find_font_file() -> Optional[str]:
     for font_path in FONT_CANDIDATES:
@@ -119,7 +112,7 @@ def _build_zoompan_filter(duration: float, motion_type: str) -> str:
         zoom_expr = "1.10"
         x_expr = "max(iw/2-(iw/zoom/2)-on*0.6,0)"
         y_expr = "ih/2-(ih/zoom/2)"
-    else:  # pan_right
+    else:
         zoom_expr = "1.10"
         x_expr = "min(iw/2-(iw/zoom/2)+on*0.6, iw-iw/zoom)"
         y_expr = "ih/2-(ih/zoom/2)"
@@ -141,7 +134,7 @@ def _build_clip_filter(duration: float, motion_type: str) -> str:
     return (
         f"{_build_zoompan_filter(duration, motion_type)},"
         f"fade=t=in:st=0:d={FADE_DURATION},"
-        f"fade=t=out:st={duration - FADE_DURATION}:d={FADE_DURATION}"
+        f"fade=t=out:st={max(duration - FADE_DURATION, 0.1)}:d={FADE_DURATION}"
     )
 
 
@@ -197,8 +190,8 @@ def _build_text_timeline(total_duration: float, frases: List[str]):
     middle_start = total_duration / 2 - 2.0
     middle_end = middle_start + 3.7
 
-    final_start = max(total_duration - OUTRO_SECONDS - 3.2, middle_end + 0.8)
-    final_end = min(final_start + 3.0, total_duration - 1.1)
+    final_start = max(total_duration - OUTRO_SECONDS - 4.2, middle_end + 0.8)
+    final_end = min(final_start + 3.2, total_duration - 1.2)
 
     return [
         (frases[0], first_start, first_end),
@@ -264,10 +257,6 @@ def _create_text_screen(
     ])
 
 
-# =========================================================
-# CORE
-# =========================================================
-
 def generate_eterna_video(
     image_paths: List[str],
     frases: List[str],
@@ -291,23 +280,21 @@ def generate_eterna_video(
     with tempfile.TemporaryDirectory() as temp_dir:
         temp_dir_path = Path(temp_dir)
 
-        # -------------------------------------------------
-        # 1) Crear clips individuales por foto
-        # -------------------------------------------------
         photo_clips = []
         motion_cycle = ["zoom_in", "pan_left", "zoom_out", "pan_right"]
 
         for i, image_path in enumerate(image_paths):
             clip_path = temp_dir_path / f"clip_{i+1}.mp4"
             motion_type = motion_cycle[i % len(motion_cycle)]
+            clip_seconds = PHOTO_SECONDS + (LAST_PHOTO_EXTRA_SECONDS if i == len(image_paths) - 1 else 0)
 
             cmd = [
                 "ffmpeg",
                 "-y",
                 "-loop", "1",
-                "-t", str(PHOTO_SECONDS),
+                "-t", str(clip_seconds),
                 "-i", image_path,
-                "-vf", _build_clip_filter(PHOTO_SECONDS, motion_type),
+                "-vf", _build_clip_filter(clip_seconds, motion_type),
                 "-r", str(FPS),
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
@@ -316,11 +303,8 @@ def generate_eterna_video(
             ]
 
             _run_command(cmd)
-            photo_clips.append(str(clip_path))
+            photo_clips.append((str(clip_path), clip_seconds))
 
-        # -------------------------------------------------
-        # 2) Crear intro y outro
-        # -------------------------------------------------
         intro_path = temp_dir_path / "intro.mp4"
         outro_path = temp_dir_path / "outro.mp4"
 
@@ -342,11 +326,8 @@ def generate_eterna_video(
             secondary_text=end_message,
         )
 
-        # -------------------------------------------------
-        # 3) Concatenar intro + fotos + outro
-        # -------------------------------------------------
         concat_list_path = temp_dir_path / "concat.txt"
-        ordered_clips = [str(intro_path)] + photo_clips + [str(outro_path)]
+        ordered_clips = [str(intro_path)] + [p for p, _ in photo_clips] + [str(outro_path)]
 
         with open(concat_list_path, "w", encoding="utf-8") as f:
             for clip in ordered_clips:
@@ -365,10 +346,8 @@ def generate_eterna_video(
             str(base_video_path)
         ])
 
-        # -------------------------------------------------
-        # 4) Añadir frases encima del vídeo
-        # -------------------------------------------------
-        total_duration = INTRO_SECONDS + len(photo_clips) * PHOTO_SECONDS + OUTRO_SECONDS
+        total_photos_duration = sum(seconds for _, seconds in photo_clips)
+        total_duration = INTRO_SECONDS + total_photos_duration + OUTRO_SECONDS
         timeline = _build_text_timeline(total_duration, frases)
 
         filter_parts = []
@@ -407,9 +386,6 @@ def generate_eterna_video(
             str(final_video_no_audio)
         ])
 
-        # -------------------------------------------------
-        # 5) Añadir música si existe
-        # -------------------------------------------------
         if has_music:
             _run_command([
                 "ffmpeg",
@@ -431,10 +407,6 @@ def generate_eterna_video(
 
     return output_path
 
-
-# =========================================================
-# WRAPPERS COMPATIBLES
-# =========================================================
 
 def create_video(
     image_paths: List[str],
