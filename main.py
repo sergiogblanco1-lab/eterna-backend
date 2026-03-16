@@ -7,23 +7,19 @@ import urllib.parse
 from pathlib import Path
 from typing import List
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
-
-# =====================================================
-# CONFIG
-# =====================================================
 
 APP_NAME = "ETERNA"
 PRICE_EUR = 79
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE = BASE_DIR / "storage"
-DB = BASE_DIR / "eterna.db"
+DB_PATH = BASE_DIR / "eterna.db"
 
 STORAGE.mkdir(exist_ok=True)
 
-FFMPEG = os.getenv("FFMPEG_BIN", "ffmpeg")
+FFMPEG_BIN = os.getenv("FFMPEG_BIN", "ffmpeg")
 
 MAX_FOTOS = 6
 MAX_IMAGE_BYTES = 8 * 1024 * 1024
@@ -36,18 +32,17 @@ app = FastAPI(title="ETERNA")
 
 
 # =====================================================
-# DATABASE
+# DB
 # =====================================================
 
 def get_db():
-    conn = sqlite3.connect(DB)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
     return conn
 
 
-def init_db() -> None:
+def init_db():
     conn = get_db()
-
     conn.execute("""
     CREATE TABLE IF NOT EXISTS eternas(
         eterna_id TEXT PRIMARY KEY,
@@ -62,13 +57,12 @@ def init_db() -> None:
         created_at TEXT
     )
     """)
-
     conn.commit()
     conn.close()
 
 
 @app.on_event("startup")
-def startup() -> None:
+def startup():
     init_db()
 
 
@@ -94,11 +88,10 @@ def safe_filename(name: str) -> str:
 def normalize_phone(phone: str) -> str:
     phone = raw_text(phone)
     allowed = "+0123456789"
-    cleaned = "".join(ch for ch in phone if ch in allowed)
-    return cleaned
+    return "".join(ch for ch in phone if ch in allowed)
 
 
-async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int) -> None:
+async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int):
     total = 0
 
     with path.open("wb") as buffer:
@@ -108,7 +101,6 @@ async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int) -> N
                 break
 
             total += len(chunk)
-
             if total > max_bytes:
                 buffer.close()
                 path.unlink(missing_ok=True)
@@ -119,7 +111,7 @@ async def save_file_limited(upload: UploadFile, path: Path, max_bytes: int) -> N
     await upload.close()
 
 
-async def run_ffmpeg_async(cmd: List[str]) -> None:
+async def run_ffmpeg_async(cmd: List[str]):
     process = await asyncio.create_subprocess_exec(
         *cmd,
         stdout=asyncio.subprocess.PIPE,
@@ -257,7 +249,7 @@ def page(title: str, body: str) -> HTMLResponse:
     """)
 
 
-def cleanup_folder(folder: Path) -> None:
+def cleanup_folder(folder: Path):
     if not folder.exists():
         return
 
@@ -282,28 +274,27 @@ def get_eterna_row(eterna_id: str):
     return row
 
 
-def build_eterna_link(eterna_id: str) -> str:
-    return f"/ver/{eterna_id}"
+def build_absolute_link(request: Request, eterna_id: str) -> str:
+    return str(request.base_url).rstrip("/") + f"/ver/{eterna_id}"
 
 
-def build_whatsapp_link(phone: str, eterna_id: str) -> str:
-    link = build_eterna_link(eterna_id)
+def build_whatsapp_link(phone: str, absolute_link: str) -> str:
     mensaje = (
         "He creado algo para ti.\n\n"
         "Ábrelo cuando tengas un momento tranquilo ❤️\n\n"
-        f"{link}"
+        f"{absolute_link}"
     )
     encoded = urllib.parse.quote(mensaje)
     return f"https://wa.me/{phone}?text={encoded}"
 
 
 # =====================================================
-# VIDEO GENERATOR
+# VIDEO
 # =====================================================
 
-async def generar_video(imagenes: List[Path], salida: Path) -> None:
+async def generar_video(imagenes: List[Path], salida: Path):
     """
-    Recuerdo de fotos:
+    Recuerdo:
     - 6 fotos
     - zoom lento
     - fade entre fotos
@@ -360,7 +351,7 @@ async def generar_video(imagenes: List[Path], salida: Path) -> None:
     filter_complex = ";".join(filters)
 
     cmd = [
-        FFMPEG,
+        FFMPEG_BIN,
         "-y",
         *input_args,
         "-filter_complex", filter_complex,
@@ -390,7 +381,7 @@ def home():
         <div class="pill">ETERNA</div>
         <h1>Hay momentos que merecen quedarse para siempre.</h1>
         <p>Convierte 6 fotos y 3 frases en un recuerdo emocional.</p>
-        <a href="/crear">
+        <a href="/crear-eterna">
             <button>Crear mi ETERNA</button>
         </a>
     </div>
@@ -403,12 +394,12 @@ def healthz():
         "status": "ok",
         "app": APP_NAME,
         "storage_exists": STORAGE.exists(),
-        "db_exists": DB.exists(),
-        "ffmpeg_bin": FFMPEG,
+        "db_exists": DB_PATH.exists(),
+        "ffmpeg_bin": FFMPEG_BIN,
     }
 
 
-@app.get("/crear", response_class=HTMLResponse)
+@app.get("/crear-eterna", response_class=HTMLResponse)
 def crear_form():
     return page("Crear ETERNA", """
     <div class="card">
@@ -526,8 +517,8 @@ def checkout(eterna_id: str):
         </video>
 
         <p class="muted">
-            Esta versión deja el pago preparado en el flujo.
-            El botón de abajo marca el pago como hecho para seguir avanzando.
+            Este botón simula el pago para dejar el flujo funcionando.
+            Después lo cambiamos por Stripe real.
         </p>
 
         <form action="/pagar/{eterna_id}" method="post">
@@ -555,7 +546,7 @@ def pagar_eterna(eterna_id: str):
 
 
 @app.get("/enviar/{eterna_id}", response_class=HTMLResponse)
-def enviar_page(eterna_id: str):
+def enviar_page(eterna_id: str, request: Request):
     row = get_eterna_row(eterna_id)
     if row is None:
         raise HTTPException(status_code=404, detail="ETERNA no encontrada")
@@ -563,7 +554,8 @@ def enviar_page(eterna_id: str):
     if row["pagado"] != 1:
         return RedirectResponse(url=f"/checkout/{eterna_id}", status_code=303)
 
-    wa_link = build_whatsapp_link(row["destinatario_telefono"], eterna_id)
+    absolute_link = build_absolute_link(request, eterna_id)
+    wa_link = build_whatsapp_link(row["destinatario_telefono"], absolute_link)
 
     return page("Enviar ETERNA", f"""
     <div class="card">
@@ -591,7 +583,7 @@ def enviar_page(eterna_id: str):
 
 
 @app.get("/copiar-enlace/{eterna_id}", response_class=HTMLResponse)
-def copiar_enlace_page(eterna_id: str):
+def copiar_enlace_page(eterna_id: str, request: Request):
     row = get_eterna_row(eterna_id)
     if row is None:
         raise HTTPException(status_code=404, detail="ETERNA no encontrada")
@@ -599,7 +591,7 @@ def copiar_enlace_page(eterna_id: str):
     if row["pagado"] != 1:
         return RedirectResponse(url=f"/checkout/{eterna_id}", status_code=303)
 
-    link = build_eterna_link(eterna_id)
+    link = build_absolute_link(request, eterna_id)
 
     return page("Copiar enlace", f"""
     <div class="card">
@@ -657,11 +649,7 @@ def video_file(eterna_id: str):
     if not path.exists():
         raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
-    return FileResponse(
-        path,
-        media_type="video/mp4",
-        filename="video.mp4"
-    )
+    return FileResponse(path, media_type="video/mp4", filename="video.mp4")
 
 
 @app.get("/reaccion/{eterna_id}", response_class=HTMLResponse)
