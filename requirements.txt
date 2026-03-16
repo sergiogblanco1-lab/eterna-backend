@@ -1,4 +1,5 @@
-fastapi
-uvicorn
-python-multipart
-imageio-ffmpeg
+{
+ "ok": true,
+ "eterna_id": "abc123",
+ "video": "https://eterna-backend-0six.onrender.com/storage/abc123/video.mp4"
+}
