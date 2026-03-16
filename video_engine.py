@@ -43,7 +43,10 @@ def generate_eterna_video(
     if not image_paths:
         raise ValueError("No hay imágenes válidas para crear el vídeo.")
 
-    temp_dir = Path(output_path).parent / "temp_video"
+    output_parent = Path(output_path).parent
+    output_parent.mkdir(parents=True, exist_ok=True)
+
+    temp_dir = output_parent / "temp_video"
     temp_dir.mkdir(parents=True, exist_ok=True)
 
     clips = []
@@ -173,3 +176,32 @@ def build_video_from_images(
         outro_text=outro_text,
         end_message=end_message,
     )
+
+
+class VideoEngine:
+    """
+    Clase adaptadora para que main.py pueda usar el motor real
+    sin cambiar toda tu lógica anterior.
+    """
+
+    def generate_video(
+        self,
+        order_id: str,
+        photos: List[str],
+        phrases: List[str],
+        output_path: str,
+        music_path: Optional[str] = None,
+        intro_text: str = "",
+        outro_text: str = "",
+        end_message: str = "",
+        sender_video_path: Optional[str] = None,
+    ) -> str:
+        return generate_eterna_video(
+            image_paths=photos,
+            frases=phrases,
+            output_path=output_path,
+            music_path=music_path,
+            intro_text=intro_text,
+            outro_text=outro_text,
+            end_message=end_message,
+        )
