@@ -1,438 +1,666 @@
 import os
-import uuid
-import html
-import sqlite3
-import asyncio
-import urllib.parse
-from pathlib import Path
+from datetime import datetime
 from typing import List, Optional
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, FileResponse, RedirectResponse, JSONResponse
+from fastapi import FastAPI, Depends, File, Form, HTTPException, UploadFile
+from fastapi.responses import HTMLResponse, JSONResponse
+from sqlalchemy.orm import Session
 
-APP_NAME = "ETERNA"
-PRICE_EUR = 79
+from app.config import APP_NAME, BASE_URL, MAX_PHOTOS, MIN_PHONE_LENGTH, ORDER_STATES
+from app.database import Base, engine, get_db
+from app.models import Customer, Recipient, EternaOrder
+from app.schemas import HealthResponse
+from app.services.storage_service import StorageService
+from app.services.video_service import VideoService
+from app.utils import (
+    valid_email,
+    valid_phone,
+    normalize_phone,
+    now_utc,
+    new_slug,
+)
 
-BASE_DIR = Path(__file__).resolve().parent
-STORAGE = BASE_DIR / "storage"
-DB = BASE_DIR / "eterna.db"
-
-STORAGE.mkdir(exist_ok=True)
-
-FFMPEG = os.getenv("FFMPEG_BIN", "ffmpeg")
-
-MAX_FOTOS = 6
-MAX_IMAGE_BYTES = 8 * 1024 * 1024
-MAX_VIDEO_MSG_BYTES = 40 * 1024 * 1024
-MAX_REACTION_BYTES = 120 * 1024 * 1024
-
-ALLOWED_IMAGE_EXT = {".jpg", ".jpeg", ".png", ".webp"}
-ALLOWED_VIDEO_EXT = {".mp4", ".mov", ".webm"}
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="ETERNA")
 
-
-# =========================
-# DATABASE
-# =========================
-
-def db():
-    conn = sqlite3.connect(DB)
-    conn.row_factory = sqlite3.Row
-    return conn
+storage_service = StorageService()
+video_service = VideoService()
 
 
-def init_db():
-    c = db()
-    c.execute("""
-    CREATE TABLE IF NOT EXISTS eternas(
-        id TEXT PRIMARY KEY,
-        nombre TEXT,
-        email TEXT,
-        frase1 TEXT,
-        frase2 TEXT,
-        frase3 TEXT,
-        destinatario TEXT,
-        telefono TEXT,
-        pagado INTEGER DEFAULT 0,
-        created_at TEXT
+def upsert_customer(db: Session, name: str, email: str, phone: str) -> Customer:
+    existing = db.query(Customer).filter(Customer.email == email).first()
+    if existing:
+        existing.name = name
+        existing.phone = phone
+        return existing
+
+    customer = Customer(
+        name=name,
+        email=email,
+        phone=phone,
     )
-    """)
-    c.commit()
-    c.close()
+    db.add(customer)
+    db.flush()
+    return customer
 
 
-@app.on_event("startup")
-def start():
-    init_db()
+def create_recipient(db: Session, name: str, phone: str, consent_confirmed: bool) -> Recipient:
+    recipient = Recipient(
+        name=name,
+        phone=phone,
+        consent_confirmed=consent_confirmed,
+    )
+    db.add(recipient)
+    db.flush()
+    return recipient
 
 
-# =========================
-# HELPERS
-# =========================
-
-def safe_filename(name: str) -> str:
-    base = os.path.basename(name or "archivo")
-    base = base.replace(" ", "_")
-    return "".join(c for c in base if c.isalnum() or c in "._-") or "archivo"
-
-
-def normalize_phone(phone: str) -> str:
-    allowed = "+0123456789"
-    return "".join(c for c in phone if c in allowed)
-
-
-async def save_file(upload: UploadFile, path: Path, max_bytes: int):
-    total = 0
-    with path.open("wb") as f:
-        while True:
-            chunk = await upload.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > max_bytes:
-                raise HTTPException(413, "Archivo demasiado grande")
-            f.write(chunk)
-    await upload.close()
-
-
-async def run(cmd):
-    proc = await asyncio.create_subprocess_exec(*cmd)
-    await proc.communicate()
-
-
-def page(title: str, body: str):
-    return HTMLResponse(f"""
-    <html>
-    <head>
-    <meta name="viewport" content="width=device-width, initial-scale=1">
+def render_home() -> str:
+    return """
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ETERNA</title>
     <style>
+        * { box-sizing: border-box; }
+        html, body { margin: 0; padding: 0; }
+        body {
+            font-family: Inter, Arial, sans-serif;
+            background: #0b0b0b;
+            color: #fff;
+        }
 
-    body {{
-        background:#0d0d0d;
-        color:white;
-        font-family:Arial;
-        max-width:600px;
-        margin:auto;
-        padding:20px;
-    }}
+        .hero {
+            min-height: 52vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 56px 20px 90px;
+            text-align: center;
+            background:
+                linear-gradient(180deg, rgba(0,0,0,.38), rgba(0,0,0,.75)),
+                radial-gradient(circle at top, rgba(231,194,125,.16), transparent 40%),
+                url('https://images.unsplash.com/photo-1517457373958-b7bdd4587205?auto=format&fit=crop&w=1400&q=80') center/cover no-repeat;
+        }
 
-    input,textarea,button {{
-        width:100%;
-        padding:14px;
-        margin-top:10px;
-        border-radius:10px;
-        border:none;
-    }}
+        .hero-inner {
+            max-width: 760px;
+        }
 
-    button {{
-        background:white;
-        color:black;
-        font-weight:bold;
-    }}
+        .eyebrow {
+            color: #e7c27d;
+            letter-spacing: 2px;
+            font-size: 12px;
+            text-transform: uppercase;
+            margin-bottom: 12px;
+        }
 
-    video {{
-        width:100%;
-        margin-top:20px;
-        border-radius:12px;
-    }}
+        h1 {
+            margin: 0;
+            font-size: 42px;
+            line-height: 1.12;
+            font-weight: 600;
+        }
 
-    .cam {{
-        position:fixed;
-        bottom:10px;
-        right:10px;
-        width:90px;
-        border-radius:10px;
-    }}
+        .sub {
+            max-width: 650px;
+            margin: 18px auto 0;
+            color: rgba(255,255,255,.84);
+            font-size: 18px;
+            line-height: 1.6;
+        }
 
+        .shell {
+            max-width: 860px;
+            margin: -48px auto 80px;
+            padding: 0 18px;
+        }
+
+        .card {
+            background: rgba(18,18,18,.96);
+            border: 1px solid #242424;
+            border-radius: 26px;
+            padding: 28px;
+            box-shadow: 0 18px 60px rgba(0,0,0,.38);
+            backdrop-filter: blur(8px);
+        }
+
+        .topline {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+
+        .topline h2 {
+            margin: 0;
+            font-size: 24px;
+            font-weight: 600;
+        }
+
+        .badge {
+            font-size: 12px;
+            color: #0b0b0b;
+            background: linear-gradient(180deg, #e7c27d 0%, #cfa25a 100%);
+            border-radius: 999px;
+            padding: 8px 12px;
+            font-weight: 700;
+        }
+
+        .section {
+            margin-top: 22px;
+        }
+
+        .section:first-of-type {
+            margin-top: 0;
+        }
+
+        .section-title {
+            font-size: 13px;
+            color: #e7c27d;
+            text-transform: uppercase;
+            letter-spacing: 1.8px;
+            margin: 0 0 12px;
+        }
+
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 14px;
+        }
+
+        .full {
+            grid-column: 1 / -1;
+        }
+
+        label {
+            display: block;
+            font-size: 14px;
+            margin: 0 0 7px;
+            color: rgba(255,255,255,.92);
+        }
+
+        input, textarea {
+            width: 100%;
+            border: 1px solid #2d2d2d;
+            border-radius: 14px;
+            background: #191919;
+            color: #fff;
+            padding: 14px;
+            font-size: 15px;
+            outline: none;
+        }
+
+        textarea {
+            min-height: 100px;
+            resize: vertical;
+        }
+
+        input:focus, textarea:focus {
+            border-color: #cfa25a;
+            box-shadow: 0 0 0 3px rgba(207,162,90,.12);
+        }
+
+        .hint {
+            margin-top: 7px;
+            font-size: 13px;
+            color: rgba(255,255,255,.58);
+        }
+
+        .consent {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+            background: #151515;
+            border: 1px solid #292929;
+            border-radius: 16px;
+            padding: 14px;
+        }
+
+        .consent input {
+            width: auto;
+            margin-top: 4px;
+        }
+
+        button {
+            width: 100%;
+            border: none;
+            border-radius: 999px;
+            background: linear-gradient(180deg, #e7c27d 0%, #cfa25a 100%);
+            color: #0b0b0b;
+            font-weight: 700;
+            font-size: 16px;
+            padding: 16px 18px;
+            cursor: pointer;
+            margin-top: 22px;
+        }
+
+        .status {
+            margin-top: 14px;
+            font-size: 14px;
+        }
+
+        .ok { color: #9de2ae; }
+        .error { color: #ffabab; }
+
+        @media (max-width: 700px) {
+            h1 { font-size: 32px; }
+            .sub { font-size: 16px; }
+            .grid { grid-template-columns: 1fr; }
+            .topline { flex-direction: column; align-items: flex-start; }
+            .card { padding: 20px; }
+        }
     </style>
-    </head>
+</head>
+<body>
+    <section class="hero">
+        <div class="hero-inner">
+            <div class="eyebrow">ETERNA</div>
+            <h1>Hay momentos que merecen quedarse para siempre.</h1>
+            <p class="sub">
+                Convierte 6 fotos y 3 frases en un recuerdo emocional que alguien nunca olvidará.
+            </p>
+        </div>
+    </section>
 
-    <body>
+    <main class="shell">
+        <section class="card">
+            <div class="topline">
+                <h2>Crea tu ETERNA</h2>
+                <div class="badge">MVP serio</div>
+            </div>
 
-    {body}
+            <form id="eternaForm">
+                <div class="section">
+                    <div class="section-title">Tu información</div>
+                    <div class="grid">
+                        <div>
+                            <label for="name">Tu nombre</label>
+                            <input id="name" name="name" required />
+                        </div>
+                        <div>
+                            <label for="email">Tu email</label>
+                            <input id="email" name="email" type="email" required />
+                        </div>
+                        <div class="full">
+                            <label for="customer_phone">Tu teléfono</label>
+                            <input id="customer_phone" name="customer_phone" required />
+                        </div>
+                    </div>
+                </div>
 
-    </body>
-    </html>
-    """)
+                <div class="section">
+                    <div class="section-title">Destinatario</div>
+                    <div class="grid">
+                        <div>
+                            <label for="recipient_name">Nombre del destinatario</label>
+                            <input id="recipient_name" name="recipient_name" required />
+                        </div>
+                        <div>
+                            <label for="recipient_phone">Teléfono del destinatario</label>
+                            <input id="recipient_phone" name="recipient_phone" required />
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Frases</div>
+                    <div class="grid">
+                        <div class="full">
+                            <label for="phrase_1">Frase 1</label>
+                            <textarea id="phrase_1" name="phrase_1" required></textarea>
+                        </div>
+                        <div class="full">
+                            <label for="phrase_2">Frase 2</label>
+                            <textarea id="phrase_2" name="phrase_2" required></textarea>
+                        </div>
+                        <div class="full">
+                            <label for="phrase_3">Frase 3</label>
+                            <textarea id="phrase_3" name="phrase_3" required></textarea>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Multimedia</div>
+                    <div class="grid">
+                        <div class="full">
+                            <label for="photos">Sube exactamente 6 fotos</label>
+                            <input id="photos" name="photos" type="file" accept="image/*" multiple required />
+                            <div class="hint">Formatos permitidos: jpg, jpeg, png, webp.</div>
+                        </div>
+                        <div class="full">
+                            <label for="sender_video">Vídeo del regalante (opcional)</label>
+                            <input id="sender_video" name="sender_video" type="file" accept="video/*" />
+                            <div class="hint">Preparado para mensaje emocional del regalante.</div>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="section">
+                    <div class="section-title">Permiso</div>
+                    <div class="consent">
+                        <input id="consent_confirmed" name="consent_confirmed" type="checkbox" required />
+                        <label for="consent_confirmed" style="margin:0;">
+                            Confirmo que el destinatario acepta recibir esta sorpresa y que ETERNA no enviará nada sin permiso.
+                        </label>
+                    </div>
+                </div>
+
+                <button type="submit">Crear mi ETERNA</button>
+                <div id="status" class="status"></div>
+            </form>
+        </section>
+    </main>
+
+    <script>
+        const form = document.getElementById("eternaForm");
+        const statusEl = document.getElementById("status");
+
+        form.addEventListener("submit", async (e) => {
+            e.preventDefault();
+
+            statusEl.className = "status";
+            statusEl.textContent = "Creando tu ETERNA...";
+
+            const photos = document.getElementById("photos").files;
+            if (!photos || photos.length !== 6) {
+                statusEl.className = "status error";
+                statusEl.textContent = "Debes subir exactamente 6 fotos.";
+                return;
+            }
+
+            const data = new FormData(form);
+
+            try {
+                const response = await fetch("/orders", {
+                    method: "POST",
+                    body: data
+                });
+
+                const json = await response.json();
+
+                if (!response.ok) {
+                    statusEl.className = "status error";
+                    statusEl.textContent = json.detail || "Ha ocurrido un error.";
+                    return;
+                }
+
+                statusEl.className = "status ok";
+                statusEl.textContent =
+                    "ETERNA creada. ID: " + json.order_id + " | Estado: " + json.state;
+
+                form.reset();
+            } catch (error) {
+                statusEl.className = "status error";
+                statusEl.textContent = "No se pudo conectar con el servidor.";
+            }
+        });
+    </script>
+</body>
+</html>
+"""
 
 
-# =========================
-# VIDEO GENERATOR
-# =========================
-
-async def generar_video(imagenes: List[Path], salida: Path):
-
-    fps = 30
-    duracion = 6
-
-    lista = STORAGE / f"{uuid.uuid4().hex}.txt"
-
-    with open(lista,"w") as f:
-        for img in imagenes:
-            f.write(f"file '{img}'\n")
-            f.write(f"duration {duracion}\n")
-        f.write(f"file '{imagenes[-1]}'\n")
-
-    filtro = (
-        "scale=720:1280:force_original_aspect_ratio=decrease,"
-        "pad=720:1280:(ow-iw)/2:(oh-ih)/2,"
-        "zoompan=z='min(zoom+0.0006,1.07)':d=180:s=720x1280:fps=30"
-    )
-
-    cmd=[
-        FFMPEG,
-        "-y",
-        "-f","concat",
-        "-safe","0",
-        "-i",str(lista),
-        "-vf",filtro,
-        "-pix_fmt","yuv420p",
-        "-preset","veryfast",
-        "-movflags","+faststart",
-        str(salida)
-    ]
-
-    await run(cmd)
-
-    lista.unlink(missing_ok=True)
-
-
-async def unir_video(recuerdo: Path, mensaje: Path, salida: Path):
-
-    lista = STORAGE / f"{uuid.uuid4().hex}_concat.txt"
-
-    with open(lista,"w") as f:
-        f.write(f"file '{recuerdo}'\n")
-        f.write(f"file '{mensaje}'\n")
-
-    cmd=[
-        FFMPEG,
-        "-y",
-        "-f","concat",
-        "-safe","0",
-        "-i",str(lista),
-        "-c","copy",
-        str(salida)
-    ]
-
-    await run(cmd)
-
-    lista.unlink(missing_ok=True)
-
-
-# =========================
-# HOME
-# =========================
-
-@app.get("/",response_class=HTMLResponse)
+@app.get("/", response_class=HTMLResponse)
 def home():
-    return page("ETERNA", """
-
-    <h1>ETERNA</h1>
-
-    <p>Convierte 6 fotos en un recuerdo emocional.</p>
-
-    <a href="/crear">
-    <button>Crear mi ETERNA</button>
-    </a>
-
-    """)
+    return render_home()
 
 
-# =========================
-# FORM
-# =========================
-
-@app.get("/crear",response_class=HTMLResponse)
-def crear():
-    return page("Crear","""
-
-    <h2>Nueva ETERNA</h2>
-
-    <form action="/crear" method="post" enctype="multipart/form-data">
-
-    <input name="nombre" placeholder="Tu nombre" required>
-
-    <input name="email" placeholder="Tu email" required>
-
-    <input name="destinatario" placeholder="Nombre destinatario" required>
-
-    <input name="telefono" placeholder="Teléfono destinatario" required>
-
-    <textarea name="frase1" placeholder="Frase 1"></textarea>
-    <textarea name="frase2" placeholder="Frase 2"></textarea>
-    <textarea name="frase3" placeholder="Frase 3"></textarea>
-
-    <label>Mensaje de vídeo (máx 20s)</label>
-    <input type="file" name="mensaje">
-
-    <input type="file" name="fotos" multiple required>
-
-    <button>Crear recuerdo</button>
-
-    </form>
-
-    """)
+@app.get("/health", response_model=HealthResponse)
+def health():
+    return {"status": "ok", "service": APP_NAME}
 
 
-# =========================
-# CREATE
-# =========================
-
-@app.post("/crear")
-async def crear_post(
-    nombre:str=Form(...),
-    email:str=Form(...),
-    destinatario:str=Form(...),
-    telefono:str=Form(...),
-    frase1:str=Form(""),
-    frase2:str=Form(""),
-    frase3:str=Form(""),
-    fotos:List[UploadFile]=File(...),
-    mensaje:UploadFile|None=File(None)
+@app.post("/orders")
+async def create_order(
+    name: str = Form(...),
+    email: str = Form(...),
+    customer_phone: str = Form(...),
+    recipient_name: str = Form(...),
+    recipient_phone: str = Form(...),
+    phrase_1: str = Form(...),
+    phrase_2: str = Form(...),
+    phrase_3: str = Form(...),
+    consent_confirmed: bool = Form(...),
+    photos: List[UploadFile] = File(...),
+    sender_video: Optional[UploadFile] = File(None),
+    db: Session = Depends(get_db),
 ):
+    name = name.strip()
+    email = email.strip().lower()
+    customer_phone = normalize_phone(customer_phone)
+    recipient_name = recipient_name.strip()
+    recipient_phone = normalize_phone(recipient_phone)
+    phrase_1 = phrase_1.strip()
+    phrase_2 = phrase_2.strip()
+    phrase_3 = phrase_3.strip()
 
-    if len(fotos)!=6:
-        raise HTTPException(400,"Sube 6 fotos")
+    if not name:
+        raise HTTPException(status_code=400, detail="Tu nombre es obligatorio.")
 
-    eterna_id=uuid.uuid4().hex
+    if not recipient_name:
+        raise HTTPException(status_code=400, detail="El nombre del destinatario es obligatorio.")
 
-    folder=STORAGE/eterna_id
-    folder.mkdir()
+    if not valid_email(email):
+        raise HTTPException(status_code=400, detail="El email no es válido.")
 
-    imagenes=[]
+    if not valid_phone(customer_phone, MIN_PHONE_LENGTH):
+        raise HTTPException(status_code=400, detail="El teléfono del regalante no es válido.")
 
-    for i,f in enumerate(fotos):
+    if not valid_phone(recipient_phone, MIN_PHONE_LENGTH):
+        raise HTTPException(status_code=400, detail="El teléfono del destinatario no es válido.")
 
-        path=folder/f"img{i}.jpg"
+    if len(photos) != MAX_PHOTOS:
+        raise HTTPException(status_code=400, detail="Debes subir exactamente 6 fotos.")
 
-        with open(path,"wb") as buffer:
-            buffer.write(await f.read())
+    if not phrase_1 or not phrase_2 or not phrase_3:
+        raise HTTPException(status_code=400, detail="Las 3 frases son obligatorias.")
 
-        imagenes.append(path)
+    try:
+        customer = upsert_customer(db, name, email, customer_phone)
+        recipient = create_recipient(db, recipient_name, recipient_phone, consent_confirmed)
 
-    recuerdo=folder/"recuerdo.mp4"
+        order = EternaOrder(
+            customer_id=customer.id,
+            recipient_id=recipient.id,
+            phrase_1=phrase_1,
+            phrase_2=phrase_2,
+            phrase_3=phrase_3,
+            photos_json="[]",
+            sender_video_path=None,
+            final_video_path=None,
+            reaction_video_path=None,
+            public_slug=new_slug(),
+            state="uploaded",
+            created_at=now_utc(),
+            updated_at=now_utc(),
+        )
+        db.add(order)
+        db.flush()
 
-    await generar_video(imagenes,recuerdo)
+        saved_photos = storage_service.save_photos(order.id, photos)
+        saved_sender_video = storage_service.save_sender_video(order.id, sender_video)
 
-    final=folder/"video.mp4"
+        order.photos_json = storage_service.photos_json(saved_photos)
+        order.sender_video_path = saved_sender_video
+        order.updated_at = now_utc()
 
-    if mensaje:
+        db.commit()
 
-        msg_path=folder/"mensaje.mp4"
+        return {
+            "ok": True,
+            "order_id": order.id,
+            "public_url": f"{BASE_URL}/e/{order.public_slug}",
+            "state": order.state,
+        }
 
-        with open(msg_path,"wb") as b:
-            b.write(await mensaje.read())
-
-        await unir_video(recuerdo,msg_path,final)
-
-    else:
-
-        final=recuerdo
-
-    conn=db()
-
-    conn.execute(
-        "INSERT INTO eternas VALUES(?,?,?,?,?,?,?,?,?,datetime('now'))",
-        (eterna_id,nombre,email,frase1,frase2,frase3,destinatario,telefono,0)
-    )
-
-    conn.commit()
-    conn.close()
-
-    return RedirectResponse(f"/checkout/{eterna_id}",303)
-
-
-# =========================
-# CHECKOUT
-# =========================
-
-@app.get("/checkout/{id}",response_class=HTMLResponse)
-def checkout(id):
-
-    return page("Pago",f"""
-
-    <h2>Tu ETERNA está lista</h2>
-
-    <video controls>
-    <source src="/video/{id}">
-    </video>
-
-    <h2>{PRICE_EUR}€</h2>
-
-    <form action="/pagar/{id}" method="post">
-    <button>Desbloquear ETERNA</button>
-    </form>
-
-    """)
-
-
-# =========================
-# PAY
-# =========================
-
-@app.post("/pagar/{id}")
-def pagar(id):
-
-    conn=db()
-
-    conn.execute("UPDATE eternas SET pagado=1 WHERE id=?",(id,))
-
-    conn.commit()
-    conn.close()
-
-    return RedirectResponse(f"/enviar/{id}",303)
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Error interno: {str(e)}")
 
 
-# =========================
-# SEND
-# =========================
+@app.get("/orders")
+def list_orders(db: Session = Depends(get_db)):
+    orders = db.query(EternaOrder).order_by(EternaOrder.created_at.desc()).all()
 
-@app.get("/enviar/{id}",response_class=HTMLResponse)
-def enviar(id):
+    items = []
+    for order in orders:
+        items.append({
+            "id": order.id,
+            "state": order.state,
+            "customer_name": order.customer.name,
+            "customer_email": order.customer.email,
+            "customer_phone": order.customer.phone,
+            "recipient_name": order.recipient.name,
+            "recipient_phone": order.recipient.phone,
+            "created_at": order.created_at.isoformat() if order.created_at else None,
+            "public_slug": order.public_slug,
+            "sender_video_path": order.sender_video_path,
+            "final_video_path": order.final_video_path,
+            "reaction_video_path": order.reaction_video_path,
+        })
 
-    link=f"/ver/{id}"
-
-    return page("Enviar",f"""
-
-    <h2>Enviar ETERNA</h2>
-
-    <a href="{link}">
-    <button>Ver enlace</button>
-    </a>
-
-    """)
-
-
-# =========================
-# WATCH VIDEO
-# =========================
-
-@app.get("/ver/{id}",response_class=HTMLResponse)
-def ver(id):
-
-    return page("Recuerdo",f"""
-
-    <h2>Este momento fue creado para ti</h2>
-
-    <video controls>
-    <source src="/video/{id}">
-    </video>
-
-    <a href="/reaccion/{id}">
-    <button>Grabar reacción</button>
-    </a>
-
-    """)
+    return {"total": len(items), "items": items}
 
 
-@app.get("/video/{id}")
-def video(id):
+@app.get("/orders/{order_id}")
+def get_order(order_id: str, db: Session = Depends(get_db)):
+    order = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
 
-    path=STORAGE/id/"video.mp4"
+    return {
+        "id": order.id,
+        "state": order.state,
+        "customer": {
+            "id": order.customer.id,
+            "name": order.customer.name,
+            "email": order.customer.email,
+            "phone": order.customer.phone,
+        },
+        "recipient": {
+            "id": order.recipient.id,
+            "name": order.recipient.name,
+            "phone": order.recipient.phone,
+            "consent_confirmed": order.recipient.consent_confirmed,
+        },
+        "phrases": [order.phrase_1, order.phrase_2, order.phrase_3],
+        "photos": storage_service.photos_from_json(order.photos_json),
+        "sender_video_path": order.sender_video_path,
+        "final_video_path": order.final_video_path,
+        "reaction_video_path": order.reaction_video_path,
+        "public_slug": order.public_slug,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+        "updated_at": order.updated_at.isoformat() if order.updated_at else None,
+    }
 
-    if not path.exists():
-        raise HTTPException(404)
 
-    return FileResponse(path,media_type="video/mp4")
+@app.post("/orders/{order_id}/generate-video")
+def generate_video(order_id: str, db: Session = Depends(get_db)):
+    order = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+
+    order.state = "processing"
+    order.updated_at = datetime.utcnow()
+    db.commit()
+
+    try:
+        output_path = storage_service.order_final_video_path(order.id)
+        final_path = video_service.generate_placeholder_video(output_path)
+
+        order.final_video_path = final_path
+        order.state = "video_generated"
+        order.updated_at = datetime.utcnow()
+        db.commit()
+
+        return {
+            "ok": True,
+            "order_id": order.id,
+            "state": order.state,
+            "final_video_path": final_path,
+        }
+    except Exception as e:
+        order.state = "error"
+        order.error_message = str(e)
+        order.updated_at = datetime.utcnow()
+        db.commit()
+        raise HTTPException(status_code=500, detail=f"No se pudo generar el vídeo: {str(e)}")
+
+
+@app.get("/e/{public_slug}", response_class=HTMLResponse)
+def public_page(public_slug: str, db: Session = Depends(get_db)):
+    order = db.query(EternaOrder).filter(EternaOrder.public_slug == public_slug).first()
+    if not order:
+        raise HTTPException(status_code=404, detail="ETERNA no encontrada.")
+
+    if order.state == "sent" and not order.opened_at:
+        order.opened_at = datetime.utcnow()
+        order.state = "opened"
+        order.updated_at = datetime.utcnow()
+        db.commit()
+
+    recipient_name = order.recipient.name
+
+    return f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ETERNA</title>
+    <style>
+        body {{
+            margin: 0;
+            background: #0b0b0b;
+            color: white;
+            font-family: Arial, sans-serif;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 24px;
+            text-align: center;
+        }}
+        .box {{
+            max-width: 700px;
+            background: #121212;
+            border: 1px solid #242424;
+            border-radius: 24px;
+            padding: 34px 22px;
+        }}
+        .eyebrow {{
+            color: #e7c27d;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            font-size: 12px;
+            margin-bottom: 12px;
+        }}
+        h1 {{
+            margin: 0 0 10px;
+            font-size: 36px;
+        }}
+        p {{
+            color: rgba(255,255,255,.8);
+            line-height: 1.6;
+        }}
+    </style>
+</head>
+<body>
+    <div class="box">
+        <div class="eyebrow">ETERNA</div>
+        <h1>Para {recipient_name}</h1>
+        <p>Esta es la página privada donde después verá su recuerdo, el vídeo final y la reacción.</p>
+        <p>Ahora mismo ya está preparada la estructura seria del sistema.</p>
+    </div>
+</body>
+</html>
+"""
