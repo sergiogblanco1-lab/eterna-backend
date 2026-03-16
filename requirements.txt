@@ -1,5 +1,3 @@
-{
- "ok": true,
- "eterna_id": "abc123",
- "video": "https://..."
-}
+fastapi
+uvicorn
+python-multipart
