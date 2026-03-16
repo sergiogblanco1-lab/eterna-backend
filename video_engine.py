@@ -6,20 +6,26 @@ from pathlib import Path
 from typing import List, Optional
 
 
-VIDEO_WIDTH = 1080
-VIDEO_HEIGHT = 1920
-FPS = 30
+# =========================================================
+# ETERNA VIDEO ENGINE — FINAL
+# Optimizado para Render + 2GB RAM
+# =========================================================
 
-INTRO_SECONDS = 3.2
-OUTRO_SECONDS = 4.0
-PHOTO_SECONDS = 4.2
-LAST_PHOTO_EXTRA_SECONDS = 1.4
-FADE_DURATION = 0.8
-TEXT_FADE = 0.7
+VIDEO_WIDTH = 720
+VIDEO_HEIGHT = 1280
+FPS = 24
 
-MUSIC_VOLUME = 0.18
-AUDIO_FADE_IN = 1.5
-AUDIO_FADE_OUT = 2.0
+INTRO_SECONDS = 2.8
+OUTRO_SECONDS = 3.5
+PHOTO_SECONDS = 3.6
+LAST_PHOTO_EXTRA_SECONDS = 1.2
+
+FADE_DURATION = 0.6
+TEXT_FADE = 0.5
+
+MUSIC_VOLUME = 0.20
+AUDIO_FADE_IN = 1.2
+AUDIO_FADE_OUT = 1.8
 
 DEFAULT_INTRO_TEXT = "Hay momentos que merecen quedarse para siempre"
 DEFAULT_OUTRO_TEXT = "ETERNA"
@@ -101,24 +107,24 @@ def _build_zoompan_filter(duration: float, motion_type: str) -> str:
     frames = int(duration * FPS)
 
     if motion_type == "zoom_in":
-        zoom_expr = "min(zoom+0.0009,1.18)"
+        zoom_expr = "min(zoom+0.0007,1.12)"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     elif motion_type == "zoom_out":
-        zoom_expr = "if(eq(on,1),1.18,max(zoom-0.0009,1.0))"
+        zoom_expr = "if(eq(on,1),1.12,max(zoom-0.0007,1.0))"
         x_expr = "iw/2-(iw/zoom/2)"
         y_expr = "ih/2-(ih/zoom/2)"
     elif motion_type == "pan_left":
-        zoom_expr = "1.10"
-        x_expr = "max(iw/2-(iw/zoom/2)-on*0.6,0)"
+        zoom_expr = "1.06"
+        x_expr = "max(iw/2-(iw/zoom/2)-on*0.35,0)"
         y_expr = "ih/2-(ih/zoom/2)"
     else:
-        zoom_expr = "1.10"
-        x_expr = "min(iw/2-(iw/zoom/2)+on*0.6, iw-iw/zoom)"
+        zoom_expr = "1.06"
+        x_expr = "min(iw/2-(iw/zoom/2)+on*0.35, iw-iw/zoom)"
         y_expr = "ih/2-(ih/zoom/2)"
 
     return (
-        f"scale=1400:2400:force_original_aspect_ratio=increase,"
+        f"scale=1000:1778:force_original_aspect_ratio=increase,"
         f"zoompan="
         f"z='{zoom_expr}':"
         f"x='{x_expr}':"
@@ -145,10 +151,10 @@ def _build_drawtext(
     start: float,
     end: float,
     font_file: Optional[str],
-    fontsize: int = 64,
+    fontsize: int = 46,
     y_expr: str = "h*0.78",
-    box_opacity: float = 0.26,
-    borderw: int = 28,
+    box_opacity: float = 0.22,
+    borderw: int = 20,
 ) -> str:
     safe_text = _escape_drawtext(text)
     font_part = f"fontfile='{font_file}':" if font_file else ""
@@ -169,7 +175,7 @@ def _build_drawtext(
         f"text='{safe_text}':"
         f"fontcolor=white:"
         f"fontsize={fontsize}:"
-        f"line_spacing=12:"
+        f"line_spacing=10:"
         f"box=1:"
         f"boxcolor=black@{box_opacity}:"
         f"boxborderw={borderw}:"
@@ -184,14 +190,14 @@ def _build_drawtext(
 def _build_text_timeline(total_duration: float, frases: List[str]):
     frases = _safe_frases(frases)
 
-    first_start = INTRO_SECONDS + 0.9
-    first_end = first_start + 3.2
+    first_start = INTRO_SECONDS + 0.8
+    first_end = first_start + 2.8
 
-    middle_start = total_duration / 2 - 2.0
-    middle_end = middle_start + 3.7
+    middle_start = total_duration / 2 - 1.7
+    middle_end = middle_start + 3.0
 
-    final_start = max(total_duration - OUTRO_SECONDS - 4.2, middle_end + 0.8)
-    final_end = min(final_start + 3.2, total_duration - 1.2)
+    final_start = max(total_duration - OUTRO_SECONDS - 3.8, middle_end + 0.6)
+    final_end = min(final_start + 2.8, total_duration - 1.0)
 
     return [
         (frases[0], first_start, first_end),
@@ -219,13 +225,13 @@ def _create_text_screen(
         f"text='{safe_text}':"
         f"fontcolor=white:"
         f"fontsize={fontsize}:"
-        f"line_spacing=14:"
+        f"line_spacing=12:"
         f"x=(w-text_w)/2:"
-        f"y=(h-text_h)/2-40:"
-        f"alpha='if(lt(t,0.4),0,"
-        f"if(lt(t,1.4),(t-0.4)/1.0,"
-        f"if(lt(t,{seconds - 1.0}),1,"
-        f"if(lt(t,{seconds}),({seconds}-t)/1.0,0))))'"
+        f"y=(h-text_h)/2-35:"
+        f"alpha='if(lt(t,0.3),0,"
+        f"if(lt(t,1.1),(t-0.3)/0.8,"
+        f"if(lt(t,{seconds - 0.8}),1,"
+        f"if(lt(t,{seconds}),({seconds}-t)/0.8,0))))'"
     )
 
     if secondary_text:
@@ -235,13 +241,13 @@ def _create_text_screen(
             f"{font_part}"
             f"text='{safe_secondary}':"
             f"fontcolor=white:"
-            f"fontsize=42:"
+            f"fontsize=30:"
             f"x=(w-text_w)/2:"
-            f"y=(h-text_h)/2+95:"
-            f"alpha='if(lt(t,1.0),0,"
-            f"if(lt(t,2.0),(t-1.0)/1.0,"
-            f"if(lt(t,{seconds - 0.8}),0.75,"
-            f"if(lt(t,{seconds}),(({seconds}-t)/0.8)*0.75,0))))'"
+            f"y=(h-text_h)/2+75:"
+            f"alpha='if(lt(t,0.9),0,"
+            f"if(lt(t,1.6),(t-0.9)/0.7,"
+            f"if(lt(t,{seconds - 0.6}),0.78,"
+            f"if(lt(t,{seconds}),(({seconds}-t)/0.6)*0.78,0))))'"
         )
 
     _run_command([
@@ -297,6 +303,8 @@ def generate_eterna_video(
                 "-vf", _build_clip_filter(clip_seconds, motion_type),
                 "-r", str(FPS),
                 "-c:v", "libx264",
+                "-preset", "veryfast",
+                "-crf", "24",
                 "-pix_fmt", "yuv420p",
                 "-movflags", "+faststart",
                 str(clip_path)
@@ -313,7 +321,7 @@ def generate_eterna_video(
             text=intro_text,
             seconds=INTRO_SECONDS,
             font_file=font_file,
-            fontsize=54,
+            fontsize=38,
             secondary_text=None,
         )
 
@@ -322,7 +330,7 @@ def generate_eterna_video(
             text=outro_text,
             seconds=OUTRO_SECONDS,
             font_file=font_file,
-            fontsize=72,
+            fontsize=56,
             secondary_text=end_message,
         )
 
@@ -363,10 +371,10 @@ def generate_eterna_video(
                     start=start,
                     end=end,
                     font_file=font_file,
-                    fontsize=66 if idx < 2 else 72,
-                    y_expr="h*0.78" if idx < 2 else "h*0.72",
-                    box_opacity=0.24 if idx < 2 else 0.20,
-                    borderw=26 if idx < 2 else 22,
+                    fontsize=46 if idx < 2 else 52,
+                    y_expr="h*0.79" if idx < 2 else "h*0.73",
+                    box_opacity=0.20 if idx < 2 else 0.17,
+                    borderw=18 if idx < 2 else 16,
                 )
             )
             current_label = next_label
@@ -381,6 +389,8 @@ def generate_eterna_video(
             "-map", current_label,
             "-r", str(FPS),
             "-c:v", "libx264",
+            "-preset", "veryfast",
+            "-crf", "24",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
             str(final_video_no_audio)
@@ -398,7 +408,7 @@ def generate_eterna_video(
                 "-af", _audio_filter(total_duration),
                 "-c:v", "copy",
                 "-c:a", "aac",
-                "-b:a", "192k",
+                "-b:a", "128k",
                 "-shortest",
                 output_path
             ])
