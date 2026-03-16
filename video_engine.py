@@ -7,22 +7,26 @@ from typing import List, Optional
 
 
 # =========================================================
-# ETERNA VIDEO ENGINE
-# Motor cinematográfico para crear vídeos emocionales
+# ETERNA VIDEO ENGINE — VERSION MEJORADA
 # =========================================================
 
 VIDEO_WIDTH = 1080
 VIDEO_HEIGHT = 1920
 FPS = 30
 
-INTRO_SECONDS = 3
-OUTRO_SECONDS = 4
-PHOTO_SECONDS = 4
+INTRO_SECONDS = 3.2
+OUTRO_SECONDS = 4.0
+PHOTO_SECONDS = 4.2
 FADE_DURATION = 0.8
+TEXT_FADE = 0.7
+
 MUSIC_VOLUME = 0.18
+AUDIO_FADE_IN = 1.5
+AUDIO_FADE_OUT = 2.0
 
 DEFAULT_INTRO_TEXT = "Hay momentos que merecen quedarse para siempre"
 DEFAULT_OUTRO_TEXT = "ETERNA"
+DEFAULT_END_MESSAGE = "Para siempre"
 
 FONT_CANDIDATES = [
     "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
@@ -79,21 +83,28 @@ def _normalize_paths(image_paths: List[str]) -> List[str]:
     return clean
 
 
-def _build_clip_filter(
-    input_index: int,
-    output_label: str,
-    duration: float,
-    motion_type: str
-) -> str:
-    """
-    Crea un clip vertical 1080x1920 con zoom / movimiento suave.
-    motion_type:
-      - zoom_in
-      - zoom_out
-      - pan_left
-      - pan_right
-    """
+def _safe_frases(frases: List[str]) -> List[str]:
+    out = []
+    for frase in frases[:3]:
+        frase = str(frase or "").strip()
+        if not frase:
+            frase = " "
+        out.append(frase)
+    while len(out) < 3:
+        out.append(" ")
+    return out
 
+
+def _audio_filter(total_duration: float) -> str:
+    fade_out_start = max(total_duration - AUDIO_FADE_OUT, 0)
+    return (
+        f"volume={MUSIC_VOLUME},"
+        f"afade=t=in:st=0:d={AUDIO_FADE_IN},"
+        f"afade=t=out:st={fade_out_start}:d={AUDIO_FADE_OUT}"
+    )
+
+
+def _build_zoompan_filter(duration: float, motion_type: str) -> str:
     frames = int(duration * FPS)
 
     if motion_type == "zoom_in":
@@ -114,7 +125,6 @@ def _build_clip_filter(
         y_expr = "ih/2-(ih/zoom/2)"
 
     return (
-        f"[{input_index}:v]"
         f"scale=1400:2400:force_original_aspect_ratio=increase,"
         f"zoompan="
         f"z='{zoom_expr}':"
@@ -123,10 +133,15 @@ def _build_clip_filter(
         f"d={frames}:"
         f"s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:"
         f"fps={FPS},"
-        f"format=yuv420p,"
+        f"format=yuv420p"
+    )
+
+
+def _build_clip_filter(duration: float, motion_type: str) -> str:
+    return (
+        f"{_build_zoompan_filter(duration, motion_type)},"
         f"fade=t=in:st=0:d={FADE_DURATION},"
         f"fade=t=out:st={duration - FADE_DURATION}:d={FADE_DURATION}"
-        f"{output_label}"
     )
 
 
@@ -139,19 +154,20 @@ def _build_drawtext(
     font_file: Optional[str],
     fontsize: int = 64,
     y_expr: str = "h*0.78",
-    box_opacity: float = 0.35,
+    box_opacity: float = 0.26,
+    borderw: int = 28,
 ) -> str:
     safe_text = _escape_drawtext(text)
     font_part = f"fontfile='{font_file}':" if font_file else ""
 
-    fade_in_end = start + 0.6
-    fade_out_start = max(end - 0.6, start)
+    fade_in_end = start + TEXT_FADE
+    fade_out_start = max(end - TEXT_FADE, start)
 
     alpha_expr = (
         f"if(lt(t,{start}),0,"
-        f"if(lt(t,{fade_in_end}),(t-{start})/0.6,"
+        f"if(lt(t,{fade_in_end}),(t-{start})/{TEXT_FADE},"
         f"if(lt(t,{fade_out_start}),1,"
-        f"if(lt(t,{end}),({end}-t)/0.6,0))))"
+        f"if(lt(t,{end}),({end}-t)/{TEXT_FADE},0))))"
     )
 
     return (
@@ -163,7 +179,7 @@ def _build_drawtext(
         f"line_spacing=12:"
         f"box=1:"
         f"boxcolor=black@{box_opacity}:"
-        f"boxborderw=30:"
+        f"boxborderw={borderw}:"
         f"x=(w-text_w)/2:"
         f"y={y_expr}:"
         f"alpha='{alpha_expr}':"
@@ -173,32 +189,79 @@ def _build_drawtext(
 
 
 def _build_text_timeline(total_duration: float, frases: List[str]):
-    """
-    Decide en qué momentos salen las frases.
-    """
-    frases = frases[:3]
+    frases = _safe_frases(frases)
 
-    if total_duration < 12:
-        return [
-            (frases[0], 1.2, 3.6),
-            (frases[1], 4.2, 6.6),
-            (frases[2], max(7.0, total_duration - 3.4), total_duration - 1.0),
-        ]
+    first_start = INTRO_SECONDS + 0.9
+    first_end = first_start + 3.2
 
-    first_start = INTRO_SECONDS + 0.8
-    first_end = first_start + 3.0
+    middle_start = total_duration / 2 - 2.0
+    middle_end = middle_start + 3.7
 
-    middle_start = total_duration / 2 - 1.8
-    middle_end = middle_start + 3.6
-
-    final_start = max(total_duration - OUTRO_SECONDS - 2.8, middle_end + 0.8)
-    final_end = min(final_start + 3.0, total_duration - 1.0)
+    final_start = max(total_duration - OUTRO_SECONDS - 3.2, middle_end + 0.8)
+    final_end = min(final_start + 3.0, total_duration - 1.1)
 
     return [
         (frases[0], first_start, first_end),
         (frases[1], middle_start, middle_end),
         (frases[2], final_start, final_end),
     ]
+
+
+def _create_text_screen(
+    output_path: str,
+    text: str,
+    seconds: float,
+    font_file: Optional[str],
+    fontsize: int,
+    secondary_text: Optional[str] = None,
+) -> None:
+    safe_text = _escape_drawtext(text)
+    font_part = f"fontfile='{font_file}':" if font_file else ""
+
+    base = (
+        f"color=c=black:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:d={seconds},"
+        f"format=yuv420p,"
+        f"drawtext="
+        f"{font_part}"
+        f"text='{safe_text}':"
+        f"fontcolor=white:"
+        f"fontsize={fontsize}:"
+        f"line_spacing=14:"
+        f"x=(w-text_w)/2:"
+        f"y=(h-text_h)/2-40:"
+        f"alpha='if(lt(t,0.4),0,"
+        f"if(lt(t,1.4),(t-0.4)/1.0,"
+        f"if(lt(t,{seconds - 1.0}),1,"
+        f"if(lt(t,{seconds}),({seconds}-t)/1.0,0))))'"
+    )
+
+    if secondary_text:
+        safe_secondary = _escape_drawtext(secondary_text)
+        base += (
+            f",drawtext="
+            f"{font_part}"
+            f"text='{safe_secondary}':"
+            f"fontcolor=white:"
+            f"fontsize=42:"
+            f"x=(w-text_w)/2:"
+            f"y=(h-text_h)/2+95:"
+            f"alpha='if(lt(t,1.0),0,"
+            f"if(lt(t,2.0),(t-1.0)/1.0,"
+            f"if(lt(t,{seconds - 0.8}),0.75,"
+            f"if(lt(t,{seconds}),(({seconds}-t)/0.8)*0.75,0))))'"
+        )
+
+    _run_command([
+        "ffmpeg",
+        "-y",
+        "-f", "lavfi",
+        "-i", base,
+        "-r", str(FPS),
+        "-c:v", "libx264",
+        "-pix_fmt", "yuv420p",
+        "-movflags", "+faststart",
+        output_path
+    ])
 
 
 # =========================================================
@@ -212,25 +275,14 @@ def generate_eterna_video(
     music_path: Optional[str] = None,
     intro_text: str = DEFAULT_INTRO_TEXT,
     outro_text: str = DEFAULT_OUTRO_TEXT,
+    end_message: str = DEFAULT_END_MESSAGE,
 ) -> str:
-    """
-    Crea el vídeo final ETERNA.
-
-    image_paths: lista de rutas de imágenes
-    frases: lista con 3 frases
-    output_path: ruta final del vídeo mp4
-    music_path: ruta opcional de música mp3
-    """
-
     image_paths = _normalize_paths(image_paths)
 
     if not image_paths:
         raise ValueError("No hay imágenes válidas para crear el vídeo.")
 
-    if len(frases) < 3:
-        raise ValueError("Necesitas 3 frases.")
-
-    frases = [str(f).strip() for f in frases[:3]]
+    frases = _safe_frases(frases)
     _ensure_parent(output_path)
 
     font_file = _find_font_file()
@@ -255,14 +307,7 @@ def generate_eterna_video(
                 "-loop", "1",
                 "-t", str(PHOTO_SECONDS),
                 "-i", image_path,
-                "-filter_complex",
-                _build_clip_filter(
-                    input_index=0,
-                    output_label="[vout]",
-                    duration=PHOTO_SECONDS,
-                    motion_type=motion_type
-                ),
-                "-map", "[vout]",
+                "-vf", _build_clip_filter(PHOTO_SECONDS, motion_type),
                 "-r", str(FPS),
                 "-c:v", "libx264",
                 "-pix_fmt", "yuv420p",
@@ -274,82 +319,39 @@ def generate_eterna_video(
             photo_clips.append(str(clip_path))
 
         # -------------------------------------------------
-        # 2) Crear clip inicial negro con texto
+        # 2) Crear intro y outro
         # -------------------------------------------------
         intro_path = temp_dir_path / "intro.mp4"
-        intro_text_safe = _escape_drawtext(intro_text)
-        font_part = f"fontfile='{font_file}':" if font_file else ""
-
-        intro_filter = (
-            f"color=c=black:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:d={INTRO_SECONDS},"
-            f"format=yuv420p,"
-            f"drawtext="
-            f"{font_part}"
-            f"text='{intro_text_safe}':"
-            f"fontcolor=white:"
-            f"fontsize=54:"
-            f"line_spacing=14:"
-            f"x=(w-text_w)/2:"
-            f"y=(h-text_h)/2:"
-            f"alpha='if(lt(t,0.4),0,"
-            f"if(lt(t,1.3),(t-0.4)/0.9,"
-            f"if(lt(t,{INTRO_SECONDS - 0.8}),1,"
-            f"if(lt(t,{INTRO_SECONDS}),({INTRO_SECONDS}-t)/0.8,0))))'"
-        )
-
-        _run_command([
-            "ffmpeg",
-            "-y",
-            "-f", "lavfi",
-            "-i", intro_filter,
-            "-r", str(FPS),
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(intro_path)
-        ])
-
-        # -------------------------------------------------
-        # 3) Crear clip final negro con texto
-        # -------------------------------------------------
         outro_path = temp_dir_path / "outro.mp4"
-        outro_text_safe = _escape_drawtext(outro_text)
 
-        outro_filter = (
-            f"color=c=black:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:d={OUTRO_SECONDS},"
-            f"format=yuv420p,"
-            f"drawtext="
-            f"{font_part}"
-            f"text='{outro_text_safe}':"
-            f"fontcolor=white:"
-            f"fontsize=72:"
-            f"x=(w-text_w)/2:"
-            f"y=(h-text_h)/2:"
-            f"alpha='if(lt(t,0.5),0,"
-            f"if(lt(t,1.5),(t-0.5)/1.0,"
-            f"if(lt(t,{OUTRO_SECONDS - 1.0}),1,"
-            f"if(lt(t,{OUTRO_SECONDS}),({OUTRO_SECONDS}-t)/1.0,0))))'"
+        _create_text_screen(
+            output_path=str(intro_path),
+            text=intro_text,
+            seconds=INTRO_SECONDS,
+            font_file=font_file,
+            fontsize=54,
+            secondary_text=None,
         )
 
-        _run_command([
-            "ffmpeg",
-            "-y",
-            "-f", "lavfi",
-            "-i", outro_filter,
-            "-r", str(FPS),
-            "-c:v", "libx264",
-            "-pix_fmt", "yuv420p",
-            str(outro_path)
-        ])
+        _create_text_screen(
+            output_path=str(outro_path),
+            text=outro_text,
+            seconds=OUTRO_SECONDS,
+            font_file=font_file,
+            fontsize=72,
+            secondary_text=end_message,
+        )
 
         # -------------------------------------------------
-        # 4) Concatenar intro + fotos + outro
+        # 3) Concatenar intro + fotos + outro
         # -------------------------------------------------
         concat_list_path = temp_dir_path / "concat.txt"
         ordered_clips = [str(intro_path)] + photo_clips + [str(outro_path)]
 
         with open(concat_list_path, "w", encoding="utf-8") as f:
             for clip in ordered_clips:
-                f.write(f"file '{clip}'\n")
+                safe_clip = clip.replace("\\", "/").replace("'", r"'\''")
+                f.write(f"file '{safe_clip}'\n")
 
         base_video_path = temp_dir_path / "base_video.mp4"
 
@@ -364,7 +366,7 @@ def generate_eterna_video(
         ])
 
         # -------------------------------------------------
-        # 5) Añadir frases encima del vídeo
+        # 4) Añadir frases encima del vídeo
         # -------------------------------------------------
         total_duration = INTRO_SECONDS + len(photo_clips) * PHOTO_SECONDS + OUTRO_SECONDS
         timeline = _build_text_timeline(total_duration, frases)
@@ -384,7 +386,8 @@ def generate_eterna_video(
                     font_file=font_file,
                     fontsize=66 if idx < 2 else 72,
                     y_expr="h*0.78" if idx < 2 else "h*0.72",
-                    box_opacity=0.28
+                    box_opacity=0.24 if idx < 2 else 0.20,
+                    borderw=26 if idx < 2 else 22,
                 )
             )
             current_label = next_label
@@ -405,7 +408,7 @@ def generate_eterna_video(
         ])
 
         # -------------------------------------------------
-        # 6) Añadir música si existe
+        # 5) Añadir música si existe
         # -------------------------------------------------
         if has_music:
             _run_command([
@@ -416,7 +419,7 @@ def generate_eterna_video(
                 "-i", music_path,
                 "-map", "0:v:0",
                 "-map", "1:a:0",
-                "-af", f"volume={MUSIC_VOLUME}",
+                "-af", _audio_filter(total_duration),
                 "-c:v", "copy",
                 "-c:a", "aac",
                 "-b:a", "192k",
@@ -431,8 +434,6 @@ def generate_eterna_video(
 
 # =========================================================
 # WRAPPERS COMPATIBLES
-# Los pongo para que, aunque tu backend llame con otro nombre,
-# siga funcionando.
 # =========================================================
 
 def create_video(
@@ -442,6 +443,7 @@ def create_video(
     music_path: Optional[str] = None,
     intro_text: str = DEFAULT_INTRO_TEXT,
     outro_text: str = DEFAULT_OUTRO_TEXT,
+    end_message: str = DEFAULT_END_MESSAGE,
 ) -> str:
     return generate_eterna_video(
         image_paths=image_paths,
@@ -450,6 +452,7 @@ def create_video(
         music_path=music_path,
         intro_text=intro_text,
         outro_text=outro_text,
+        end_message=end_message,
     )
 
 
@@ -460,6 +463,7 @@ def generate_video(
     music_path: Optional[str] = None,
     intro_text: str = DEFAULT_INTRO_TEXT,
     outro_text: str = DEFAULT_OUTRO_TEXT,
+    end_message: str = DEFAULT_END_MESSAGE,
 ) -> str:
     return generate_eterna_video(
         image_paths=image_paths,
@@ -468,6 +472,7 @@ def generate_video(
         music_path=music_path,
         intro_text=intro_text,
         outro_text=outro_text,
+        end_message=end_message,
     )
 
 
@@ -478,6 +483,7 @@ def build_video_from_images(
     music_path: Optional[str] = None,
     intro_text: str = DEFAULT_INTRO_TEXT,
     outro_text: str = DEFAULT_OUTRO_TEXT,
+    end_message: str = DEFAULT_END_MESSAGE,
 ) -> str:
     return generate_eterna_video(
         image_paths=image_paths,
@@ -486,4 +492,5 @@ def build_video_from_images(
         music_path=music_path,
         intro_text=intro_text,
         outro_text=outro_text,
+        end_message=end_message,
     )
