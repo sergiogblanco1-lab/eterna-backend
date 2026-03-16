@@ -11,8 +11,8 @@ FPS = 24
 SECONDS_PER_PHOTO = 2.8
 
 
-def _run_command(command: List[str]) -> None:
-    result = subprocess.run(command, capture_output=True, text=True)
+def _run_command(command: List[str], cwd: Optional[str] = None) -> None:
+    result = subprocess.run(command, capture_output=True, text=True, cwd=cwd)
     if result.returncode != 0:
         raise RuntimeError(
             "FFmpeg falló.\n\n"
@@ -47,13 +47,18 @@ def generate_eterna_video(
     output_parent.mkdir(parents=True, exist_ok=True)
 
     temp_dir = output_parent / "temp_video"
+
+    if temp_dir.exists():
+        shutil.rmtree(temp_dir, ignore_errors=True)
+
     temp_dir.mkdir(parents=True, exist_ok=True)
 
-    clips = []
+    clip_names: List[str] = []
 
     try:
         for i, image_path in enumerate(image_paths, start=1):
-            clip_path = temp_dir / f"clip_{i}.mp4"
+            clip_name = f"clip_{i}.mp4"
+            clip_path = temp_dir / clip_name
 
             cmd = [
                 "ffmpeg",
@@ -62,9 +67,11 @@ def generate_eterna_video(
                 "-t", str(SECONDS_PER_PHOTO),
                 "-i", image_path,
                 "-vf",
-                f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,"
-                f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
-                f"format=yuv420p",
+                (
+                    f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,"
+                    f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2,"
+                    f"format=yuv420p"
+                ),
                 "-r", str(FPS),
                 "-c:v", "libx264",
                 "-preset", "veryfast",
@@ -73,25 +80,27 @@ def generate_eterna_video(
             ]
 
             _run_command(cmd)
-            clips.append(str(clip_path))
+            clip_names.append(clip_name)
 
         concat_file = temp_dir / "concat.txt"
         with open(concat_file, "w", encoding="utf-8") as f:
-            for clip in clips:
-                safe = clip.replace("\\", "/").replace("'", r"'\''")
-                f.write(f"file '{safe}'\n")
+            for clip_name in clip_names:
+                f.write(f"file '{clip_name}'\n")
 
         base_video = temp_dir / "base.mp4"
 
-        _run_command([
-            "ffmpeg",
-            "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(concat_file),
-            "-c", "copy",
-            str(base_video)
-        ])
+        _run_command(
+            [
+                "ffmpeg",
+                "-y",
+                "-f", "concat",
+                "-safe", "0",
+                "-i", "concat.txt",
+                "-c", "copy",
+                "base.mp4"
+            ],
+            cwd=str(temp_dir)
+        )
 
         if music_path and os.path.exists(music_path):
             _run_command([
@@ -179,11 +188,6 @@ def build_video_from_images(
 
 
 class VideoEngine:
-    """
-    Clase adaptadora para que main.py pueda usar el motor real
-    sin cambiar toda tu lógica anterior.
-    """
-
     def generate_video(
         self,
         order_id: str,
