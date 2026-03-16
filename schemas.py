@@ -17,10 +17,14 @@ class CreateEternaResponse(BaseModel):
 class AdminOrderItem(BaseModel):
     id: str
     state: str
+
     customer_name: str
     customer_email: str
     customer_phone: str
+
     recipient_name: str
     recipient_phone: str
+
     created_at: datetime
+
     final_video_path: str | None = None
