@@ -22,7 +22,6 @@ class VideoEngine:
         base = os.path.abspath(os.path.join(output_dir, "base.mp4"))
         output_absoluto = os.path.abspath(output)
 
-        # carpeta temporal para imágenes corregidas
         normalizadas_dir = os.path.join(output_dir, "normalizadas")
         os.makedirs(normalizadas_dir, exist_ok=True)
 
@@ -38,7 +37,6 @@ class VideoEngine:
                 f.write("duration 2\n")
             f.write(f"file '{imagenes_normalizadas[-1]}'\n")
 
-        # NO deformar: escalar manteniendo proporción + fondo negro vertical
         comando1 = [
             "ffmpeg",
             "-y",
@@ -56,20 +54,51 @@ class VideoEngine:
             base
         ]
 
-        texto = frases_limpias[0]
+        duracion_total = len(imagenes_normalizadas) * 2
+
+        filtros_texto = []
+
+        if len(frases_limpias) >= 1:
+            filtros_texto.append(
+                f"drawtext=text='{frases_limpias[0]}':"
+                "fontcolor=white:"
+                "fontsize=28:"
+                "x=(w-text_w)/2:"
+                "y=h*0.82:"
+                "enable='between(t,0,2)'"
+            )
+
+        if len(frases_limpias) >= 2:
+            inicio_2 = duracion_total / 2
+            fin_2 = inicio_2 + 2
+            filtros_texto.append(
+                f"drawtext=text='{frases_limpias[1]}':"
+                "fontcolor=white:"
+                "fontsize=28:"
+                "x=(w-text_w)/2:"
+                "y=h*0.82:"
+                f"enable='between(t,{inicio_2},{fin_2})'"
+            )
+
+        if len(frases_limpias) >= 3:
+            inicio_3 = max(duracion_total - 2, 0)
+            fin_3 = duracion_total
+            filtros_texto.append(
+                f"drawtext=text='{frases_limpias[2]}':"
+                "fontcolor=white:"
+                "fontsize=28:"
+                "x=(w-text_w)/2:"
+                "y=h*0.82:"
+                f"enable='between(t,{inicio_3},{fin_3})'"
+            )
+
+        filtro_final = ",".join(filtros_texto)
 
         comando2 = [
             "ffmpeg",
             "-y",
             "-i", base,
-            "-vf",
-            (
-                f"drawtext=text='{texto}':"
-                "fontcolor=white:"
-                "fontsize=28:"
-                "x=(w-text_w)/2:"
-                "y=h*0.82"
-            ),
+            "-vf", filtro_final,
             "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
             "-preset", "veryfast",
@@ -111,10 +140,8 @@ class VideoEngine:
 
     def _normalizar_imagen(self, origen: str, destino: str):
         with Image.open(origen) as img:
-            # corrige fotos giradas del móvil
             img = ImageOps.exif_transpose(img)
 
-            # asegurar modo compatible
             if img.mode not in ("RGB", "L"):
                 img = img.convert("RGB")
             elif img.mode == "L":
