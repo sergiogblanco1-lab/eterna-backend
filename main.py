@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import List
+from typing import Optional
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
@@ -73,24 +73,35 @@ async def crear_eterna(
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
-    fotos: List[UploadFile] = File(...),
+    foto1: UploadFile = File(...),
+    foto2: Optional[UploadFile] = File(None),
+    foto3: Optional[UploadFile] = File(None),
+    foto4: Optional[UploadFile] = File(None),
+    foto5: Optional[UploadFile] = File(None),
+    foto6: Optional[UploadFile] = File(None),
 ):
-    if len(fotos) < 1:
-        raise HTTPException(status_code=400, detail="Debes subir al menos 1 foto")
-
     eterna_id = str(uuid.uuid4())
     carpeta = STORAGE_DIR / eterna_id
     carpeta.mkdir(parents=True, exist_ok=True)
 
+    archivos = [foto1, foto2, foto3, foto4, foto5, foto6]
     rutas_imagenes = []
 
-    for i, foto in enumerate(fotos):
+    for i, foto in enumerate(archivos):
+        if foto is None:
+            continue
+
         extension = Path(foto.filename).suffix.lower() or ".jpg"
-        ruta = carpeta / f"foto_{i}{extension}"
+        ruta = carpeta / f"foto_{i+1}{extension}"
+
         contenido = await foto.read()
         with open(ruta, "wb") as f:
             f.write(contenido)
+
         rutas_imagenes.append(str(ruta))
+
+    if len(rutas_imagenes) == 0:
+        raise HTTPException(status_code=400, detail="Debes subir al menos 1 foto")
 
     salida_video = carpeta / "video.mp4"
 
