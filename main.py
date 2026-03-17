@@ -1,11 +1,10 @@
-import os
 import uuid
 from pathlib import Path
 from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 
 from video_engine import VideoEngine
 
@@ -90,6 +89,9 @@ def health():
 async def crear_eterna(
     nombre: str = Form(...),
     email: str = Form(...),
+    telefono_regalante: str = Form(...),
+    nombre_destinatario: str = Form(...),
+    telefono_destinatario: str = Form(...),
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
@@ -130,6 +132,9 @@ async def crear_eterna(
         with open(folder / "datos.txt", "w", encoding="utf-8") as f:
             f.write(f"nombre: {nombre}\n")
             f.write(f"email: {email}\n")
+            f.write(f"telefono_regalante: {telefono_regalante}\n")
+            f.write(f"nombre_destinatario: {nombre_destinatario}\n")
+            f.write(f"telefono_destinatario: {telefono_destinatario}\n")
 
         ruta_video = str(folder / "video.mp4")
 
@@ -151,6 +156,9 @@ async def crear_eterna(
                 "eterna_id": eterna_id,
                 "nombre": nombre,
                 "email": email,
+                "telefono_regalante": telefono_regalante,
+                "nombre_destinatario": nombre_destinatario,
+                "telefono_destinatario": telefono_destinatario,
                 "frases": frases,
                 "video_url": f"/video/{eterna_id}",
                 "preview_url": f"/preview/{eterna_id}",
