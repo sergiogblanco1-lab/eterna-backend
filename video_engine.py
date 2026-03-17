@@ -1,88 +1,70 @@
-import uuid
-import traceback
+import subprocess
+import shutil
+from typing import List, Optional
 from pathlib import Path
-from typing import List, Annotated
-
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-
-from video_engine import VideoEngine
 
 
-app = FastAPI(title="ETERNA backend")
+class VideoEngine:
+    def __init__(self, ffmpeg_bin: str = "ffmpeg"):
+        self.ffmpeg_bin = ffmpeg_bin
 
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+        if shutil.which(self.ffmpeg_bin) is None:
+            raise Exception("FFmpeg no está instalado en el sistema")
 
-BASE_DIR = Path(__file__).resolve().parent
-STORAGE_DIR = BASE_DIR / "storage"
-STORAGE_DIR.mkdir(parents=True, exist_ok=True)
+    def generar_video(
+        self,
+        imagenes: List[str],
+        salida: str,
+        frases: Optional[List[str]] = None,
+        music_path: Optional[str] = None,
+        image_duration: int = 5,
+        transition_duration: int = 1,
+        width: int = 720,
+        height: int = 1280,
+        fps: int = 30,
+    ):
+        if not imagenes:
+            raise ValueError("No hay imágenes para generar el vídeo")
 
-video_engine = VideoEngine()
+        salida_path = Path(salida)
+        salida_path.parent.mkdir(parents=True, exist_ok=True)
 
+        lista_path = salida_path.parent / "inputs.txt"
 
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <html>
-    <body style="background:black;color:white;text-align:center;padding-top:100px;">
-    <h1>ETERNA</h1>
-    <p>Backend funcionando</p>
-    </body>
-    </html>
-    """
+        with open(lista_path, "w", encoding="utf-8") as f:
+            for img in imagenes:
+                f.write(f"file '{Path(img).resolve()}'\n")
+                f.write(f"duration {image_duration}\n")
+            f.write(f"file '{Path(imagenes[-1]).resolve()}'\n")
 
+        cmd = [
+            self.ffmpeg_bin,
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", str(lista_path),
+            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
+                   f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
+                   f"format=yuv420p",
+            "-r", str(fps),
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            str(salida_path)
+        ]
 
-@app.post("/crear-eterna")
-async def crear_eterna(
-    nombre: Annotated[str, Form(...)],
-    email: Annotated[str, Form(...)],
-    telefono_regalante: Annotated[str, Form(...)],
-    nombre_destinatario: Annotated[str, Form(...)],
-    telefono_destinatario: Annotated[str, Form(...)],
-    frase1: Annotated[str, Form(...)],
-    frase2: Annotated[str, Form(...)],
-    frase3: Annotated[str, Form(...)],
-    fotos: Annotated[List[UploadFile], File(...)],
-):
-    try:
-        eterna_id = str(uuid.uuid4())
-        folder = STORAGE_DIR / eterna_id
-        folder.mkdir(parents=True, exist_ok=True)
+        print("🎬 COMANDO FFMPEG:")
+        print(" ".join(cmd))
 
-        rutas = []
+        proc = subprocess.run(cmd, capture_output=True, text=True)
 
-        for i, foto in enumerate(fotos):
-            ruta = folder / f"foto_{i}.jpg"
-            with open(ruta, "wb") as f:
-                f.write(await foto.read())
-            rutas.append(str(ruta))
+        print("🎬 STDOUT:", proc.stdout)
+        print("❌ STDERR:", proc.stderr)
 
-        salida = str(folder / "video.mp4")
+        if proc.returncode != 0:
+            raise Exception(proc.stderr)
 
-        video_engine.generar_video(
-            imagenes=rutas,
-            salida=salida
-        )
+        if not salida_path.exists():
+            raise Exception("El vídeo no se creó")
 
-        return {
-            "ok": True,
-            "video_url": f"/video/{eterna_id}"
-        }
-
-    except Exception:
-        raise HTTPException(status_code=500, detail=traceback.format_exc())
-
-
-@app.get("/video/{eterna_id}")
-def ver_video(eterna_id: str):
-    ruta = STORAGE_DIR / eterna_id / "video.mp4"
-    if not ruta.exists():
-        raise HTTPException(status_code=404, detail="No encontrado")
-    return FileResponse(str(ruta), media_type="video/mp4")
+        return str(salida_path)
