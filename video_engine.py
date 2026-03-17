@@ -12,10 +12,9 @@ class VideoEngine:
         Genera un vídeo vertical con varias fotos y frases repartidas en el tiempo.
         Versión estable para Render + FFmpeg.
 
-        - 6 fotos
+        - varias fotos
         - 7 segundos por foto
-        - total aprox 42 segundos
-        - 3 frases repartidas
+        - frases en distintos momentos
         """
 
         if not imagenes:
@@ -61,16 +60,13 @@ class VideoEngine:
                 f"[v{i}]"
             )
 
-        # concatenar todas las imágenes
+        # concatenar imágenes
         concat_inputs = "".join([f"[v{i}]" for i in range(len(imagenes))])
-        filtros.append(
-            f"{concat_inputs}concat=n={len(imagenes)}:v=1:a=0[base]"
-        )
+        filtros.append(f"{concat_inputs}concat=n={len(imagenes)}:v=1:a=0[base]")
 
-        # frases en distintos momentos
+        # momentos para frases
         video_total = len(imagenes) * duracion_por_foto
 
-        momentos = []
         if len(frases_limpias) == 1:
             momentos = [(frases_limpias[0], 3, 8)]
         elif len(frases_limpias) == 2:
@@ -82,14 +78,14 @@ class VideoEngine:
             momentos = [
                 (frases_limpias[0], 4, 10),
                 (frases_limpias[1], max(12, video_total // 2 - 3), max(18, video_total // 2 + 3)),
-                (frases_limpias[2], video_total - 10, video_total - 4),
+                (frases_limpias[2], max(video_total - 10, 0), max(video_total - 4, 1)),
             ]
 
         texto_chain = "[base]"
+
         for idx, (texto, t_inicio, t_fin) in enumerate(momentos):
             out_label = f"[txt{idx}]"
 
-            # alpha para que aparezca y desaparezca suave
             alpha_expr = (
                 f"if(lt(t,{t_inicio}),0,"
                 f"if(lt(t,{t_inicio + 1}),(t-{t_inicio})/1,"
