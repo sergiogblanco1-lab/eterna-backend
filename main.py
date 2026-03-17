@@ -4,6 +4,7 @@ from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse, HTMLResponse
+
 from video_engine import VideoEngine
 
 app = FastAPI(title="ETERNA Backend")
@@ -67,6 +68,9 @@ def home():
 async def crear_eterna(
     nombre: str = Form(...),
     email: str = Form(...),
+    telefono_regalante: str = Form(""),
+    nombre_destinatario: str = Form(""),
+    telefono_destinatario: str = Form(""),
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
@@ -82,6 +86,15 @@ async def crear_eterna(
     frases = [frase1, frase2, frase3]
     imagenes = []
 
+    # guardar datos
+    datos_path = os.path.join(folder, "datos.txt")
+    with open(datos_path, "w", encoding="utf-8") as f:
+        f.write(f"nombre={nombre}\n")
+        f.write(f"email={email}\n")
+        f.write(f"telefono_regalante={telefono_regalante}\n")
+        f.write(f"nombre_destinatario={nombre_destinatario}\n")
+        f.write(f"telefono_destinatario={telefono_destinatario}\n")
+
     # guardar frases
     frases_path = os.path.join(folder, "frases.txt")
     with open(frases_path, "w", encoding="utf-8") as f:
@@ -91,7 +104,7 @@ async def crear_eterna(
     # guardar imágenes
     for i, foto in enumerate(fotos, start=1):
         extension = os.path.splitext(foto.filename)[1].lower()
-        if not extension:
+        if extension not in [".jpg", ".jpeg", ".png", ".webp"]:
             extension = ".jpg"
 
         ruta = os.path.join(folder, f"foto{i}{extension}")
@@ -102,6 +115,7 @@ async def crear_eterna(
 
         imagenes.append(ruta)
 
+    # generar vídeo
     video_path = os.path.join(folder, "video.mp4")
 
     try:
@@ -121,6 +135,9 @@ async def crear_eterna(
         "eterna_id": eterna_id,
         "nombre": nombre,
         "email": email,
+        "telefono_regalante": telefono_regalante,
+        "nombre_destinatario": nombre_destinatario,
+        "telefono_destinatario": telefono_destinatario,
         "frases": frases,
         "total_fotos": len(imagenes),
         "video_url": f"/video/{eterna_id}",
