@@ -1,6 +1,6 @@
 import uuid
 from pathlib import Path
-from typing import List
+from typing import List, Annotated
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -49,7 +49,7 @@ def home():
                 padding: 24px;
             }
             .box {
-                max-width: 700px;
+                max-width: 760px;
             }
             h1 {
                 font-size: 42px;
@@ -57,7 +57,7 @@ def home():
                 letter-spacing: 2px;
             }
             p {
-                opacity: 0.85;
+                opacity: 0.88;
                 font-size: 18px;
                 line-height: 1.6;
             }
@@ -87,15 +87,15 @@ def health():
 
 @app.post("/crear-eterna")
 async def crear_eterna(
-    nombre: str = Form(...),
-    email: str = Form(...),
-    telefono_regalante: str = Form(...),
-    nombre_destinatario: str = Form(...),
-    telefono_destinatario: str = Form(...),
-    frase1: str = Form(...),
-    frase2: str = Form(...),
-    frase3: str = Form(...),
-    fotos: List[UploadFile] = File(...),
+    nombre: Annotated[str, Form(...)],
+    email: Annotated[str, Form(...)],
+    telefono_regalante: Annotated[str, Form(...)],
+    nombre_destinatario: Annotated[str, Form(...)],
+    telefono_destinatario: Annotated[str, Form(...)],
+    frase1: Annotated[str, Form(...)],
+    frase2: Annotated[str, Form(...)],
+    frase3: Annotated[str, Form(...)],
+    fotos: Annotated[List[UploadFile], File(...)],
 ):
     if len(fotos) < 2:
         raise HTTPException(status_code=400, detail="Debes subir al menos 2 fotos.")
@@ -160,6 +160,7 @@ async def crear_eterna(
                 "nombre_destinatario": nombre_destinatario,
                 "telefono_destinatario": telefono_destinatario,
                 "frases": frases,
+                "total_fotos": len(rutas_imagenes),
                 "video_url": f"/video/{eterna_id}",
                 "preview_url": f"/preview/{eterna_id}",
                 "message": "ETERNA creada correctamente",
