@@ -8,150 +8,98 @@ class VideoEngine:
         pass
 
     def generar_video_eterna(self, imagenes: List[str], frases: List[str], output: str):
-        """
-        Genera un vídeo vertical con varias fotos y frases repartidas en el tiempo.
-        Versión estable para Render + FFmpeg.
-
-        - varias fotos
-        - 7 segundos por foto
-        - frases en distintos momentos
-        """
 
         if not imagenes:
-            raise ValueError("No hay imágenes para generar el vídeo")
+            raise ValueError("No hay imágenes")
 
         imagenes = [img for img in imagenes if os.path.exists(img)]
-        if not imagenes:
-            raise ValueError("Ninguna imagen existe en disco")
 
-        frases_limpias = []
-        for frase in frases:
-            if frase and frase.strip():
-                frases_limpias.append(self._limpiar_texto_ffmpeg(frase.strip()))
+        frases = [self._limpiar_texto_ffmpeg(f) for f in frases if f.strip()]
+        if not frases:
+            frases = ["ETERNA"]
 
-        if not frases_limpias:
-            frases_limpias = ["ETERNA"]
+        os.makedirs(os.path.dirname(output), exist_ok=True)
 
-        output_dir = os.path.dirname(output)
-        if output_dir:
-            os.makedirs(output_dir, exist_ok=True)
+        lista = os.path.join(os.path.dirname(output), "lista.txt")
 
-        duracion_por_foto = 7
-        fade_duracion = 1
+        # duración corta para no petar RAM
+        duracion = 3
 
-        comando = ["ffmpeg", "-y"]
+        with open(lista, "w") as f:
+            for img in imagenes:
+                f.write(f"file '{img}'\n")
+                f.write(f"duration {duracion}\n")
+            f.write(f"file '{imagenes[-1]}'\n")
 
-        # inputs
-        for img in imagenes:
-            comando += ["-loop", "1", "-t", str(duracion_por_foto), "-i", img]
+        base = os.path.join(os.path.dirname(output), "base.mp4")
 
-        filtros = []
-
-        # preparar cada imagen
-        for i in range(len(imagenes)):
-            filtros.append(
-                f"[{i}:v]"
-                f"scale=720:1280:force_original_aspect_ratio=increase,"
-                f"crop=720:1280,"
-                f"setsar=1,"
-                f"format=yuv420p,"
-                f"fade=t=in:st=0:d={fade_duracion},"
-                f"fade=t=out:st={duracion_por_foto - fade_duracion}:d={fade_duracion}"
-                f"[v{i}]"
-            )
-
-        # concatenar imágenes
-        concat_inputs = "".join([f"[v{i}]" for i in range(len(imagenes))])
-        filtros.append(f"{concat_inputs}concat=n={len(imagenes)}:v=1:a=0[base]")
-
-        # momentos para frases
-        video_total = len(imagenes) * duracion_por_foto
-
-        if len(frases_limpias) == 1:
-            momentos = [(frases_limpias[0], 3, 8)]
-        elif len(frases_limpias) == 2:
-            momentos = [
-                (frases_limpias[0], 4, 10),
-                (frases_limpias[1], 18, 24),
-            ]
-        else:
-            momentos = [
-                (frases_limpias[0], 4, 10),
-                (frases_limpias[1], max(12, video_total // 2 - 3), max(18, video_total // 2 + 3)),
-                (frases_limpias[2], max(video_total - 10, 0), max(video_total - 4, 1)),
-            ]
-
-        texto_chain = "[base]"
-
-        for idx, (texto, t_inicio, t_fin) in enumerate(momentos):
-            out_label = f"[txt{idx}]"
-
-            alpha_expr = (
-                f"if(lt(t,{t_inicio}),0,"
-                f"if(lt(t,{t_inicio + 1}),(t-{t_inicio})/1,"
-                f"if(lt(t,{t_fin - 1}),1,"
-                f"if(lt(t,{t_fin}),({t_fin}-t)/1,0))))"
-            )
-
-            filtros.append(
-                f"{texto_chain}"
-                f"drawtext=text='{texto}':"
-                f"fontcolor=white:"
-                f"fontsize=54:"
-                f"x=(w-text_w)/2:"
-                f"y=h*0.78:"
-                f"alpha='{alpha_expr}'"
-                f"{out_label}"
-            )
-            texto_chain = out_label
-
-        filtros.append(f"{texto_chain}format=yuv420p[vfinal]")
-
-        filter_complex = ";".join(filtros)
-
-        comando += [
-            "-filter_complex", filter_complex,
-            "-map", "[vfinal]",
-            "-r", "30",
+        # 🎥 VIDEO BASE (zoom suave)
+        comando1 = [
+            "ffmpeg",
+            "-y",
+            "-f", "concat",
+            "-safe", "0",
+            "-i", lista,
+            "-vf",
+            "scale=480:854,zoompan=z='min(zoom+0.0015,1.2)':d=90:x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)'",
             "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
+            base
+        ]
+
+        # ✨ TEXTO CON FADE
+        filtros_texto = "[0:v]"
+
+        tiempos = [
+            (frases[0], 1, 4),
+            (frases[1] if len(frases) > 1 else "", 5, 8),
+            (frases[2] if len(frases) > 2 else "", 9, 12)
+        ]
+
+        for i, (texto, t1, t2) in enumerate(tiempos):
+            if not texto:
+                continue
+
+            alpha = (
+                f"if(lt(t,{t1}),0,"
+                f"if(lt(t,{t1+1}),(t-{t1}),"
+                f"if(lt(t,{t2-1}),1,"
+                f"if(lt(t,{t2}),({t2}-t),0))))"
+            )
+
+            filtros_texto += (
+                f"drawtext=text='{texto}':"
+                f"fontcolor=white:fontsize=32:"
+                f"x=(w-text_w)/2:y=h*0.8:"
+                f"alpha='{alpha}',"
+            )
+
+        filtros_texto = filtros_texto.rstrip(",") + "[v]"
+
+        comando2 = [
+            "ffmpeg",
+            "-y",
+            "-i", base,
+            "-vf", filtros_texto,
+            "-map", "[v]",
+            "-pix_fmt", "yuv420p",
             output
         ]
 
-        print("🎬 Ejecutando FFmpeg...")
-        print(" ".join(comando))
-
         try:
-            resultado = subprocess.run(
-                comando,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print("✅ VIDEO GENERADO:", output)
-            print("STDOUT:", resultado.stdout)
-            print("STDERR:", resultado.stderr)
+            subprocess.run(comando1, check=True)
+            subprocess.run(comando2, check=True)
+            print("✅ VIDEO EMOCIONAL GENERADO")
 
         except subprocess.CalledProcessError as e:
-            print("❌ ERROR AL GENERAR VIDEO")
-            print("Código:", e.returncode)
-            print("STDOUT:", e.stdout)
-            print("STDERR:", e.stderr)
-            raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
-
-        if not os.path.exists(output):
-            raise RuntimeError("El vídeo no se generó")
-
-        if os.path.getsize(output) == 0:
-            raise RuntimeError("El vídeo se creó vacío")
+            print("❌ ERROR:", e)
+            raise RuntimeError("Error generando vídeo")
 
         return output
 
     def _limpiar_texto_ffmpeg(self, texto: str) -> str:
-        texto = texto.replace("\\", "")
-        texto = texto.replace(":", "")
-        texto = texto.replace("'", "")
-        texto = texto.replace('"', "")
-        texto = texto.replace("%", "")
-        texto = texto.replace("\n", " ")
-        return texto.strip() or "ETERNA"
+        return (
+            texto.replace("'", "")
+            .replace(":", "")
+            .replace("\\", "")
+            .replace("%", "")
+        )
