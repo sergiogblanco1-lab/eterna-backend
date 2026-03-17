@@ -32,23 +32,29 @@ class VideoEngine:
 
         clip_paths = []
 
-        # 1. Crear un clip por cada foto
+        duracion_foto = 5.5
+        fade_duracion = 0.7
+        fade_out_inicio = duracion_foto - fade_duracion
+
         for index, photo_path in enumerate(photos, start=1):
             photo_path = os.path.abspath(photo_path)
             clip_path = os.path.abspath(os.path.join(clips_dir, f"clip_{index}.mp4"))
+
+            vf = (
+                "scale=720:1280:force_original_aspect_ratio=decrease,"
+                "pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,"
+                f"fade=t=in:st=0:d={fade_duracion},"
+                f"fade=t=out:st={fade_out_inicio}:d={fade_duracion},"
+                "format=yuv420p"
+            )
 
             command = [
                 self.ffmpeg_bin,
                 "-y",
                 "-loop", "1",
                 "-i", photo_path,
-                "-t", "3",
-                "-vf",
-                (
-                    "scale=720:1280:force_original_aspect_ratio=decrease,"
-                    "pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,"
-                    "format=yuv420p"
-                ),
+                "-t", str(duracion_foto),
+                "-vf", vf,
                 "-r", "30",
                 "-pix_fmt", "yuv420p",
                 "-c:v", "libx264",
@@ -62,7 +68,6 @@ class VideoEngine:
 
             clip_paths.append(clip_path)
 
-        # 2. Crear concat.txt con rutas absolutas
         concat_file = os.path.abspath(os.path.join(clips_dir, "concat.txt"))
         with open(concat_file, "w", encoding="utf-8") as f:
             for clip_path in clip_paths:
@@ -72,7 +77,6 @@ class VideoEngine:
         if not os.path.exists(concat_file):
             raise Exception("No se pudo crear concat.txt")
 
-        # 3. Unir clips
         command_concat = [
             self.ffmpeg_bin,
             "-y",
