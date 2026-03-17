@@ -37,6 +37,7 @@ class VideoEngine:
                 f.write("duration 2\n")
             f.write(f"file '{imagenes_normalizadas[-1]}'\n")
 
+        # VIDEO BASE (sin deformar)
         comando1 = [
             "ffmpeg",
             "-y",
@@ -58,38 +59,56 @@ class VideoEngine:
 
         filtros_texto = []
 
+        # FRASE 1 (inicio)
         if len(frases_limpias) >= 1:
             filtros_texto.append(
                 f"drawtext=text='{frases_limpias[0]}':"
                 "fontcolor=white:"
-                "fontsize=28:"
+                "fontsize=34:"
+                "shadowcolor=black:"
+                "shadowx=2:"
+                "shadowy=2:"
                 "x=(w-text_w)/2:"
                 "y=h*0.82:"
-                "enable='between(t,0,2)'"
+                "alpha='if(lt(t,0),0, if(lt(t,0.5),(t-0)/0.5, if(lt(t,1.5),1, if(lt(t,2),(2-t)/0.5,0))))'"
             )
 
+        # FRASE 2 (mitad)
         if len(frases_limpias) >= 2:
             inicio_2 = duracion_total / 2
+            medio_2 = inicio_2 + 0.5
+            fin_fijo_2 = inicio_2 + 1.5
             fin_2 = inicio_2 + 2
+
             filtros_texto.append(
                 f"drawtext=text='{frases_limpias[1]}':"
                 "fontcolor=white:"
-                "fontsize=28:"
+                "fontsize=34:"
+                "shadowcolor=black:"
+                "shadowx=2:"
+                "shadowy=2:"
                 "x=(w-text_w)/2:"
                 "y=h*0.82:"
-                f"enable='between(t,{inicio_2},{fin_2})'"
+                f"alpha='if(lt(t,{inicio_2}),0, if(lt(t,{medio_2}),(t-{inicio_2})/0.5, if(lt(t,{fin_fijo_2}),1, if(lt(t,{fin_2}),({fin_2}-t)/0.5,0))))'"
             )
 
+        # FRASE 3 (final)
         if len(frases_limpias) >= 3:
             inicio_3 = max(duracion_total - 2, 0)
+            medio_3 = inicio_3 + 0.5
+            fin_fijo_3 = inicio_3 + 1.5
             fin_3 = duracion_total
+
             filtros_texto.append(
                 f"drawtext=text='{frases_limpias[2]}':"
                 "fontcolor=white:"
-                "fontsize=28:"
+                "fontsize=34:"
+                "shadowcolor=black:"
+                "shadowx=2:"
+                "shadowy=2:"
                 "x=(w-text_w)/2:"
                 "y=h*0.82:"
-                f"enable='between(t,{inicio_3},{fin_3})'"
+                f"alpha='if(lt(t,{inicio_3}),0, if(lt(t,{medio_3}),(t-{inicio_3})/0.5, if(lt(t,{fin_fijo_3}),1, if(lt(t,{fin_3}),({fin_3}-t)/0.5,0))))'"
             )
 
         filtro_final = ",".join(filtros_texto)
@@ -106,28 +125,11 @@ class VideoEngine:
         ]
 
         try:
-            resultado1 = subprocess.run(
-                comando1,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print("✅ BASE VIDEO GENERADO")
-            print(resultado1.stderr)
-
-            resultado2 = subprocess.run(
-                comando2,
-                check=True,
-                capture_output=True,
-                text=True
-            )
-            print("✅ VIDEO FINAL GENERADO")
-            print(resultado2.stderr)
-
+            subprocess.run(comando1, check=True, capture_output=True, text=True)
+            subprocess.run(comando2, check=True, capture_output=True, text=True)
         except subprocess.CalledProcessError as e:
             print("❌ ERROR FFMPEG")
-            print("STDOUT:", e.stdout)
-            print("STDERR:", e.stderr)
+            print(e.stderr)
             raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
 
         if not os.path.exists(output_absoluto):
