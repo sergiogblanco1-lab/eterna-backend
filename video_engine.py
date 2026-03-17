@@ -1,69 +1,67 @@
 import subprocess
-import shutil
 from pathlib import Path
 from typing import List, Optional
 
 
 class VideoEngine:
-
-    def __init__(self, ffmpeg_bin: str = "ffmpeg"):
-        self.ffmpeg_bin = ffmpeg_bin
-        if shutil.which(self.ffmpeg_bin) is None:
-            raise Exception("FFmpeg no está instalado")
-
     def generar_video(
         self,
         imagenes: List[str],
         salida: str,
         frases: Optional[List[str]] = None,
-        image_duration: int = 5,
+        image_duration: int = 4,
         width: int = 720,
         height: int = 1280,
-        fps: int = 30,
-    ):
+        fps: int = 25,
+    ) -> str:
         if not imagenes:
-            raise Exception("No hay imágenes")
+            raise Exception("No hay imágenes para generar el vídeo")
 
-        salida_path = Path(salida)
-        salida_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path = Path(salida)
+        work_dir = output_path.parent
+        work_dir.mkdir(parents=True, exist_ok=True)
 
         clips = []
 
-        for i, img in enumerate(imagenes):
-            clip_path = salida_path.parent / f"clip_{i}.mp4"
+        for i, imagen in enumerate(imagenes):
+            clip_path = work_dir / f"clip_{i}.mp4"
 
             cmd = [
-                self.ffmpeg_bin,
+                "ffmpeg",
                 "-y",
                 "-loop", "1",
-                "-i", img,
+                "-i", imagen,
                 "-t", str(image_duration),
-                "-vf", f"scale={width}:{height},format=yuv420p",
+                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
                 "-r", str(fps),
                 "-pix_fmt", "yuv420p",
-                str(clip_path)
+                "-c:v", "libx264",
+                str(clip_path),
             ]
 
-            subprocess.run(cmd, check=True)
-            clips.append(str(clip_path))
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                raise Exception(result.stderr)
 
-        # Crear lista para concatenar
-        list_file = salida_path.parent / "list.txt"
-        with open(list_file, "w") as f:
+            clips.append(clip_path)
+
+        list_file = work_dir / "concat.txt"
+        with open(list_file, "w", encoding="utf-8") as f:
             for clip in clips:
-                f.write(f"file '{clip}'\n")
+                f.write(f"file '{clip.as_posix()}'\n")
 
-        # Concatenar clips
         cmd_concat = [
-            self.ffmpeg_bin,
+            "ffmpeg",
             "-y",
             "-f", "concat",
             "-safe", "0",
             "-i", str(list_file),
             "-c", "copy",
-            str(salida_path)
+            str(output_path),
         ]
 
-        subprocess.run(cmd_concat, check=True)
+        result = subprocess.run(cmd_concat, capture_output=True, text=True)
+        if result.returncode != 0:
+            raise Exception(result.stderr)
 
-        return str(salida_path)
+        return str(output_path)
