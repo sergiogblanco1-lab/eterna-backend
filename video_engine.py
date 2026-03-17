@@ -1,67 +1,100 @@
+import os
 import subprocess
-from pathlib import Path
-from typing import List, Optional
 
 
 class VideoEngine:
-    def generar_video(
-        self,
-        imagenes: List[str],
-        salida: str,
-        frases: Optional[List[str]] = None,
-        image_duration: int = 4,
-        width: int = 720,
-        height: int = 1280,
-        fps: int = 25,
-    ) -> str:
+    def __init__(self):
+        pass
+
+    def generar_video_eterna(self, imagenes, frases, output):
+        """
+        Versión simple y robusta para comprobar que FFmpeg funciona en Render.
+
+        Hace esto:
+        - usa la primera imagen
+        - pone la primera frase
+        - genera un vídeo vertical de 5 segundos
+        """
+
         if not imagenes:
-            raise Exception("No hay imágenes para generar el vídeo")
+            raise ValueError("No hay imágenes para generar el vídeo")
 
-        output_path = Path(salida)
-        work_dir = output_path.parent
-        work_dir.mkdir(parents=True, exist_ok=True)
+        img = imagenes[0]
 
-        clips = []
+        if not os.path.exists(img):
+            raise FileNotFoundError(f"La imagen no existe: {img}")
 
-        for i, imagen in enumerate(imagenes):
-            clip_path = work_dir / f"clip_{i}.mp4"
+        texto = "ETERNA"
+        if frases and len(frases) > 0 and frases[0].strip():
+            texto = frases[0].strip()
 
-            cmd = [
-                "ffmpeg",
-                "-y",
-                "-loop", "1",
-                "-i", imagen,
-                "-t", str(image_duration),
-                "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,format=yuv420p",
-                "-r", str(fps),
-                "-pix_fmt", "yuv420p",
-                "-c:v", "libx264",
-                str(clip_path),
-            ]
+        texto = self._limpiar_texto_ffmpeg(texto)
 
-            result = subprocess.run(cmd, capture_output=True, text=True)
-            if result.returncode != 0:
-                raise Exception(result.stderr)
+        output_dir = os.path.dirname(output)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
 
-            clips.append(clip_path)
+        filtro = (
+            "scale=720:1280:force_original_aspect_ratio=increase,"
+            "crop=720:1280,"
+            f"drawtext=text='{texto}':"
+            "fontcolor=white:"
+            "fontsize=48:"
+            "x=(w-text_w)/2:"
+            "y=(h-text_h)/2"
+        )
 
-        list_file = work_dir / "concat.txt"
-        with open(list_file, "w", encoding="utf-8") as f:
-            for clip in clips:
-                f.write(f"file '{clip.as_posix()}'\n")
-
-        cmd_concat = [
+        comando = [
             "ffmpeg",
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(list_file),
-            "-c", "copy",
-            str(output_path),
+            "-loop", "1",
+            "-i", img,
+            "-t", "5",
+            "-vf", filtro,
+            "-r", "30",
+            "-pix_fmt", "yuv420p",
+            "-c:v", "libx264",
+            output
         ]
 
-        result = subprocess.run(cmd_concat, capture_output=True, text=True)
-        if result.returncode != 0:
-            raise Exception(result.stderr)
+        print("🎬 Ejecutando FFmpeg...")
+        print(" ".join(comando))
 
-        return str(output_path)
+        try:
+            resultado = subprocess.run(
+                comando,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            print("✅ VIDEO GENERADO:", output)
+            print("STDOUT:", resultado.stdout)
+            print("STDERR:", resultado.stderr)
+
+        except subprocess.CalledProcessError as e:
+            print("❌ ERROR AL GENERAR VIDEO")
+            print("Código:", e.returncode)
+            print("STDOUT:", e.stdout)
+            print("STDERR:", e.stderr)
+            raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
+
+        if not os.path.exists(output):
+            raise RuntimeError("FFmpeg terminó pero el archivo de vídeo no existe")
+
+        size = os.path.getsize(output)
+        if size == 0:
+            raise RuntimeError("El vídeo se creó vacío")
+
+        return output
+
+    def _limpiar_texto_ffmpeg(self, texto: str) -> str:
+        """
+        Limpia caracteres que suelen romper drawtext.
+        """
+        texto = texto.replace("\\", "")
+        texto = texto.replace(":", "")
+        texto = texto.replace("'", "")
+        texto = texto.replace('"', "")
+        texto = texto.replace("%", "")
+        texto = texto.replace("\n", " ")
+        return texto.strip() or "ETERNA"
