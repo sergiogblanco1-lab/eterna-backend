@@ -86,22 +86,17 @@ async def crear_eterna(
     frases = [frase1, frase2, frase3]
     imagenes = []
 
-    # guardar datos
-    datos_path = os.path.join(folder, "datos.txt")
-    with open(datos_path, "w", encoding="utf-8") as f:
+    with open(os.path.join(folder, "datos.txt"), "w", encoding="utf-8") as f:
         f.write(f"nombre={nombre}\n")
         f.write(f"email={email}\n")
         f.write(f"telefono_regalante={telefono_regalante}\n")
         f.write(f"nombre_destinatario={nombre_destinatario}\n")
         f.write(f"telefono_destinatario={telefono_destinatario}\n")
 
-    # guardar frases
-    frases_path = os.path.join(folder, "frases.txt")
-    with open(frases_path, "w", encoding="utf-8") as f:
+    with open(os.path.join(folder, "frases.txt"), "w", encoding="utf-8") as f:
         for frase in frases:
             f.write(frase + "\n")
 
-    # guardar imágenes
     for i, foto in enumerate(fotos, start=1):
         extension = os.path.splitext(foto.filename)[1].lower()
         if extension not in [".jpg", ".jpeg", ".png", ".webp"]:
@@ -115,7 +110,6 @@ async def crear_eterna(
 
         imagenes.append(ruta)
 
-    # generar vídeo
     video_path = os.path.join(folder, "video.mp4")
 
     try:
