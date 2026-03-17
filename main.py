@@ -1,4 +1,5 @@
 import uuid
+import traceback
 from pathlib import Path
 from typing import List, Annotated
 
@@ -6,8 +7,9 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 
-from video_engine import VideoEngine
+from video_engine_v2 import VideoEngine
 
+print("🔥 NUEVA VERSION VIDEO ENGINE 🔥")
 
 app = FastAPI(title="ETERNA backend")
 
@@ -172,8 +174,8 @@ async def crear_eterna(
 
     except HTTPException:
         raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+    except Exception:
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
 
 
 @app.get("/video/{eterna_id}")
