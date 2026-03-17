@@ -1,4 +1,6 @@
+import os
 import uuid
+import json
 from datetime import datetime
 
 from fastapi import FastAPI, Request, Depends
@@ -12,6 +14,9 @@ from models import Customer, Recipient, EternaOrder
 app = FastAPI(title="ETERNA backend")
 
 Base.metadata.create_all(bind=engine)
+
+UPLOAD_FOLDER = "storage"
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -117,14 +122,14 @@ def home():
                 <textarea name="frase3" placeholder="Frase 3"></textarea>
 
                 <label>Sube 6 fotos</label>
-                <input name="foto1" type="file">
-                <input name="foto2" type="file">
-                <input name="foto3" type="file">
-                <input name="foto4" type="file">
-                <input name="foto5" type="file">
-                <input name="foto6" type="file">
+                <input name="foto1" type="file" accept="image/*">
+                <input name="foto2" type="file" accept="image/*">
+                <input name="foto3" type="file" accept="image/*">
+                <input name="foto4" type="file" accept="image/*">
+                <input name="foto5" type="file" accept="image/*">
+                <input name="foto6" type="file" accept="image/*">
 
-                <div class="note">Ahora solo guardamos el pedido en base de datos.</div>
+                <div class="note">Ahora guardamos el pedido y las fotos. Aún no generamos vídeo.</div>
 
                 <button type="submit">Crear mi ETERNA</button>
             </form>
@@ -151,6 +156,15 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
     frase1 = form.get("frase1")
     frase2 = form.get("frase2")
     frase3 = form.get("frase3")
+
+    fotos = [
+        form.get("foto1"),
+        form.get("foto2"),
+        form.get("foto3"),
+        form.get("foto4"),
+        form.get("foto5"),
+        form.get("foto6"),
+    ]
 
     try:
         cliente = db.query(Customer).filter(Customer.email == email).first()
@@ -191,6 +205,36 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
             created_at=datetime.utcnow()
         )
         db.add(orden)
+        db.commit()
+        db.refresh(orden)
+
+        order_folder = os.path.join(UPLOAD_FOLDER, orden.id)
+        os.makedirs(order_folder, exist_ok=True)
+
+        rutas_fotos = []
+        fotos_guardadas = 0
+
+        for i, foto in enumerate(fotos, start=1):
+            if foto and getattr(foto, "filename", None):
+                extension = os.path.splitext(foto.filename)[1].lower()
+
+                if extension == "":
+                    extension = ".jpg"
+
+                nombre_archivo = f"foto_{i}{extension}"
+                ruta_archivo = os.path.join(order_folder, nombre_archivo)
+
+                contenido = await foto.read()
+
+                if contenido:
+                    with open(ruta_archivo, "wb") as f:
+                        f.write(contenido)
+
+                    rutas_fotos.append(ruta_archivo)
+                    fotos_guardadas += 1
+
+        orden.photos_json = json.dumps(rutas_fotos, ensure_ascii=False)
+        orden.state = "photos_saved"
         db.commit()
         db.refresh(orden)
 
@@ -242,12 +286,14 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         <body>
             <div class="box">
                 <h1>Pedido guardado ✅</h1>
-                <p class="ok">La base de datos ha guardado la ETERNA.</p>
+                <p class="ok">La base de datos y las fotos se han guardado correctamente.</p>
 
                 <p><strong>Order ID:</strong> <code>{orden.id}</code></p>
                 <p><strong>Estado:</strong> <code>{orden.state}</code></p>
                 <p><strong>Cliente:</strong> <code>{cliente.name}</code></p>
                 <p><strong>Destinatario:</strong> <code>{destinatario.name}</code></p>
+                <p><strong>Fotos guardadas:</strong> <code>{fotos_guardadas}</code></p>
+                <p><strong>Carpeta:</strong> <code>{order_folder}</code></p>
 
                 <a class="button" href="/">Volver</a>
             </div>
@@ -323,7 +369,28 @@ def orders(db: Session = Depends(get_db)):
             "state": o.state,
             "customer_id": o.customer_id,
             "recipient_id": o.recipient_id,
+            "photos_json": o.photos_json,
             "created_at": o.created_at.isoformat() if o.created_at else None
         }
         for o in lista
     ]
+
+
+@app.get("/orders/{order_id}")
+def order_detail(order_id: str, db: Session = Depends(get_db)):
+    o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+
+    if not o:
+        return {"error": "Pedido no encontrado"}
+
+    return {
+        "id": o.id,
+        "state": o.state,
+        "customer_id": o.customer_id,
+        "recipient_id": o.recipient_id,
+        "phrase_1": o.phrase_1,
+        "phrase_2": o.phrase_2,
+        "phrase_3": o.phrase_3,
+        "photos_json": o.photos_json,
+        "created_at": o.created_at.isoformat() if o.created_at else None
+    }
