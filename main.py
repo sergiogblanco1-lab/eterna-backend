@@ -137,7 +137,7 @@ def home():
                 <input name="foto5" type="file" accept="image/*" required>
                 <input name="foto6" type="file" accept="image/*" required>
 
-                <div class="note">Esta versión guarda pedido, fotos y genera el vídeo automáticamente.</div>
+                <div class="note">Esta versión guarda pedido, fotos y genera el vídeo con frases.</div>
 
                 <button type="submit">Crear mi ETERNA</button>
             </form>
@@ -250,6 +250,9 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
             phrases=[frase1, frase2, frase3],
             output_path=output_path
         )
+
+        if not final_video_path or not os.path.exists(final_video_path):
+            raise Exception("El vídeo no se generó correctamente")
 
         orden.final_video_path = final_video_path
         orden.state = "video_generated"
