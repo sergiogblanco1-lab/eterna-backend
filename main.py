@@ -1,22 +1,23 @@
 import os
 import uuid
-import json
 from datetime import datetime
 
-from fastapi import FastAPI, Request, Depends
-from fastapi.responses import HTMLResponse
+from fastapi import FastAPI, Request, Depends, HTTPException
+from fastapi.responses import HTMLResponse, FileResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import Customer, Recipient, EternaOrder
+from storage_service import StorageService
+from video_engine import VideoEngine
 
 
 app = FastAPI(title="ETERNA backend")
 
 Base.metadata.create_all(bind=engine)
 
-UPLOAD_FOLDER = "storage"
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+storage = StorageService()
+video_engine = VideoEngine()
 
 
 @app.get("/", response_class=HTMLResponse)
@@ -110,26 +111,26 @@ def home():
 
         <div class="box">
             <form action="/crear-eterna" method="post" enctype="multipart/form-data" novalidate>
-                <input name="nombre" placeholder="Tu nombre">
-                <input name="email" placeholder="Tu email">
-                <input name="telefono_regalante" placeholder="Tu teléfono">
+                <input name="nombre" placeholder="Tu nombre" required>
+                <input name="email" placeholder="Tu email" required>
+                <input name="telefono_regalante" placeholder="Tu teléfono" required>
 
-                <input name="nombre_destinatario" placeholder="Nombre destinatario">
-                <input name="telefono_destinatario" placeholder="Teléfono destinatario">
+                <input name="nombre_destinatario" placeholder="Nombre destinatario" required>
+                <input name="telefono_destinatario" placeholder="Teléfono destinatario" required>
 
-                <textarea name="frase1" placeholder="Frase 1"></textarea>
-                <textarea name="frase2" placeholder="Frase 2"></textarea>
-                <textarea name="frase3" placeholder="Frase 3"></textarea>
+                <textarea name="frase1" placeholder="Frase 1" required></textarea>
+                <textarea name="frase2" placeholder="Frase 2" required></textarea>
+                <textarea name="frase3" placeholder="Frase 3" required></textarea>
 
                 <label>Sube 6 fotos</label>
-                <input name="foto1" type="file" accept="image/*">
-                <input name="foto2" type="file" accept="image/*">
-                <input name="foto3" type="file" accept="image/*">
-                <input name="foto4" type="file" accept="image/*">
-                <input name="foto5" type="file" accept="image/*">
-                <input name="foto6" type="file" accept="image/*">
+                <input name="foto1" type="file" accept="image/*" required>
+                <input name="foto2" type="file" accept="image/*" required>
+                <input name="foto3" type="file" accept="image/*" required>
+                <input name="foto4" type="file" accept="image/*" required>
+                <input name="foto5" type="file" accept="image/*" required>
+                <input name="foto6" type="file" accept="image/*" required>
 
-                <div class="note">Ahora guardamos el pedido y las fotos. Aún no generamos vídeo.</div>
+                <div class="note">Esta versión guarda pedido y fotos en una estructura limpia.</div>
 
                 <button type="submit">Crear mi ETERNA</button>
             </form>
@@ -141,21 +142,21 @@ def home():
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    return {"status": "ok", "service": "ETERNA backend"}
 
 
 @app.post("/crear-eterna", response_class=HTMLResponse)
 async def crear_eterna(request: Request, db: Session = Depends(get_db)):
     form = await request.form()
 
-    nombre = form.get("nombre")
-    email = form.get("email")
-    telefono_regalante = form.get("telefono_regalante")
-    nombre_destinatario = form.get("nombre_destinatario")
-    telefono_destinatario = form.get("telefono_destinatario")
-    frase1 = form.get("frase1")
-    frase2 = form.get("frase2")
-    frase3 = form.get("frase3")
+    nombre = (form.get("nombre") or "").strip()
+    email = (form.get("email") or "").strip()
+    telefono_regalante = (form.get("telefono_regalante") or "").strip()
+    nombre_destinatario = (form.get("nombre_destinatario") or "").strip()
+    telefono_destinatario = (form.get("telefono_destinatario") or "").strip()
+    frase1 = (form.get("frase1") or "").strip()
+    frase2 = (form.get("frase2") or "").strip()
+    frase3 = (form.get("frase3") or "").strip()
 
     fotos = [
         form.get("foto1"),
@@ -166,11 +167,25 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         form.get("foto6"),
     ]
 
+    if not nombre or not email or not telefono_regalante:
+        raise HTTPException(status_code=400, detail="Faltan datos del regalante")
+
+    if not nombre_destinatario or not telefono_destinatario:
+        raise HTTPException(status_code=400, detail="Faltan datos del destinatario")
+
+    if not frase1 or not frase2 or not frase3:
+        raise HTTPException(status_code=400, detail="Faltan frases")
+
+    fotos_validas = [f for f in fotos if f is not None and getattr(f, "filename", None)]
+    if len(fotos_validas) != 6:
+        raise HTTPException(status_code=400, detail="Debes subir exactamente 6 fotos")
+
     try:
         cliente = db.query(Customer).filter(Customer.email == email).first()
 
         if not cliente:
             cliente = Customer(
+                id=str(uuid.uuid4()),
                 name=nombre,
                 email=email,
                 phone=telefono_regalante,
@@ -181,6 +196,7 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
             db.refresh(cliente)
 
         destinatario = Recipient(
+            id=str(uuid.uuid4()),
             name=nombre_destinatario,
             phone=telefono_destinatario,
             consent_confirmed=False,
@@ -208,32 +224,8 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(orden)
 
-        order_folder = os.path.join(UPLOAD_FOLDER, orden.id)
-        os.makedirs(order_folder, exist_ok=True)
-
-        rutas_fotos = []
-        fotos_guardadas = 0
-
-        for i, foto in enumerate(fotos, start=1):
-            if foto and getattr(foto, "filename", None):
-                extension = os.path.splitext(foto.filename)[1].lower()
-
-                if extension == "":
-                    extension = ".jpg"
-
-                nombre_archivo = f"foto_{i}{extension}"
-                ruta_archivo = os.path.join(order_folder, nombre_archivo)
-
-                contenido = await foto.read()
-
-                if contenido:
-                    with open(ruta_archivo, "wb") as f:
-                        f.write(contenido)
-
-                    rutas_fotos.append(ruta_archivo)
-                    fotos_guardadas += 1
-
-        orden.photos_json = json.dumps(rutas_fotos, ensure_ascii=False)
+        saved_photos = await storage.save_photos(order_id, fotos_validas)
+        orden.photos_json = storage.photos_json(saved_photos)
         orden.state = "photos_saved"
         db.commit()
         db.refresh(orden)
@@ -286,14 +278,13 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         <body>
             <div class="box">
                 <h1>Pedido guardado ✅</h1>
-                <p class="ok">La base de datos y las fotos se han guardado correctamente.</p>
+                <p class="ok">La ETERNA se ha guardado de forma limpia.</p>
 
                 <p><strong>Order ID:</strong> <code>{orden.id}</code></p>
                 <p><strong>Estado:</strong> <code>{orden.state}</code></p>
                 <p><strong>Cliente:</strong> <code>{cliente.name}</code></p>
                 <p><strong>Destinatario:</strong> <code>{destinatario.name}</code></p>
-                <p><strong>Fotos guardadas:</strong> <code>{fotos_guardadas}</code></p>
-                <p><strong>Carpeta:</strong> <code>{order_folder}</code></p>
+                <p><strong>Fotos guardadas:</strong> <code>{len(saved_photos)}</code></p>
 
                 <a class="button" href="/">Volver</a>
             </div>
@@ -308,7 +299,6 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         <html lang="es">
         <head>
             <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Error</title>
             <style>
                 body {{
@@ -336,24 +326,13 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
                     color: #f1f1f1;
                     word-break: break-word;
                 }}
-                a.button {{
-                    display: inline-block;
-                    margin-top: 18px;
-                    padding: 12px 18px;
-                    border-radius: 999px;
-                    background: #e7c27d;
-                    color: black;
-                    font-weight: bold;
-                    text-decoration: none;
-                }}
             </style>
         </head>
         <body>
             <div class="box">
-                <h1>Error guardando pedido</h1>
+                <h1>Error guardando ETERNA</h1>
                 <p class="error">Algo ha fallado.</p>
                 <p><strong>Detalle:</strong> <code>{str(e)}</code></p>
-                <a class="button" href="/">Volver</a>
             </div>
         </body>
         </html>
@@ -381,7 +360,7 @@ def order_detail(order_id: str, db: Session = Depends(get_db)):
     o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
 
     if not o:
-        return {"error": "Pedido no encontrado"}
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
     return {
         "id": o.id,
@@ -392,5 +371,19 @@ def order_detail(order_id: str, db: Session = Depends(get_db)):
         "phrase_2": o.phrase_2,
         "phrase_3": o.phrase_3,
         "photos_json": o.photos_json,
+        "final_video_path": o.final_video_path,
         "created_at": o.created_at.isoformat() if o.created_at else None
     }
+
+
+@app.get("/video/{order_id}")
+def get_video(order_id: str, db: Session = Depends(get_db)):
+    o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+
+    if not o or not o.final_video_path:
+        raise HTTPException(status_code=404, detail="Vídeo no disponible")
+
+    if not os.path.exists(o.final_video_path):
+        raise HTTPException(status_code=404, detail="Archivo de vídeo no encontrado")
+
+    return FileResponse(o.final_video_path, media_type="video/mp4")
