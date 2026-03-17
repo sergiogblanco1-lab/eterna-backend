@@ -7,7 +7,7 @@ from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 
-from video_engine_v2 import VideoEngine
+from video_engine import VideoEngine
 
 print("🔥 NUEVA VERSION VIDEO ENGINE 🔥")
 
