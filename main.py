@@ -143,12 +143,15 @@ async def crear_eterna(
             salida=ruta_video,
             frases=frases,
             music_path=None,
-            image_duration=5.5,
-            transition_duration=1.0,
+            image_duration=5,
+            transition_duration=1,
             width=720,
             height=1280,
             fps=30,
         )
+
+        if not Path(ruta_video).exists():
+            raise HTTPException(status_code=500, detail="El vídeo no se ha creado en storage.")
 
         return JSONResponse(
             {
