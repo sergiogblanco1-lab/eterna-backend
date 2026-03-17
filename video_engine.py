@@ -8,7 +8,7 @@ from typing import List, Optional
 VIDEO_WIDTH = 720
 VIDEO_HEIGHT = 1280
 FPS = 24
-SECONDS_PER_PHOTO = 2.8
+SECONDS_PER_PHOTO = 5.5
 
 
 def _run_command(command: List[str], cwd: Optional[str] = None) -> None:
