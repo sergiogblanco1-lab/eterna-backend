@@ -27,68 +27,67 @@ class VideoEngine:
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
 
-        clips_dir = os.path.join(output_dir, "clips")
-        os.makedirs(clips_dir, exist_ok=True)
-
-        clip_paths = []
-
         duracion_foto = 5.5
-        fade_duracion = 0.7
-        fade_out_inicio = duracion_foto - fade_duracion
+        transicion = 1.0
+        fps = 30
 
-        for index, photo_path in enumerate(photos, start=1):
+        inputs = []
+        filter_parts = []
+
+        for i, photo_path in enumerate(photos):
             photo_path = os.path.abspath(photo_path)
-            clip_path = os.path.abspath(os.path.join(clips_dir, f"clip_{index}.mp4"))
+            inputs.extend([
+                "-loop", "1",
+                "-t", str(duracion_foto),
+                "-i", photo_path
+            ])
 
-            vf = (
-                "scale=720:1280:force_original_aspect_ratio=decrease,"
-                "pad=720:1280:(ow-iw)/2:(oh-ih)/2:black,"
-                f"fade=t=in:st=0:d={fade_duracion},"
-                f"fade=t=out:st={fade_out_inicio}:d={fade_duracion},"
-                "format=yuv420p"
+            filter_parts.append(
+                f"[{i}:v]"
+                f"scale=900:1600:force_original_aspect_ratio=increase,"
+                f"crop=720:1280,"
+                f"zoompan="
+                f"z='min(zoom+0.0008,1.08)':"
+                f"x='iw/2-(iw/zoom/2)':"
+                f"y='ih/2-(ih/zoom/2)':"
+                f"d={int(duracion_foto * fps)}:s=720x1280:fps={fps},"
+                f"setpts=PTS-STARTPTS,"
+                f"format=yuv420p"
+                f"[v{i}]"
             )
 
-            command = [
-                self.ffmpeg_bin,
-                "-y",
-                "-loop", "1",
-                "-i", photo_path,
-                "-t", str(duracion_foto),
-                "-vf", vf,
-                "-r", "30",
-                "-pix_fmt", "yuv420p",
-                "-c:v", "libx264",
-                clip_path
-            ]
+        # Encadenar transiciones xfade entre vídeos
+        current = "v0"
+        offset = duracion_foto - transicion
 
-            self._run(command)
+        for i in range(1, len(photos)):
+            next_v = f"v{i}"
+            out = f"x{i}"
+            filter_parts.append(
+                f"[{current}][{next_v}]"
+                f"xfade=transition=fade:duration={transicion}:offset={offset}"
+                f"[{out}]"
+            )
+            current = out
+            offset += duracion_foto - transicion
 
-            if not os.path.exists(clip_path):
-                raise Exception(f"No se pudo crear el clip {index}")
+        filter_complex = ";".join(filter_parts)
 
-            clip_paths.append(clip_path)
-
-        concat_file = os.path.abspath(os.path.join(clips_dir, "concat.txt"))
-        with open(concat_file, "w", encoding="utf-8") as f:
-            for clip_path in clip_paths:
-                safe_path = clip_path.replace("\\", "/").replace("'", "'\\''")
-                f.write(f"file '{safe_path}'\n")
-
-        if not os.path.exists(concat_file):
-            raise Exception("No se pudo crear concat.txt")
-
-        command_concat = [
+        command = [
             self.ffmpeg_bin,
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", concat_file,
-            "-c:v", "libx264",
+            *inputs,
+            "-filter_complex", filter_complex,
+            "-map", f"[{current}]",
+            "-r", str(fps),
             "-pix_fmt", "yuv420p",
+            "-c:v", "libx264",
+            "-preset", "medium",
+            "-crf", "23",
             output_path
         ]
 
-        self._run(command_concat)
+        self._run(command)
 
         if not os.path.exists(output_path):
             raise Exception("El vídeo no se generó correctamente")
