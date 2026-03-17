@@ -1,7 +1,6 @@
 import subprocess
 import shutil
-from typing import List
-from pathlib import Path
+from typing import List, Optional
 
 
 class VideoEngine:
@@ -11,24 +10,30 @@ class VideoEngine:
         if shutil.which(self.ffmpeg_bin) is None:
             raise Exception("FFmpeg no está instalado")
 
-    def generar_video(self, imagenes: List[str], salida: str, frases: List[str] = None):
+    def generar_video(
+        self,
+        imagenes: List[str],
+        salida: str,
+        frases: Optional[List[str]] = None,
+        music_path: Optional[str] = None,
+        image_duration: int = 5,
+        transition_duration: int = 1,
+        width: int = 720,
+        height: int = 1280,
+        fps: int = 30,
+    ):
         if not imagenes:
             raise Exception("No hay imágenes")
-
-        width = 720
-        height = 1280
-        fps = 30
-        duracion = 5
-        fade = 1
 
         inputs = []
         filtros = []
 
-        # 🎬 PREPARAR IMÁGENES
-        for i, img in enumerate(imagenes):
-            inputs.extend(["-loop", "1", "-t", str(duracion), "-i", img])
+        fade = 1
 
-            frames = duracion * fps
+        for i, img in enumerate(imagenes):
+            inputs.extend(["-loop", "1", "-t", str(image_duration), "-i", img])
+
+            frames = image_duration * fps
 
             filtros.append(
                 f"[{i}:v]"
@@ -36,26 +41,32 @@ class VideoEngine:
                 f"crop=720:1280,"
                 f"zoompan=z='min(zoom+0.0005,1.1)':d={frames}:s={width}x{height},"
                 f"fade=t=in:st=0:d={fade},"
-                f"fade=t=out:st={duracion-fade}:d={fade},"
+                f"fade=t=out:st={image_duration-fade}:d={fade},"
                 f"setpts=PTS-STARTPTS"
                 f"[v{i}]"
             )
 
-        # 🎬 CONCATENAR
         concat_inputs = "".join([f"[v{i}]" for i in range(len(imagenes))])
         filtros.append(f"{concat_inputs}concat=n={len(imagenes)}:v=1:a=0[v]")
 
-        # 💬 FRASES EMOCIONALES
         if frases:
             base = "[v]"
             for i, frase in enumerate(frases[:3]):
+                frase_limpia = (
+                    str(frase)
+                    .replace("\\", "\\\\")
+                    .replace(":", "\\:")
+                    .replace("'", "\\'")
+                    .replace("%", "\\%")
+                )
+
                 start = 3 + (i * 10)
                 end = start + 5
                 out = f"[txt{i}]"
 
                 filtros.append(
                     f"{base}drawtext="
-                    f"text='{frase}':"
+                    f"text='{frase_limpia}':"
                     f"fontcolor=white:"
                     f"fontsize=48:"
                     f"x=(w-text_w)/2:"
