@@ -32,7 +32,7 @@ class VideoEngine:
 
         clip_paths = []
 
-        duracion_foto = 5.5
+        duracion_foto = 8
         fade_duracion = 0.7
         fade_out_inicio = duracion_foto - fade_duracion
 
