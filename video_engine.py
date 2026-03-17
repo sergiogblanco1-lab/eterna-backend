@@ -23,6 +23,7 @@ class VideoEngine:
         if not photos:
             raise Exception("No hay fotos para generar el vídeo")
 
+        output_path = os.path.abspath(output_path)
         output_dir = os.path.dirname(output_path)
         os.makedirs(output_dir, exist_ok=True)
 
@@ -31,9 +32,10 @@ class VideoEngine:
 
         clip_paths = []
 
-        # 1. Crear un clip de vídeo por cada foto
+        # 1. Crear un clip por cada foto
         for index, photo_path in enumerate(photos, start=1):
-            clip_path = os.path.join(clips_dir, f"clip_{index}.mp4")
+            photo_path = os.path.abspath(photo_path)
+            clip_path = os.path.abspath(os.path.join(clips_dir, f"clip_{index}.mp4"))
 
             command = [
                 self.ffmpeg_bin,
@@ -54,14 +56,21 @@ class VideoEngine:
             ]
 
             self._run(command)
+
+            if not os.path.exists(clip_path):
+                raise Exception(f"No se pudo crear el clip {index}")
+
             clip_paths.append(clip_path)
 
-        # 2. Crear archivo concat
-        concat_file = os.path.join(clips_dir, "concat.txt")
+        # 2. Crear concat.txt con rutas absolutas
+        concat_file = os.path.abspath(os.path.join(clips_dir, "concat.txt"))
         with open(concat_file, "w", encoding="utf-8") as f:
             for clip_path in clip_paths:
-                safe_path = clip_path.replace("\\", "/")
+                safe_path = clip_path.replace("\\", "/").replace("'", "'\\''")
                 f.write(f"file '{safe_path}'\n")
+
+        if not os.path.exists(concat_file):
+            raise Exception("No se pudo crear concat.txt")
 
         # 3. Unir clips
         command_concat = [
@@ -70,7 +79,8 @@ class VideoEngine:
             "-f", "concat",
             "-safe", "0",
             "-i", concat_file,
-            "-c", "copy",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
             output_path
         ]
 
