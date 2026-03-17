@@ -1,10 +1,9 @@
 import os
 import uuid
 from datetime import datetime
-from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
-from fastapi.responses import JSONResponse, HTMLResponse, FileResponse
+from fastapi.responses import HTMLResponse, FileResponse
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
@@ -29,86 +28,35 @@ def home():
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
-        <style>
-            body {
-                background: #0b0b0b;
-                color: white;
-                font-family: Arial, sans-serif;
-                max-width: 760px;
-                margin: 0 auto;
-                padding: 30px 20px;
-            }
-            h1 {
-                margin-bottom: 8px;
-            }
-            p {
-                color: #cccccc;
-                margin-bottom: 24px;
-            }
-            form {
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }
-            input, textarea, button {
-                padding: 14px;
-                border-radius: 10px;
-                border: 1px solid #333;
-                font-size: 16px;
-            }
-            input, textarea {
-                background: #171717;
-                color: white;
-            }
-            textarea {
-                min-height: 90px;
-                resize: vertical;
-            }
-            button {
-                background: #e7c27d;
-                color: black;
-                border: none;
-                font-weight: bold;
-                cursor: pointer;
-            }
-            .box {
-                background: #111;
-                padding: 20px;
-                border-radius: 16px;
-                border: 1px solid #222;
-            }
-            .note {
-                font-size: 14px;
-                color: #aaa;
-            }
-        </style>
     </head>
-    <body>
+    <body style="background:#0b0b0b;color:white;font-family:sans-serif;padding:20px;">
         <h1>ETERNA</h1>
         <p>Hay momentos que merecen quedarse para siempre.</p>
 
-        <div class="box">
-            <form action="/crear-eterna" method="post" enctype="multipart/form-data">
-                <input name="nombre" placeholder="Tu nombre" required>
-                <input name="email" type="email" placeholder="Tu email" required>
-                <input name="telefono_regalante" placeholder="Tu teléfono" required>
+        <form action="/crear-eterna" method="post" enctype="multipart/form-data">
 
-                <input name="nombre_destinatario" placeholder="Nombre destinatario" required>
-                <input name="telefono_destinatario" placeholder="Teléfono destinatario" required>
+            <input name="nombre" placeholder="Tu nombre" required><br><br>
+            <input name="email" type="email" placeholder="Tu email" required><br><br>
+            <input name="telefono_regalante" placeholder="Tu teléfono" required><br><br>
 
-                <textarea name="frase1" placeholder="Frase 1" required></textarea>
-                <textarea name="frase2" placeholder="Frase 2" required></textarea>
-                <textarea name="frase3" placeholder="Frase 3" required></textarea>
+            <input name="nombre_destinatario" placeholder="Nombre destinatario" required><br><br>
+            <input name="telefono_destinatario" placeholder="Teléfono destinatario" required><br><br>
 
-                <label>Sube exactamente 6 fotos</label>
-                <input name="fotos" type="file" accept="image/*" multiple required>
-                <div class="note">Selecciona 6 imágenes en ese botón.</div>
+            <textarea name="frase1" placeholder="Frase 1" required></textarea><br><br>
+            <textarea name="frase2" placeholder="Frase 2" required></textarea><br><br>
+            <textarea name="frase3" placeholder="Frase 3" required></textarea><br><br>
 
-                <button type="submit">Crear mi ETERNA</button>
-            </form>
-        </div>
+            <p>Sube 6 fotos</p>
+            <input type="file" name="foto1" required><br>
+            <input type="file" name="foto2" required><br>
+            <input type="file" name="foto3" required><br>
+            <input type="file" name="foto4" required><br>
+            <input type="file" name="foto5" required><br>
+            <input type="file" name="foto6" required><br><br>
+
+            <button type="submit">Crear mi ETERNA</button>
+        </form>
     </body>
     </html>
     """
@@ -116,10 +64,7 @@ def home():
 
 @app.get("/health", response_model=HealthResponse)
 def health():
-    return {
-        "status": "ok",
-        "service": "ETERNA backend alive"
-    }
+    return {"status": "ok"}
 
 
 @app.post("/crear-eterna", response_class=HTMLResponse)
@@ -132,14 +77,21 @@ async def crear_eterna(
     frase1: str = Form(...),
     frase2: str = Form(...),
     frase3: str = Form(...),
-    fotos: List[UploadFile] = File(...),
+
+    foto1: UploadFile = File(None),
+    foto2: UploadFile = File(None),
+    foto3: UploadFile = File(None),
+    foto4: UploadFile = File(None),
+    foto5: UploadFile = File(None),
+    foto6: UploadFile = File(None),
+
     db: Session = Depends(get_db)
 ):
+
+    fotos = [f for f in [foto1, foto2, foto3, foto4, foto5, foto6] if f]
+
     if len(fotos) != 6:
-        raise HTTPException(
-            status_code=400,
-            detail="Debes subir exactamente 6 fotos"
-        )
+        raise HTTPException(status_code=400, detail="Debes subir 6 fotos")
 
     cliente = db.query(Customer).filter(Customer.email == email).first()
 
@@ -187,11 +139,6 @@ async def crear_eterna(
     saved_photos = storage.save_photos(order_id, fotos)
     orden.photos_json = storage.photos_json(saved_photos)
     db.commit()
-    db.refresh(orden)
-
-    video_ok = False
-    video_error = None
-    video_url = None
 
     try:
         photo_paths = [
@@ -211,155 +158,21 @@ async def crear_eterna(
         orden.final_video_path = final_video_path
         orden.state = "video_generated"
         db.commit()
-        db.refresh(orden)
 
-        video_ok = True
-        video_url = f"/video/{orden.id}"
+        return f"<h1>ETERNA creada</h1><a href='/video/{order_id}'>Ver vídeo</a>"
 
     except Exception as e:
         orden.state = "video_error"
         db.commit()
-        video_error = str(e)
 
-    success_html = f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA creada</title>
-        <style>
-            body {{
-                background: #0b0b0b;
-                color: white;
-                font-family: Arial, sans-serif;
-                max-width: 760px;
-                margin: 0 auto;
-                padding: 30px 20px;
-            }}
-            .box {{
-                background: #111;
-                padding: 24px;
-                border-radius: 16px;
-                border: 1px solid #222;
-            }}
-            h1 {{
-                margin-top: 0;
-            }}
-            p {{
-                color: #ddd;
-                line-height: 1.6;
-            }}
-            .ok {{
-                color: #9fe870;
-                font-weight: bold;
-            }}
-            .error {{
-                color: #ff9a9a;
-                font-weight: bold;
-            }}
-            a.button {{
-                display: inline-block;
-                margin-top: 14px;
-                padding: 12px 18px;
-                border-radius: 999px;
-                background: #e7c27d;
-                color: black;
-                font-weight: bold;
-                text-decoration: none;
-            }}
-            code {{
-                background: #1b1b1b;
-                padding: 3px 6px;
-                border-radius: 6px;
-                color: #f1f1f1;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>ETERNA creada</h1>
-            <p class="ok">Tu recuerdo se ha guardado correctamente.</p>
-
-            <p><strong>Order ID:</strong> <code>{orden.id}</code></p>
-            <p><strong>Slug:</strong> <code>{orden.public_slug}</code></p>
-            <p><strong>Estado:</strong> <code>{orden.state}</code></p>
-
-            {"<p class='ok'>Vídeo generado correctamente.</p>" if video_ok else ""}
-            {f"<p class='error'>El pedido se creó, pero el vídeo no se pudo generar todavía.</p><p><strong>Error:</strong> <code>{video_error}</code></p>" if video_error else ""}
-
-            {f"<a class='button' href='{video_url}' target='_blank'>Ver vídeo</a>" if video_ok and video_url else ""}
-
-            <p style="margin-top:20px;">
-                <a class="button" href="/">Crear otra ETERNA</a>
-            </p>
-        </div>
-    </body>
-    </html>
-    """
-
-    return HTMLResponse(content=success_html)
-
-
-@app.get("/orders")
-def orders(db: Session = Depends(get_db)):
-    lista = db.query(EternaOrder).all()
-    resultado = []
-
-    for o in lista:
-        resultado.append({
-            "id": o.id,
-            "estado": o.state,
-            "cliente": o.customer.name if o.customer else None,
-            "destinatario": o.recipient.name if o.recipient else None,
-            "fecha": o.created_at.isoformat() if o.created_at else None,
-            "final_video_path": o.final_video_path
-        })
-
-    return resultado
-
-
-@app.get("/orders/{order_id}")
-def order_detail(order_id: str, db: Session = Depends(get_db)):
-    o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
-
-    if not o:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
-
-    return {
-        "id": o.id,
-        "estado": o.state,
-        "cliente": {
-            "nombre": o.customer.name if o.customer else None,
-            "email": o.customer.email if o.customer else None,
-            "telefono": o.customer.phone if o.customer else None,
-        },
-        "destinatario": {
-            "nombre": o.recipient.name if o.recipient else None,
-            "telefono": o.recipient.phone if o.recipient else None,
-        },
-        "frases": [o.phrase_1, o.phrase_2, o.phrase_3],
-        "photos_json": o.photos_json,
-        "final_video_path": o.final_video_path,
-        "fecha": o.created_at.isoformat() if o.created_at else None
-    }
+        return f"<h1>Error creando vídeo</h1><p>{str(e)}</p>"
 
 
 @app.get("/video/{order_id}")
 def get_video(order_id: str, db: Session = Depends(get_db)):
     o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
 
-    if not o:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    if not o or not o.final_video_path:
+        raise HTTPException(status_code=404, detail="Vídeo no disponible")
 
-    if not o.final_video_path:
-        raise HTTPException(status_code=404, detail="Vídeo no generado")
-
-    if not os.path.exists(o.final_video_path):
-        raise HTTPException(status_code=404, detail="Archivo de vídeo no encontrado")
-
-    return FileResponse(
-        path=o.final_video_path,
-        media_type="video/mp4",
-        filename=f"{order_id}.mp4"
-    )
+    return FileResponse(o.final_video_path, media_type="video/mp4")
