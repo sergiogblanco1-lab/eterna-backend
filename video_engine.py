@@ -17,34 +17,29 @@ class VideoEngine:
         output_dir = os.path.dirname(output)
         os.makedirs(output_dir, exist_ok=True)
 
-        lista = os.path.join(output_dir, "lista.txt")
-        base = os.path.join(output_dir, "base.mp4")
-
-        imagenes_absolutas = [os.path.abspath(img) for img in imagenes]
-        lista_absoluta = os.path.abspath(lista)
-        base_absoluto = os.path.abspath(base)
+        lista = os.path.abspath(os.path.join(output_dir, "lista.txt"))
+        base = os.path.abspath(os.path.join(output_dir, "base.mp4"))
         output_absoluto = os.path.abspath(output)
 
-        with open(lista_absoluta, "w", encoding="utf-8") as f:
-            for img in imagenes_absolutas:
-                img_ffmpeg = img.replace("\\", "/")
-                f.write(f"file '{img_ffmpeg}'\n")
-                f.write("duration 2\n")
+        imagenes_absolutas = [os.path.abspath(img).replace("\\", "/") for img in imagenes]
 
-            ultima = imagenes_absolutas[-1].replace("\\", "/")
-            f.write(f"file '{ultima}'\n")
+        with open(lista, "w", encoding="utf-8") as f:
+            for img in imagenes_absolutas:
+                f.write(f"file '{img}'\n")
+                f.write("duration 2\n")
+            f.write(f"file '{imagenes_absolutas[-1]}'\n")
 
         comando1 = [
             "ffmpeg",
             "-y",
             "-f", "concat",
             "-safe", "0",
-            "-i", lista_absoluta,
+            "-i", lista,
             "-vf", "scale=360:640",
             "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
             "-preset", "veryfast",
-            base_absoluto
+            base
         ]
 
         texto = frases_limpias[0]
@@ -52,7 +47,7 @@ class VideoEngine:
         comando2 = [
             "ffmpeg",
             "-y",
-            "-i", base_absoluto,
+            "-i", base,
             "-vf",
             f"drawtext=text='{texto}':fontcolor=white:fontsize=28:x=(w-text_w)/2:y=h*0.8",
             "-pix_fmt", "yuv420p",
