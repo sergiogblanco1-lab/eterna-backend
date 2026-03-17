@@ -1,83 +1,88 @@
-import subprocess
+import uuid
+import traceback
 from pathlib import Path
+from typing import List, Annotated
+
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
+
+from video_engine import VideoEngine
 
 
-class VideoEngine:
+app = FastAPI(title="ETERNA backend")
 
-    def generar_video(
-        self,
-        imagenes,
-        salida,
-        frases=None,
-        music_path=None,
-        image_duration=5,
-        transition_duration=1,
-        width=720,
-        height=1280,
-        fps=30,
-    ):
-        """
-        Genera un vídeo simple, estable y compatible.
-        """
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        if not imagenes:
-            raise Exception("No hay imágenes para generar el vídeo")
+BASE_DIR = Path(__file__).resolve().parent
+STORAGE_DIR = BASE_DIR / "storage"
+STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
-        # Carpeta temporal
-        temp_dir = Path(salida).parent
+video_engine = VideoEngine()
 
-        inputs = []
-        filter_complex = ""
 
-        total = len(imagenes)
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <html>
+    <body style="background:black;color:white;text-align:center;padding-top:100px;">
+    <h1>ETERNA</h1>
+    <p>Backend funcionando</p>
+    </body>
+    </html>
+    """
 
-        # 🔹 PREPARAR INPUTS
-        for img in imagenes:
-            inputs.extend(["-loop", "1", "-t", str(image_duration), "-i", img])
 
-        # 🔹 ESCALADO + NORMALIZACIÓN
-        for i in range(total):
-            filter_complex += (
-                f"[{i}:v]scale={width}:{height}:force_original_aspect_ratio=cover,"
-                f"fps={fps},format=yuv420p[v{i}];"
-            )
+@app.post("/crear-eterna")
+async def crear_eterna(
+    nombre: Annotated[str, Form(...)],
+    email: Annotated[str, Form(...)],
+    telefono_regalante: Annotated[str, Form(...)],
+    nombre_destinatario: Annotated[str, Form(...)],
+    telefono_destinatario: Annotated[str, Form(...)],
+    frase1: Annotated[str, Form(...)],
+    frase2: Annotated[str, Form(...)],
+    frase3: Annotated[str, Form(...)],
+    fotos: Annotated[List[UploadFile], File(...)],
+):
+    try:
+        eterna_id = str(uuid.uuid4())
+        folder = STORAGE_DIR / eterna_id
+        folder.mkdir(parents=True, exist_ok=True)
 
-        # 🔹 CONCATENAR TODO
-        concat_inputs = "".join([f"[v{i}]" for i in range(total)])
+        rutas = []
 
-        filter_complex += f"{concat_inputs}concat=n={total}:v=1:a=0[v]"
+        for i, foto in enumerate(fotos):
+            ruta = folder / f"foto_{i}.jpg"
+            with open(ruta, "wb") as f:
+                f.write(await foto.read())
+            rutas.append(str(ruta))
 
-        # 🔹 COMANDO FINAL
-        cmd = [
-            "ffmpeg",
-            "-y",
-            *inputs,
-            "-filter_complex", filter_complex,
-            "-map", "[v]",
-            "-r", str(fps),
+        salida = str(folder / "video.mp4")
 
-            # 👇 CLAVE PARA QUE FUNCIONE EN TODOS LOS DISPOSITIVOS
-            "-c:v", "libx264",
-            "-preset", "medium",
-            "-crf", "23",
-            "-pix_fmt", "yuv420p",
-            "-movflags", "+faststart",
+        video_engine.generar_video(
+            imagenes=rutas,
+            salida=salida
+        )
 
-            salida
-        ]
+        return {
+            "ok": True,
+            "video_url": f"/video/{eterna_id}"
+        }
 
-        print("🎬 Ejecutando FFmpeg...")
-        print(" ".join(cmd))
+    except Exception:
+        raise HTTPException(status_code=500, detail=traceback.format_exc())
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
 
-        if result.returncode != 0:
-            print("❌ ERROR FFMPEG:")
-            print(result.stderr)
-            raise Exception("Error generando vídeo")
-
-        # 🔹 VALIDACIÓN FINAL
-        if not Path(salida).exists():
-            raise Exception("El vídeo no se ha generado")
-
-        print("✅ Vídeo generado correctamente:", salida)
+@app.get("/video/{eterna_id}")
+def ver_video(eterna_id: str):
+    ruta = STORAGE_DIR / eterna_id / "video.mp4"
+    if not ruta.exists():
+        raise HTTPException(status_code=404, detail="No encontrado")
+    return FileResponse(str(ruta), media_type="video/mp4")
