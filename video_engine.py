@@ -1,6 +1,6 @@
 import subprocess
 import shutil
-from typing import List, Optional
+from typing import List
 from pathlib import Path
 
 
@@ -9,62 +9,95 @@ class VideoEngine:
         self.ffmpeg_bin = ffmpeg_bin
 
         if shutil.which(self.ffmpeg_bin) is None:
-            raise Exception("FFmpeg no está instalado en el sistema")
+            raise Exception("FFmpeg no está instalado")
 
-    def generar_video(
-        self,
-        imagenes: List[str],
-        salida: str,
-        frases: Optional[List[str]] = None,
-        music_path: Optional[str] = None,
-        image_duration: int = 5,
-        transition_duration: int = 1,
-        width: int = 720,
-        height: int = 1280,
-        fps: int = 30,
-    ):
+    def generar_video(self, imagenes: List[str], salida: str, frases: List[str] = None):
         if not imagenes:
-            raise ValueError("No hay imágenes para generar el vídeo")
+            raise Exception("No hay imágenes")
 
-        salida_path = Path(salida)
-        salida_path.parent.mkdir(parents=True, exist_ok=True)
+        width = 720
+        height = 1280
+        fps = 30
+        duracion = 5
+        fade = 1
 
-        lista_path = salida_path.parent / "inputs.txt"
+        inputs = []
+        filtros = []
 
-        with open(lista_path, "w", encoding="utf-8") as f:
-            for img in imagenes:
-                f.write(f"file '{Path(img).resolve()}'\n")
-                f.write(f"duration {image_duration}\n")
-            f.write(f"file '{Path(imagenes[-1]).resolve()}'\n")
+        # 🎬 PREPARAR IMÁGENES
+        for i, img in enumerate(imagenes):
+            inputs.extend(["-loop", "1", "-t", str(duracion), "-i", img])
+
+            frames = duracion * fps
+
+            filtros.append(
+                f"[{i}:v]"
+                f"scale=1280:720:force_original_aspect_ratio=increase,"
+                f"crop=720:1280,"
+                f"zoompan=z='min(zoom+0.0005,1.1)':d={frames}:s={width}x{height},"
+                f"fade=t=in:st=0:d={fade},"
+                f"fade=t=out:st={duracion-fade}:d={fade},"
+                f"setpts=PTS-STARTPTS"
+                f"[v{i}]"
+            )
+
+        # 🎬 CONCATENAR
+        concat_inputs = "".join([f"[v{i}]" for i in range(len(imagenes))])
+        filtros.append(f"{concat_inputs}concat=n={len(imagenes)}:v=1:a=0[v]")
+
+        # 💬 FRASES EMOCIONALES
+        if frases:
+            base = "[v]"
+            for i, frase in enumerate(frases[:3]):
+                start = 3 + (i * 10)
+                end = start + 5
+                out = f"[txt{i}]"
+
+                filtros.append(
+                    f"{base}drawtext="
+                    f"text='{frase}':"
+                    f"fontcolor=white:"
+                    f"fontsize=48:"
+                    f"x=(w-text_w)/2:"
+                    f"y=h*0.75:"
+                    f"shadowcolor=black@0.7:"
+                    f"shadowx=2:"
+                    f"shadowy=2:"
+                    f"alpha='if(lt(t,{start}),0,"
+                    f"if(lt(t,{start+1}),(t-{start}),"
+                    f"if(lt(t,{end}),1,"
+                    f"if(lt(t,{end+1}),1-(t-{end}),0))))'"
+                    f"{out}"
+                )
+                base = out
+
+            final = base
+        else:
+            final = "[v]"
+
+        filter_complex = ";".join(filtros)
 
         cmd = [
             self.ffmpeg_bin,
             "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", str(lista_path),
-            "-vf", f"scale={width}:{height}:force_original_aspect_ratio=decrease,"
-                   f"pad={width}:{height}:(ow-iw)/2:(oh-ih)/2,"
-                   f"format=yuv420p",
+            *inputs,
+            "-filter_complex", filter_complex,
+            "-map", final,
             "-r", str(fps),
             "-c:v", "libx264",
             "-pix_fmt", "yuv420p",
             "-movflags", "+faststart",
-            str(salida_path)
+            salida
         ]
 
-        print("🎬 COMANDO FFMPEG:")
-        print(" ".join(cmd))
+        print("🎬 COMANDO:", " ".join(cmd))
 
         proc = subprocess.run(cmd, capture_output=True, text=True)
 
-        print("🎬 STDOUT:", proc.stdout)
-        print("❌ STDERR:", proc.stderr)
+        print("STDOUT:", proc.stdout)
+        print("STDERR:", proc.stderr)
 
         if proc.returncode != 0:
             raise Exception(proc.stderr)
 
-        if not salida_path.exists():
-            raise Exception("El vídeo no se creó")
-
-        return str(salida_path)
+        return salida
