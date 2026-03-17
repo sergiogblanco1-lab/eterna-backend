@@ -103,6 +103,13 @@ def home():
                 font-weight: bold;
                 text-decoration: none;
             }
+            video {
+                width: 100%;
+                max-width: 420px;
+                border-radius: 16px;
+                background: black;
+                margin-top: 16px;
+            }
         </style>
     </head>
     <body>
@@ -130,7 +137,7 @@ def home():
                 <input name="foto5" type="file" accept="image/*" required>
                 <input name="foto6" type="file" accept="image/*" required>
 
-                <div class="note">Esta versión guarda pedido y fotos en una estructura limpia.</div>
+                <div class="note">Esta versión guarda pedido, fotos y genera el vídeo automáticamente.</div>
 
                 <button type="submit">Crear mi ETERNA</button>
             </form>
@@ -230,13 +237,32 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         db.commit()
         db.refresh(orden)
 
+        photo_paths = [
+            os.path.join(storage.order_photos_dir(order_id), filename)
+            for filename in saved_photos
+        ]
+
+        output_path = storage.order_final_video_path(order_id)
+
+        final_video_path = video_engine.generate_video(
+            order_id=order_id,
+            photos=photo_paths,
+            phrases=[frase1, frase2, frase3],
+            output_path=output_path
+        )
+
+        orden.final_video_path = final_video_path
+        orden.state = "video_generated"
+        db.commit()
+        db.refresh(orden)
+
         return f"""
         <!DOCTYPE html>
         <html lang="es">
         <head>
             <meta charset="UTF-8">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Pedido guardado</title>
+            <title>ETERNA creada</title>
             <style>
                 body {{
                     background: #0b0b0b;
@@ -277,8 +303,8 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="box">
-                <h1>Pedido guardado ✅</h1>
-                <p class="ok">La ETERNA se ha guardado de forma limpia.</p>
+                <h1>ETERNA creada ✅</h1>
+                <p class="ok">Pedido, fotos y vídeo generados correctamente.</p>
 
                 <p><strong>Order ID:</strong> <code>{orden.id}</code></p>
                 <p><strong>Estado:</strong> <code>{orden.state}</code></p>
@@ -286,7 +312,9 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
                 <p><strong>Destinatario:</strong> <code>{destinatario.name}</code></p>
                 <p><strong>Fotos guardadas:</strong> <code>{len(saved_photos)}</code></p>
 
-                <a class="button" href="/">Volver</a>
+                <a class="button" href="/video/{orden.id}">Ver vídeo</a>
+                <br>
+                <a class="button" href="/">Crear otra ETERNA</a>
             </div>
         </body>
         </html>
@@ -330,7 +358,7 @@ async def crear_eterna(request: Request, db: Session = Depends(get_db)):
         </head>
         <body>
             <div class="box">
-                <h1>Error guardando ETERNA</h1>
+                <h1>Error creando ETERNA</h1>
                 <p class="error">Algo ha fallado.</p>
                 <p><strong>Detalle:</strong> <code>{str(e)}</code></p>
             </div>
@@ -349,6 +377,7 @@ def orders(db: Session = Depends(get_db)):
             "customer_id": o.customer_id,
             "recipient_id": o.recipient_id,
             "photos_json": o.photos_json,
+            "final_video_path": o.final_video_path,
             "created_at": o.created_at.isoformat() if o.created_at else None
         }
         for o in lista
@@ -376,8 +405,8 @@ def order_detail(order_id: str, db: Session = Depends(get_db)):
     }
 
 
-@app.get("/video/{order_id}")
-def get_video(order_id: str, db: Session = Depends(get_db)):
+@app.get("/video/{order_id}", response_class=HTMLResponse)
+def video_page(order_id: str, db: Session = Depends(get_db)):
     o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
 
     if not o or not o.final_video_path:
@@ -386,4 +415,70 @@ def get_video(order_id: str, db: Session = Depends(get_db)):
     if not os.path.exists(o.final_video_path):
         raise HTTPException(status_code=404, detail="Archivo de vídeo no encontrado")
 
-    return FileResponse(o.final_video_path, media_type="video/mp4")
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Vídeo ETERNA</title>
+        <style>
+            body {{
+                background: #000;
+                color: white;
+                font-family: Arial, sans-serif;
+                margin: 0;
+                padding: 20px;
+                text-align: center;
+            }}
+            .wrap {{
+                max-width: 460px;
+                margin: 0 auto;
+            }}
+            video {{
+                width: 100%;
+                border-radius: 16px;
+                background: black;
+                margin-top: 12px;
+            }}
+            a.button {{
+                display: inline-block;
+                margin-top: 18px;
+                padding: 12px 18px;
+                border-radius: 999px;
+                background: #e7c27d;
+                color: black;
+                font-weight: bold;
+                text-decoration: none;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <h1>Tu ETERNA</h1>
+            <video controls autoplay playsinline>
+                <source src="/video-file/{order_id}" type="video/mp4">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+            <a class="button" href="/">Crear otra ETERNA</a>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@app.get("/video-file/{order_id}")
+def get_video_file(order_id: str, db: Session = Depends(get_db)):
+    o = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+
+    if not o or not o.final_video_path:
+        raise HTTPException(status_code=404, detail="Vídeo no disponible")
+
+    if not os.path.exists(o.final_video_path):
+        raise HTTPException(status_code=404, detail="Archivo de vídeo no encontrado")
+
+    return FileResponse(
+        path=o.final_video_path,
+        media_type="video/mp4",
+        filename=f"{order_id}.mp4"
+    )
