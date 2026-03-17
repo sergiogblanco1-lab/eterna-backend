@@ -2,8 +2,11 @@ services:
   - type: web
     name: eterna-backend
     env: python
-    plan: standard
+    plan: free
     buildCommand: |
-      apt-get update && apt-get install -y ffmpeg fonts-dejavu-core
       pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: |
+      uvicorn main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: PYTHON_VERSION
+        value: 3.11.10
