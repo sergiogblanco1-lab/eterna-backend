@@ -7,5 +7,4 @@ venv
 .venv
 .git
 .gitignore
-eterna.db
 storage
