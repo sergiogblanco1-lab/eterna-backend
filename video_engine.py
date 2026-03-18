@@ -37,7 +37,7 @@ class VideoEngine:
                 f.write("duration 2\n")
             f.write(f"file '{imagenes_normalizadas[-1]}'\n")
 
-        # VIDEO BASE (sin deformar)
+        # 🎬 ZOOM CINEMATOGRÁFICO
         comando1 = [
             "ffmpeg",
             "-y",
@@ -46,8 +46,12 @@ class VideoEngine:
             "-i", lista,
             "-vf",
             (
-                "scale=360:640:force_original_aspect_ratio=decrease,"
-                "pad=360:640:(ow-iw)/2:(oh-ih)/2:black"
+                "zoompan=z='min(zoom+0.0015,1.1)':"
+                "x='iw/2-(iw/zoom/2)':"
+                "y='ih/2-(ih/zoom/2)':"
+                "d=50:"
+                "s=360x640,"
+                "fps=25"
             ),
             "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
@@ -56,10 +60,8 @@ class VideoEngine:
         ]
 
         duracion_total = len(imagenes_normalizadas) * 2
-
         filtros_texto = []
 
-        # FRASE 1 (inicio)
         if len(frases_limpias) >= 1:
             filtros_texto.append(
                 f"drawtext=text='{frases_limpias[0]}':"
@@ -73,7 +75,6 @@ class VideoEngine:
                 "alpha='if(lt(t,0),0, if(lt(t,0.5),(t-0)/0.5, if(lt(t,1.5),1, if(lt(t,2),(2-t)/0.5,0))))'"
             )
 
-        # FRASE 2 (mitad)
         if len(frases_limpias) >= 2:
             inicio_2 = duracion_total / 2
             medio_2 = inicio_2 + 0.5
@@ -92,7 +93,6 @@ class VideoEngine:
                 f"alpha='if(lt(t,{inicio_2}),0, if(lt(t,{medio_2}),(t-{inicio_2})/0.5, if(lt(t,{fin_fijo_2}),1, if(lt(t,{fin_2}),({fin_2}-t)/0.5,0))))'"
             )
 
-        # FRASE 3 (final)
         if len(frases_limpias) >= 3:
             inicio_3 = max(duracion_total - 2, 0)
             medio_3 = inicio_3 + 0.5
