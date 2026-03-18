@@ -1,15 +1,15 @@
 import uuid
 from pathlib import Path
 from typing import List
+from datetime import datetime
 
 from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import Customer, Recipient, EternaOrder
-from schemas import HealthResponse, EternaCreateResponse
 from storage_service import StorageService
 
 
@@ -24,315 +24,137 @@ Path("storage").mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory="storage"), name="media")
 
 
-@app.get("/health", response_model=HealthResponse)
-def health():
-    return HealthResponse(status="ok", service="ETERNA backend")
-
-
+# -----------------------
+# HOME (crear ETERNA)
+# -----------------------
 @app.get("/", response_class=HTMLResponse)
-def home(request: Request):
-    base_url = str(request.base_url).rstrip("/")
+def home():
+    return """
+    <html>
+    <body style="background:black;color:white;font-family:Arial;padding:40px;">
+        <h1>ETERNA</h1>
 
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>ETERNA</title>
-        <style>
-            * {{
-                box-sizing: border-box;
-            }}
-            body {{
-                margin: 0;
-                font-family: Arial, sans-serif;
-                background: #0b0b0b;
-                color: white;
-            }}
-            .wrap {{
-                max-width: 760px;
-                margin: 0 auto;
-                padding: 40px 20px 80px;
-            }}
-            .brand {{
-                text-align: center;
-                margin-bottom: 30px;
-            }}
-            .brand h1 {{
-                font-size: 48px;
-                margin: 0;
-                letter-spacing: 6px;
-            }}
-            .brand p {{
-                color: #cfcfcf;
-                margin-top: 10px;
-                font-size: 18px;
-            }}
-            .card {{
-                background: #141414;
-                border: 1px solid #222;
-                border-radius: 24px;
-                padding: 24px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-            }}
-            label {{
-                display: block;
-                margin: 16px 0 8px;
-                font-weight: bold;
-            }}
-            input, textarea {{
-                width: 100%;
-                padding: 14px;
-                border-radius: 14px;
-                border: 1px solid #333;
-                background: #0f0f0f;
-                color: white;
-                font-size: 16px;
-            }}
-            textarea {{
-                min-height: 90px;
-                resize: vertical;
-            }}
-            input[type="file"] {{
-                padding: 10px;
-                background: #111;
-            }}
-            button {{
-                width: 100%;
-                margin-top: 24px;
-                padding: 16px;
-                border: none;
-                border-radius: 16px;
-                background: white;
-                color: black;
-                font-size: 17px;
-                font-weight: bold;
-                cursor: pointer;
-            }}
-            button:hover {{
-                opacity: 0.92;
-            }}
-            .result {{
-                margin-top: 24px;
-                padding: 16px;
-                border-radius: 16px;
-                background: #101820;
-                border: 1px solid #213240;
-                display: none;
-                white-space: pre-wrap;
-            }}
-            .small {{
-                font-size: 14px;
-                color: #b9b9b9;
-                margin-top: 10px;
-            }}
-            a {{
-                color: #9fd3ff;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="wrap">
-            <div class="brand">
-                <h1>ETERNA</h1>
-                <p>Transforma 6 fotos y 3 frases en un recuerdo emocional.</p>
-            </div>
+        <form action="/crear-eterna" method="post" enctype="multipart/form-data">
+            <input name="customer_name" placeholder="Tu nombre" required><br><br>
+            <input name="customer_email" placeholder="Tu email" required><br><br>
 
-            <div class="card">
-                <form id="eternaForm">
-                    <label>Tu nombre</label>
-                    <input type="text" name="customer_name" required />
+            <input name="recipient_name" placeholder="Nombre destinatario" required><br><br>
 
-                    <label>Tu email</label>
-                    <input type="email" name="customer_email" required />
+            <textarea name="phrase1" placeholder="Frase 1" required></textarea><br><br>
+            <textarea name="phrase2" placeholder="Frase 2" required></textarea><br><br>
+            <textarea name="phrase3" placeholder="Frase 3" required></textarea><br><br>
 
-                    <label>Nombre de la persona que recibe la ETERNA</label>
-                    <input type="text" name="recipient_name" required />
+            <input type="file" name="photos" multiple required><br><br>
 
-                    <label>Teléfono del destinatario (opcional)</label>
-                    <input type="text" name="recipient_phone" />
-
-                    <label>Email del destinatario (opcional)</label>
-                    <input type="email" name="recipient_email" />
-
-                    <label>Frase 1</label>
-                    <textarea name="phrase1" required></textarea>
-
-                    <label>Frase 2</label>
-                    <textarea name="phrase2" required></textarea>
-
-                    <label>Frase 3</label>
-                    <textarea name="phrase3" required></textarea>
-
-                    <label>Sube exactamente 6 fotos</label>
-                    <input type="file" name="photos" accept="image/*" multiple required />
-
-                    <div class="small">Consejo: usa 6 fotos bonitas para mantener la estructura original de ETERNA.</div>
-
-                    <button type="submit">Crear mi ETERNA</button>
-                </form>
-
-                <div class="result" id="resultBox"></div>
-            </div>
-        </div>
-
-        <script>
-            const form = document.getElementById("eternaForm");
-            const resultBox = document.getElementById("resultBox");
-
-            form.addEventListener("submit", async (e) => {{
-                e.preventDefault();
-
-                resultBox.style.display = "block";
-                resultBox.textContent = "Creando tu ETERNA...";
-
-                const files = form.photos.files;
-                if (files.length !== 6) {{
-                    resultBox.textContent = "Error: debes subir exactamente 6 fotos.";
-                    return;
-                }}
-
-                const formData = new FormData();
-                formData.append("customer_name", form.customer_name.value);
-                formData.append("customer_email", form.customer_email.value);
-                formData.append("recipient_name", form.recipient_name.value);
-                formData.append("recipient_phone", form.recipient_phone.value);
-                formData.append("recipient_email", form.recipient_email.value);
-                formData.append("phrase1", form.phrase1.value);
-                formData.append("phrase2", form.phrase2.value);
-                formData.append("phrase3", form.phrase3.value);
-
-                for (let i = 0; i < files.length; i++) {{
-                    formData.append("photos", files[i]);
-                }}
-
-                try {{
-                    const res = await fetch("/crear-eterna", {{
-                        method: "POST",
-                        body: formData
-                    }});
-
-                    const data = await res.json();
-
-                    if (!res.ok) {{
-                        resultBox.textContent = "Error: " + (data.detail || "No se pudo crear la ETERNA.");
-                        return;
-                    }}
-
-                    let text = "ETERNA creada correctamente.\\n\\n";
-                    text += "ID: " + data.eterna_id + "\\n";
-                    text += "Mensaje: " + data.message + "\\n";
-
-                    if (data.video_url) {{
-                        const fullVideoUrl = "{base_url}" + data.video_url;
-                        text += "Vídeo: " + fullVideoUrl + "\\n";
-                    }} else {{
-                        text += "Vídeo: desactivado temporalmente para evitar fallo de memoria en Render Free.\\n";
-                    }}
-
-                    resultBox.textContent = text;
-                }} catch (err) {{
-                    resultBox.textContent = "Error inesperado al crear la ETERNA.";
-                }}
-            }});
-        </script>
+            <button>Crear ETERNA</button>
+        </form>
     </body>
     </html>
     """
 
 
-@app.post("/crear-eterna", response_model=EternaCreateResponse)
+# -----------------------
+# CREAR ETERNA
+# -----------------------
+@app.post("/crear-eterna")
 async def crear_eterna(
     request: Request,
     customer_name: str = Form(...),
     customer_email: str = Form(...),
     recipient_name: str = Form(...),
-    recipient_phone: str = Form(""),
-    recipient_email: str = Form(""),
     phrase1: str = Form(...),
     phrase2: str = Form(...),
     phrase3: str = Form(...),
     photos: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    if not photos or len(photos) != 6:
-        raise HTTPException(status_code=400, detail="Debes subir exactamente 6 fotos.")
+    if len(photos) != 6:
+        raise HTTPException(status_code=400, detail="Debes subir 6 fotos")
 
     eterna_id = str(uuid.uuid4())
-    eterna_folder = storage.create_eterna_folder(eterna_id)
+    share_token = str(uuid.uuid4())
 
-    phrases = [phrase1.strip(), phrase2.strip(), phrase3.strip()]
-    storage.save_phrases(eterna_folder, phrases)
+    folder = storage.create_eterna_folder(eterna_id)
 
-    try:
-        saved_images = await storage.save_uploaded_images(eterna_folder, photos)
+    # Guardar imágenes
+    saved_images = await storage.save_uploaded_images(folder, photos)
 
-        customer = Customer(
-            name=customer_name.strip(),
-            email=customer_email.strip()
-        )
-        db.add(customer)
-        db.commit()
-        db.refresh(customer)
+    # Crear cliente
+    customer = Customer(name=customer_name, email=customer_email)
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
 
-        recipient = Recipient(
-            name=recipient_name.strip(),
-            phone=recipient_phone.strip() or None,
-            email=recipient_email.strip() or None
-        )
-        db.add(recipient)
-        db.commit()
-        db.refresh(recipient)
+    # Crear destinatario
+    recipient = Recipient(name=recipient_name)
+    db.add(recipient)
+    db.commit()
+    db.refresh(recipient)
 
-        order = EternaOrder(
-            eterna_id=eterna_id,
-            customer_id=customer.id,
-            recipient_id=recipient.id,
-            phrase1=phrases[0],
-            phrase2=phrases[1],
-            phrase3=phrases[2],
-            image_count=len(saved_images),
-            storage_folder=str(eterna_folder),
-            video_path=None,
-            status="created"
-        )
-        db.add(order)
-        db.commit()
+    # Crear URL compartible
+    base_url = str(request.base_url).rstrip("/")
+    share_url = f"{base_url}/e/{share_token}"
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error guardando la ETERNA: {str(e)}")
-
-    return EternaCreateResponse(
-        ok=True,
+    # Crear pedido
+    order = EternaOrder(
         eterna_id=eterna_id,
-        message="ETERNA creada correctamente",
-        video_url=None
+        customer_id=customer.id,
+        recipient_id=recipient.id,
+        phrase1=phrase1,
+        phrase2=phrase2,
+        phrase3=phrase3,
+        image_count=len(saved_images),
+        storage_folder=str(folder),
+        share_token=share_token,
+        share_url=share_url,
+        status="created"
     )
 
+    db.add(order)
+    db.commit()
 
-@app.get("/eterna/{eterna_id}")
-def get_eterna(eterna_id: str, db: Session = Depends(get_db)):
-    order = db.query(EternaOrder).filter(EternaOrder.eterna_id == eterna_id).first()
+    return {
+        "ok": True,
+        "eterna_id": eterna_id,
+        "share_url": share_url
+    }
+
+
+# -----------------------
+# EXPERIENCIA (DESTINATARIO)
+# -----------------------
+@app.get("/e/{token}", response_class=HTMLResponse)
+def ver_eterna(token: str, db: Session = Depends(get_db)):
+
+    order = db.query(EternaOrder).filter(EternaOrder.share_token == token).first()
 
     if not order:
-        raise HTTPException(status_code=404, detail="ETERNA no encontrada.")
+        return HTMLResponse("<h1>No encontrada</h1>")
 
-    return JSONResponse({
-        "ok": True,
-        "eterna_id": order.eterna_id,
-        "status": order.status,
-        "customer_name": order.customer.name if order.customer else None,
-        "customer_email": order.customer.email if order.customer else None,
-        "recipient_name": order.recipient.name if order.recipient else None,
-        "recipient_phone": order.recipient.phone if order.recipient else None,
-        "recipient_email": order.recipient.email if order.recipient else None,
-        "phrases": [
-            order.phrase1,
-            order.phrase2,
-            order.phrase3
-        ],
-        "image_count": order.image_count,
-        "video_url": None,
-        "created_at": order.created_at.isoformat() if order.created_at else None,
-    })
+    # Marcar como abierta
+    if not order.opened_at:
+        order.opened_at = datetime.utcnow()
+        order.status = "opened"
+        db.commit()
+
+    folder = order.storage_folder
+    images_html = ""
+
+    for i in range(1, order.image_count + 1):
+        images_html += f'<img src="/media/{Path(folder).name}/foto_{i}.jpg" style="width:100%;margin-bottom:20px;">'
+
+    return f"""
+    <html>
+    <body style="background:black;color:white;font-family:Arial;padding:20px;">
+
+        <h2 style="text-align:center;">{order.phrase1}</h2>
+        <h3 style="text-align:center;">{order.phrase2}</h3>
+        <h4 style="text-align:center;">{order.phrase3}</h4>
+
+        <div style="margin-top:30px;">
+            {images_html}
+        </div>
+
+    </body>
+    </html>
+    """
