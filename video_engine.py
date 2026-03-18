@@ -25,18 +25,8 @@ class VideoEngine:
         if len(imagenes) != 6:
             raise ValueError("ETERNA necesita exactamente 6 imágenes")
 
-        frases_limpias = [self._limpiar_texto_ffmpeg(f) for f in frases if f.strip()]
-        if len(frases_limpias) < 3:
-            raise ValueError("Se necesitan 3 frases válidas")
-
         output_dir = os.path.dirname(output)
         os.makedirs(output_dir, exist_ok=True)
-
-        lista = os.path.join(output_dir, "lista.txt")
-        base = os.path.join(output_dir, "base.mp4")
-        texto_video = os.path.join(output_dir, "texto.mp4")
-        final_lista = os.path.join(output_dir, "final_lista.txt")
-        final_temp = os.path.join(output_dir, "final_temp.mp4")
 
         normalizadas_dir = os.path.join(output_dir, "normalizadas")
         os.makedirs(normalizadas_dir, exist_ok=True)
@@ -45,110 +35,130 @@ class VideoEngine:
         for i, img_path in enumerate(imagenes, start=1):
             nueva = os.path.join(normalizadas_dir, f"img_{i}.jpg")
             self._normalizar_imagen(img_path, nueva)
-            imagenes_normalizadas.append(os.path.abspath(nueva).replace("\\", "/"))
+            imagenes_normalizadas.append(os.path.abspath(nueva))
 
-        with open(lista, "w", encoding="utf-8") as f:
-            for img in imagenes_normalizadas:
-                f.write(f"file '{img}'\n")
-                f.write("duration 5\n")
-            f.write(f"file '{imagenes_normalizadas[-1]}'\n")
+        clips = []
 
-        filtro_base = (
-            "zoompan="
-            "z='if(lte(on,1),1.0,min(zoom+0.0008,1.10))':"
-            "x='iw/2-(iw/zoom/2)':"
-            "y='ih/2-(ih/zoom/2)':"
-            "d=125:"
-            "s=720x1280,"
-            "fps=25,"
-            "eq=saturation='if(lt(t,10),0, if(lt(t,20),(t-10)/10,1))',"
-            "format=yuv420p"
-        )
+        for i, img in enumerate(imagenes_normalizadas, start=1):
+            clip_path = os.path.join(output_dir, f"clip_{i}.mp4")
 
-        comando1 = [
-            "ffmpeg",
-            "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", lista,
-            "-vf", filtro_base,
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            base
-        ]
+            comando_clip = [
+                "ffmpeg",
+                "-y",
+                "-loop", "1",
+                "-i", img,
+                "-t", "4",
+                "-vf", (
+                    "scale=720:1280:force_original_aspect_ratio=increase,"
+                    "crop=720:1280,"
+                    "format=yuv420p"
+                ),
+                "-r", "25",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                clip_path
+            ]
 
-        duracion_total = 30
-        filtros_texto = []
+            self._run_ffmpeg(comando_clip)
+            clips.append(os.path.abspath(clip_path))
 
-        overlays = [
-            ("Hay momentos que merecen quedarse para siempre", 0, 4),
-            (frases_limpias[0], 5, 9),
-            (frases_limpias[1], 12, 16),
-            (frases_limpias[2], 19, 23),
-            ("Este momento es para ti", 25, 28),
-        ]
+        if frases:
+            frases = [self._limpiar_texto_ffmpeg(f) for f in frases if f.strip()]
+
+        if frases:
+            texto_clip = os.path.join(output_dir, "texto_final.mp4")
+            texto = frases[-1] if frases else "ETERNA"
+
+            comando_texto = [
+                "ffmpeg",
+                "-y",
+                "-f", "lavfi",
+                "-i", "color=c=black:s=720x1280:d=3",
+                "-vf",
+                (
+                    f"drawtext=text='{texto}':"
+                    "fontcolor=white:"
+                    "fontsize=42:"
+                    "x=(w-text_w)/2:"
+                    "y=(h-text_h)/2"
+                ),
+                "-r", "25",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                texto_clip
+            ]
+
+            self._run_ffmpeg(comando_texto)
+            clips.append(os.path.abspath(texto_clip))
 
         if regalo_activo and regalo_amount_eur > 0:
-            overlays.append((f"Y además... {regalo_amount_eur:.2f}€ para ti", 28, 30))
+            regalo_clip = os.path.join(output_dir, "regalo.mp4")
+            regalo_texto = f"{regalo_amount_eur:.2f} EUR para ti"
+            regalo_texto = self._limpiar_texto_ffmpeg(regalo_texto)
 
-        for texto, inicio, fin in overlays:
-            texto = self._limpiar_texto_ffmpeg(texto)
-            filtros_texto.append(
-                f"drawtext=text='{texto}':"
-                f"fontcolor=white:"
-                f"fontsize=36:"
-                f"shadowcolor=black:"
-                f"shadowx=2:"
-                f"shadowy=2:"
-                f"x=(w-text_w)/2:"
-                f"y=h*0.82:"
-                f"enable='between(t,{inicio},{fin})':"
-                f"alpha='if(lt(t,{inicio + 0.5}), (t-{inicio})/0.5, if(lt(t,{fin - 0.5}), 1, ({fin}-t)/0.5))'"
-            )
+            comando_regalo = [
+                "ffmpeg",
+                "-y",
+                "-f", "lavfi",
+                "-i", "color=c=black:s=720x1280:d=3",
+                "-vf",
+                (
+                    f"drawtext=text='{regalo_texto}':"
+                    "fontcolor=white:"
+                    "fontsize=42:"
+                    "x=(w-text_w)/2:"
+                    "y=(h-text_h)/2"
+                ),
+                "-r", "25",
+                "-c:v", "libx264",
+                "-pix_fmt", "yuv420p",
+                regalo_clip
+            ]
 
-        filtro_final = ",".join(filtros_texto) if filtros_texto else "null"
+            self._run_ffmpeg(comando_regalo)
+            clips.append(os.path.abspath(regalo_clip))
 
-        comando2 = [
-            "ffmpeg",
-            "-y",
-            "-i", base,
-            "-vf", filtro_final,
-            "-pix_fmt", "yuv420p",
-            "-c:v", "libx264",
-            "-preset", "veryfast",
-            texto_video
-        ]
+        if video_regalante and os.path.exists(video_regalante):
+            video_regalante_clip = os.path.join(output_dir, "video_regalante_final.mp4")
 
-        with open(final_lista, "w", encoding="utf-8") as f:
-            f.write(f"file '{os.path.abspath(texto_video).replace(chr(92), '/')}'\n")
-            if video_regalante and os.path.exists(video_regalante):
-                f.write(f"file '{os.path.abspath(video_regalante).replace(chr(92), '/')}'\n")
+            comando_regalante = [
+                "ffmpeg",
+                "-y",
+                "-i", video_regalante,
+                "-vf",
+                (
+                    "scale=720:1280:force_original_aspect_ratio=increase,"
+                    "crop=720:1280,"
+                    "format=yuv420p"
+                ),
+                "-r", "25",
+                "-c:v", "libx264",
+                "-c:a", "aac",
+                "-pix_fmt", "yuv420p",
+                video_regalante_clip
+            ]
 
-        comando3 = [
+            self._run_ffmpeg(comando_regalante)
+            clips.append(os.path.abspath(video_regalante_clip))
+
+        lista_concat = os.path.join(output_dir, "concat.txt")
+        with open(lista_concat, "w", encoding="utf-8") as f:
+            for clip in clips:
+                f.write(f"file '{clip}'\n")
+
+        comando_final = [
             "ffmpeg",
             "-y",
             "-f", "concat",
             "-safe", "0",
-            "-i", final_lista,
+            "-i", lista_concat,
             "-c:v", "libx264",
             "-c:a", "aac",
             "-pix_fmt", "yuv420p",
-            "-preset", "veryfast",
-            final_temp
+            output
         ]
 
-        try:
-            subprocess.run(comando1, check=True, capture_output=True, text=True)
-            subprocess.run(comando2, check=True, capture_output=True, text=True)
-            subprocess.run(comando3, check=True, capture_output=True, text=True)
-
-            os.replace(final_temp, output)
-            print("✅ VIDEO FINAL GUARDADO EN:", output)
-        except subprocess.CalledProcessError as e:
-            print("❌ ERROR FFMPEG")
-            print(e.stderr)
-            raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
+        self._run_ffmpeg(comando_final)
 
         if not os.path.exists(output):
             raise RuntimeError(f"El vídeo no se generó en: {output}")
@@ -156,17 +166,13 @@ class VideoEngine:
         if os.path.getsize(output) == 0:
             raise RuntimeError("El vídeo se creó vacío")
 
+        print("✅ VIDEO FINAL GUARDADO EN:", output)
         return output
 
     def _normalizar_imagen(self, origen: str, destino: str):
         with Image.open(origen) as img:
             img = ImageOps.exif_transpose(img)
-
-            if img.mode not in ("RGB", "L"):
-                img = img.convert("RGB")
-            elif img.mode == "L":
-                img = img.convert("RGB")
-
+            img = img.convert("RGB")
             img.save(destino, "JPEG", quality=92)
 
     def _limpiar_texto_ffmpeg(self, texto: str) -> str:
@@ -179,3 +185,18 @@ class VideoEngine:
             .replace("\n", " ")
             .strip()
         )
+
+    def _run_ffmpeg(self, comando: List[str]):
+        try:
+            resultado = subprocess.run(
+                comando,
+                check=True,
+                capture_output=True,
+                text=True
+            )
+            return resultado
+        except subprocess.CalledProcessError as e:
+            print("❌ ERROR FFMPEG")
+            print("COMANDO:", " ".join(comando))
+            print("STDERR:", e.stderr)
+            raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
