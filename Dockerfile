@@ -1,25 +1,11 @@
-from sqlalchemy import create_engine
-from sqlalchemy.orm import declarative_base, sessionmaker
+FROM python:3.11-slim
 
-DATABASE_URL = "sqlite:///./eterna.db"
+WORKDIR /app
 
-engine = create_engine(
-    DATABASE_URL,
-    connect_args={"check_same_thread": False}
-)
+COPY . .
 
-SessionLocal = sessionmaker(
-    autocommit=False,
-    autoflush=False,
-    bind=engine
-)
+RUN pip install --no-cache-dir -r requirements.txt
 
-Base = declarative_base()
+ENV PORT=10000
 
-
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+CMD ["sh", "-c", "uvicorn main:app --host 0.0.0.0 --port ${PORT:-10000}"]
