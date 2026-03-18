@@ -10,11 +10,7 @@ from sqlalchemy.orm import Session
 
 from database import Base, engine, get_db
 from models import Customer, Recipient, EternaOrder
-from schemas import (
-    HealthResponse,
-    EternaCreationResponse,
-    ReactionUploadResponse,
-)
+from schemas import HealthResponse, EternaCreationResponse, ReactionUploadResponse
 from storage_service import StorageService
 
 
@@ -102,6 +98,10 @@ def home():
                 gap: 10px;
                 margin-top: 16px;
             }
+            .checkrow label {
+                margin: 0;
+                font-weight: normal;
+            }
             button {
                 width: 100%;
                 margin-top: 24px;
@@ -167,12 +167,12 @@ def home():
 
                     <div class="checkrow">
                         <input type="checkbox" name="includes_reaction" id="includes_reaction" checked />
-                        <label for="includes_reaction" style="margin:0;">Incluir reacción</label>
+                        <label for="includes_reaction">Incluir reacción</label>
                     </div>
 
                     <div class="checkrow">
                         <input type="checkbox" name="gift_active" id="gift_active" />
-                        <label for="gift_active" style="margin:0;">Activar regalo económico</label>
+                        <label for="gift_active">Activar regalo económico</label>
                     </div>
 
                     <label>Cantidad regalo EUR</label>
@@ -181,7 +181,7 @@ def home():
                     <label>Mensaje de regalo (opcional)</label>
                     <textarea name="gift_message"></textarea>
 
-                    <label>Vídeo del regalante (opcional)</label>
+                    <label>Vídeo del regalante (opcional, solo guardar)</label>
                     <input type="file" name="giver_video" accept="video/*" />
 
                     <label>Sube exactamente 6 fotos</label>
@@ -249,7 +249,7 @@ def home():
                     let text = "ETERNA creada correctamente.\\n\\n";
                     text += "ID: " + data.eterna_id + "\\n";
                     text += "Link privado: " + data.share_url + "\\n";
-                    text += "Estado: lista sin vídeo por ahora.\\n";
+                    text += "Estado: funcionando sin vídeo final.\\n";
 
                     resultBox.innerHTML = text.replace(
                         /(https?:\\/\\/[^\\s]+)/g,
@@ -405,7 +405,9 @@ def get_eterna(eterna_id: str, db: Session = Depends(get_db)):
         "status": order.status,
         "share_url": order.share_url,
         "customer_name": order.customer.name if order.customer else None,
+        "customer_email": order.customer.email if order.customer else None,
         "recipient_name": order.recipient.name if order.recipient else None,
+        "recipient_email": order.recipient.email if order.recipient else None,
         "phrases": [order.phrase1, order.phrase2, order.phrase3],
         "image_count": order.image_count,
         "includes_reaction": order.includes_reaction,
@@ -416,6 +418,7 @@ def get_eterna(eterna_id: str, db: Session = Depends(get_db)):
         "reaction_video_path": order.reaction_video_path,
         "final_video_path": order.final_video_path,
         "opened_at": order.opened_at.isoformat() if order.opened_at else None,
+        "reaction_uploaded_at": order.reaction_uploaded_at.isoformat() if order.reaction_uploaded_at else None,
     })
 
 
@@ -451,7 +454,7 @@ def ver_eterna(token: str, db: Session = Depends(get_db)):
     if order.giver_video_path:
         giver_video_html = f"""
         <div class="card" style="margin-top:24px;">
-            <h3>Mensaje en vídeo</h3>
+            <h3>Mensaje del regalante</h3>
             <video controls playsinline style="width:100%;border-radius:18px;">
                 <source src="{order.giver_video_path}">
             </video>
