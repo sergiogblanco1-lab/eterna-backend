@@ -18,9 +18,9 @@ class VideoEngine:
         output_dir = os.path.dirname(output)
         os.makedirs(output_dir, exist_ok=True)
 
-        lista = os.path.abspath(os.path.join(output_dir, "lista.txt"))
-        base = os.path.abspath(os.path.join(output_dir, "base.mp4"))
-        output_absoluto = os.path.abspath(output)
+        lista = os.path.join(output_dir, "lista.txt")
+        base = os.path.join(output_dir, "base.mp4")
+        output_final = output
 
         normalizadas_dir = os.path.join(output_dir, "normalizadas")
         os.makedirs(normalizadas_dir, exist_ok=True)
@@ -37,7 +37,6 @@ class VideoEngine:
                 f.write("duration 2\n")
             f.write(f"file '{imagenes_normalizadas[-1]}'\n")
 
-        # 🎬 ZOOM CINEMATOGRÁFICO
         comando1 = [
             "ffmpeg",
             "-y",
@@ -121,24 +120,25 @@ class VideoEngine:
             "-pix_fmt", "yuv420p",
             "-c:v", "libx264",
             "-preset", "veryfast",
-            output_absoluto
+            output_final
         ]
 
         try:
             subprocess.run(comando1, check=True, capture_output=True, text=True)
             subprocess.run(comando2, check=True, capture_output=True, text=True)
+            print("✅ VIDEO FINAL GUARDADO EN:", output_final)
         except subprocess.CalledProcessError as e:
             print("❌ ERROR FFMPEG")
             print(e.stderr)
             raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
 
-        if not os.path.exists(output_absoluto):
-            raise RuntimeError("El vídeo no se generó")
+        if not os.path.exists(output_final):
+            raise RuntimeError(f"El vídeo no se generó en: {output_final}")
 
-        if os.path.getsize(output_absoluto) == 0:
+        if os.path.getsize(output_final) == 0:
             raise RuntimeError("El vídeo se creó vacío")
 
-        return output_absoluto
+        return output_final
 
     def _normalizar_imagen(self, origen: str, destino: str):
         with Image.open(origen) as img:
