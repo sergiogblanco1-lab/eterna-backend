@@ -1,61 +1,27 @@
 from fastapi import FastAPI, UploadFile, File, Form
 from typing import List, Optional
 import uuid
-from pathlib import Path
 
-app = FastAPI()
+from storage_service import StorageService
 
-# =========================
-# CONFIGURACIÓN STORAGE
-# =========================
+app = FastAPI(title="ETERNA backend")
 
-BASE_DIR = Path(__file__).resolve().parent
-STORAGE = BASE_DIR / "storage"
-STORAGE.mkdir(exist_ok=True)
+storage = StorageService()
 
-
-# =========================
-# UTILIDADES
-# =========================
 
 def limpiar_texto(valor: Optional[str]) -> str:
-    """
-    Limpia un texto eliminando espacios y valores None.
-    """
     if valor is None:
         return ""
     return valor.strip()
 
 
-def extension_segura(filename: str) -> str:
-    """
-    Devuelve una extensión válida de imagen.
-    """
-    ext = Path(filename).suffix.lower()
-
-    extensiones_validas = [".jpg", ".jpeg", ".png", ".webp"]
-
-    if ext in extensiones_validas:
-        return ext
-
-    return ".jpg"
-
-
-# =========================
-# HEALTH CHECK
-# =========================
-
 @app.get("/")
 def home():
     return {
         "status": "ETERNA OK",
-        "version": "v2"
+        "version": "v1_sin_video"
     }
 
-
-# =========================
-# CREAR ETERNA
-# =========================
 
 @app.post("/crear-eterna")
 async def crear_eterna(
@@ -70,10 +36,6 @@ async def crear_eterna(
     fotos: List[UploadFile] = File(...)
 ):
     try:
-        # =========================
-        # LIMPIEZA DE DATOS
-        # =========================
-
         nombre = limpiar_texto(nombre)
         email = limpiar_texto(email)
         telefono = limpiar_texto(telefono)
@@ -82,10 +44,6 @@ async def crear_eterna(
         frase1 = limpiar_texto(frase1)
         frase2 = limpiar_texto(frase2)
         frase3 = limpiar_texto(frase3)
-
-        # =========================
-        # VALIDACIONES
-        # =========================
 
         if len(fotos) == 0:
             return {
@@ -99,69 +57,32 @@ async def crear_eterna(
                 "detalle": "Máximo 6 fotos"
             }
 
-        # =========================
-        # CREAR ID Y CARPETA
-        # =========================
-
         eterna_id = str(uuid.uuid4())
-        carpeta = STORAGE / eterna_id
-        carpeta.mkdir(parents=True, exist_ok=True)
+        carpeta = storage.crear_carpeta_eterna(eterna_id)
 
-        # =========================
-        # GUARDAR DATOS
-        # =========================
+        storage.guardar_datos(
+            carpeta=carpeta,
+            datos={
+                "nombre": nombre,
+                "email": email,
+                "telefono": telefono,
+                "destinatario": nombre_destinatario,
+                "telefono_dest": telefono_destinatario,
+                "frase1": frase1,
+                "frase2": frase2,
+                "frase3": frase3,
+            }
+        )
 
-        with open(carpeta / "data.txt", "w", encoding="utf-8") as f:
-            f.write(f"nombre: {nombre}\n")
-            f.write(f"email: {email}\n")
-            f.write(f"telefono: {telefono}\n")
-            f.write(f"destinatario: {nombre_destinatario}\n")
-            f.write(f"telefono_dest: {telefono_destinatario}\n")
-            f.write(f"frase1: {frase1}\n")
-            f.write(f"frase2: {frase2}\n")
-            f.write(f"frase3: {frase3}\n")
+        storage.guardar_estado_inicial(carpeta)
 
-        # =========================
-        # GUARDAR ESTADO
-        # =========================
-
-        with open(carpeta / "status.txt", "w") as f:
-            f.write("estado: pendiente_pago\n")
-            f.write("video: no_generado\n")
-
-        # =========================
-        # GUARDAR FOTOS
-        # =========================
-
-        fotos_guardadas = []
-
-        for i, foto in enumerate(fotos):
-            if not foto.filename:
-                continue
-
-            contenido = await foto.read()
-
-            if not contenido:
-                continue
-
-            ext = extension_segura(foto.filename)
-            nombre_archivo = f"foto{i+1}{ext}"
-            ruta = carpeta / nombre_archivo
-
-            with open(ruta, "wb") as f:
-                f.write(contenido)
-
-            fotos_guardadas.append(nombre_archivo)
+        fotos_guardadas = await storage.guardar_fotos(carpeta, fotos)
 
         if len(fotos_guardadas) == 0:
             return {
                 "status": "error",
-                "detalle": "Las fotos no son válidas"
+                "detalle": "Las fotos no son válidas o llegaron vacías"
             }
-
-        # =========================
-        # RESPUESTA + PAGO (PREPARADO)
-        # =========================
 
         payment_url = f"/pagar/{eterna_id}"
 
@@ -169,7 +90,9 @@ async def crear_eterna(
             "status": "ok",
             "eterna_id": eterna_id,
             "fotos_recibidas": len(fotos_guardadas),
-            "payment_url": payment_url
+            "fotos_guardadas": fotos_guardadas,
+            "payment_url": payment_url,
+            "video_generado": False
         }
 
     except Exception as e:
