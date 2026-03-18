@@ -45,13 +45,14 @@ class EternaOrder(Base):
     phrase2 = Column(String(500), nullable=False)
     phrase3 = Column(String(500), nullable=False)
 
-    image_count = Column(Integer, default=0, nullable=False)
+    image_count = Column(Integer, nullable=False, default=0)
     storage_folder = Column(String(500), nullable=False)
 
     share_token = Column(String(120), unique=True, nullable=False, index=True)
     share_url = Column(String(500), nullable=False)
 
-    status = Column(String(50), default="created", nullable=False)
+    status = Column(String(50), nullable=False, default="created")
+    # created, opened, reaction_uploaded
 
     includes_reaction = Column(Boolean, default=True)
     reaction_permission_public = Column(Boolean, default=False)
@@ -62,12 +63,11 @@ class EternaOrder(Base):
     gift_message = Column(String(500), nullable=True)
 
     giver_video_path = Column(String(500), nullable=True)
-    final_video_path = Column(String(500), nullable=True)
+    final_video_path = Column(String(500), nullable=True)  # reservado para futuro
 
     created_at = Column(DateTime, default=datetime.utcnow)
     opened_at = Column(DateTime, nullable=True)
     reaction_uploaded_at = Column(DateTime, nullable=True)
-    video_generated_at = Column(DateTime, nullable=True)
 
     customer = relationship("Customer", back_populates="orders")
     recipient = relationship("Recipient", back_populates="orders")
