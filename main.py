@@ -1,11 +1,12 @@
-import html
-import re
 import uuid
 import urllib.parse
 from pathlib import Path
 from typing import List, Optional
+from datetime import datetime
+import os
+import stripe
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request, Query
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy.orm import Session
@@ -15,240 +16,129 @@ from models import Customer, Recipient, EternaOrder
 from storage_service import StorageService
 
 
+# =========================
+# CONFIG
+# =========================
+
+stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
+
 app = FastAPI(title="ETERNA backend")
 
 Base.metadata.create_all(bind=engine)
 
 storage = StorageService()
-
-# Asegura que exista la carpeta media
-storage.media_dir.mkdir(parents=True, exist_ok=True)
 app.mount("/media", StaticFiles(directory=str(storage.media_dir)), name="media")
 
 
-def clean_phone(phone: Optional[str]) -> Optional[str]:
-    if not phone:
-        return None
-    cleaned = re.sub(r"[^\d]", "", phone)
-    return cleaned or None
-
-
 # =========================
-# HOME (CREAR + GRABAR)
+# HOME
 # =========================
 
 @app.get("/", response_class=HTMLResponse)
 def home():
     return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
-        <style>
-            body{
-                background:#000;
-                color:#fff;
-                font-family:Arial, sans-serif;
-                padding:30px;
-                max-width:700px;
-                margin:auto;
-            }
-            input, textarea, button{
-                width:100%;
-                padding:12px;
-                margin-top:8px;
-                margin-bottom:14px;
-                border-radius:10px;
-                border:1px solid #333;
-                background:#111;
-                color:#fff;
-                box-sizing:border-box;
-            }
-            button{
-                cursor:pointer;
-                background:#fff;
-                color:#000;
-                font-weight:bold;
-            }
-            .secondary{
-                background:#222;
-                color:#fff;
-            }
-            #preview{
-                width:220px;
-                border-radius:12px;
-                background:#111;
-                margin-top:10px;
-            }
-            #result{
-                margin-top:20px;
-            }
-            .wa-btn{
-                display:inline-block;
-                padding:12px 18px;
-                background:#25D366;
-                color:white;
-                border-radius:10px;
-                text-decoration:none;
-                font-weight:bold;
-            }
-            .link-btn{
-                display:inline-block;
-                padding:12px 18px;
-                background:white;
-                color:black;
-                border-radius:10px;
-                text-decoration:none;
-                font-weight:bold;
-            }
-            .row{
-                display:flex;
-                gap:10px;
-                margin-bottom:14px;
-            }
-            .row button{
-                margin:0;
-            }
-        </style>
-    </head>
-    <body>
+    <html>
+    <body style="background:black;color:white;font-family:Arial;padding:30px;">
 
-        <h1>ETERNA</h1>
+    <h1>ETERNA</h1>
 
-        <form id="form">
-            <input name="customer_name" placeholder="Tu nombre" required>
-            <input name="customer_email" type="email" placeholder="Tu email" required>
+    <form id="form">
+        <input name="customer_name" placeholder="Tu nombre"><br><br>
+        <input name="customer_email" placeholder="Tu email"><br><br>
 
-            <input name="recipient_name" placeholder="Nombre destinatario" required>
-            <input name="recipient_phone" placeholder="Teléfono destinatario (con prefijo si hace falta)">
+        <input name="recipient_name" placeholder="Nombre destinatario"><br><br>
+        <input name="recipient_phone" placeholder="Teléfono destinatario"><br><br>
 
-            <textarea name="phrase1" placeholder="Frase 1" required></textarea>
-            <textarea name="phrase2" placeholder="Frase 2" required></textarea>
-            <textarea name="phrase3" placeholder="Frase 3" required></textarea>
+        <textarea name="phrase1" placeholder="Frase 1"></textarea><br><br>
+        <textarea name="phrase2" placeholder="Frase 2"></textarea><br><br>
+        <textarea name="phrase3" placeholder="Frase 3"></textarea><br><br>
 
-            <label>Sube 6 fotos</label>
-            <input type="file" name="photos" multiple accept="image/*" required>
+        <input type="file" name="photos" multiple required><br><br>
 
-            <h3>Graba tu mensaje</h3>
-            <video id="preview" autoplay muted playsinline></video>
+        <h3>Graba tu mensaje</h3>
+        <video id="preview" autoplay muted style="width:200px;"></video><br><br>
 
-            <div class="row">
-                <button class="secondary" type="button" onclick="startRecording()">Grabar</button>
-                <button class="secondary" type="button" onclick="stopRecording()">Parar</button>
-            </div>
+        <button type="button" onclick="startRecording()">Grabar</button>
+        <button type="button" onclick="stopRecording()">Parar</button><br><br>
 
-            <button type="submit">Crear ETERNA</button>
-        </form>
+        <button type="submit">Crear ETERNA</button>
+    </form>
 
-        <div id="result"></div>
+    <div id="result"></div>
 
-        <script>
-            let recorder = null;
-            let chunks = [];
-            let stream = null;
-            let giverVideoBlob = null;
+    <script>
+    let recorder;
+    let chunks = [];
+    let stream;
 
-            async function startRecording() {
-                try {
-                    if (stream) {
-                        stream.getTracks().forEach(track => track.stop());
-                    }
+    async function startRecording() {
+        stream = await navigator.mediaDevices.getUserMedia({
+            video: { facingMode: "user" },
+            audio: true
+        });
 
-                    stream = await navigator.mediaDevices.getUserMedia({
-                        video: { facingMode: "user" },
-                        audio: true
-                    });
+        preview.srcObject = stream;
 
-                    const preview = document.getElementById("preview");
-                    preview.srcObject = stream;
+        recorder = new MediaRecorder(stream);
+        chunks = [];
 
-                    chunks = [];
-                    recorder = new MediaRecorder(stream);
+        recorder.ondataavailable = e => chunks.push(e.data);
 
-                    recorder.ondataavailable = (e) => {
-                        if (e.data && e.data.size > 0) {
-                            chunks.push(e.data);
-                        }
-                    };
+        recorder.start();
+    }
 
-                    recorder.onstop = () => {
-                        giverVideoBlob = new Blob(chunks, { type: "video/webm" });
-                        alert("Vídeo grabado");
-                    };
+    function stopRecording() {
+        recorder.stop();
 
-                    recorder.start();
-                } catch (err) {
-                    alert("No se pudo abrir la cámara o el micrófono");
-                    console.error(err);
-                }
-            }
+        recorder.onstop = () => {
+            const blob = new Blob(chunks, { type: "video/webm" });
+            const file = new File([blob], "giver.webm");
 
-            function stopRecording() {
-                if (!recorder || recorder.state === "inactive") {
-                    alert("Primero graba un vídeo");
-                    return;
-                }
+            const dt = new DataTransfer();
+            dt.items.add(file);
 
-                recorder.stop();
+            const input = document.createElement("input");
+            input.type = "file";
+            input.name = "giver_video";
+            input.files = dt.files;
 
-                if (stream) {
-                    stream.getTracks().forEach(track => track.stop());
-                }
-            }
+            form.appendChild(input);
 
-            const form = document.getElementById("form");
+            alert("Vídeo grabado");
+        };
+    }
 
-            form.addEventListener("submit", async (e) => {
-                e.preventDefault();
+    form.addEventListener("submit", async (e) => {
+        e.preventDefault();
 
-                try {
-                    const formData = new FormData(form);
+        const fd = new FormData(form);
 
-                    const photos = formData.getAll("photos");
-                    if (photos.length !== 6) {
-                        alert("Tienes que subir exactamente 6 fotos");
-                        return;
-                    }
+        const res = await fetch("/crear-eterna", {
+            method: "POST",
+            body: fd
+        });
 
-                    if (giverVideoBlob) {
-                        formData.append("giver_video", giverVideoBlob, "giver.webm");
-                    }
+        const data = await res.json();
 
-                    const res = await fetch("/crear-eterna", {
-                        method: "POST",
-                        body: formData
-                    });
+        let html = `<a href="${data.share_url}" target="_blank">Abrir</a>`;
 
-                    const data = await res.json();
+        if (data.whatsapp_url) {
+            html += `<br><br>
+            <a href="${data.whatsapp_url}" target="_blank"
+            style="padding:12px;background:#25D366;color:white;">
+            WhatsApp
+            </a>`;
+        }
 
-                    if (!res.ok) {
-                        alert(data.detail || "Error al crear la ETERNA");
-                        return;
-                    }
+        html += `<br><br>
+        <a href="/pagar/${data.eterna_id}" target="_blank"
+        style="padding:12px;background:white;color:black;">
+        Pagar
+        </a>`;
 
-                    let html = `
-                        <p>ETERNA creada</p>
-                        <a class="link-btn" href="${data.share_url}" target="_blank">Abrir ETERNA</a>
-                    `;
-
-                    if (data.whatsapp_url) {
-                        html += `
-                            <br><br>
-                            <a class="wa-btn" href="${data.whatsapp_url}" target="_blank">
-                                Enviar por WhatsApp
-                            </a>
-                        `;
-                    }
-
-                    document.getElementById("result").innerHTML = html;
-                } catch (err) {
-                    console.error(err);
-                    alert("Ha ocurrido un error al enviar el formulario");
-                }
-            });
-        </script>
+        result.innerHTML = html;
+    });
+    </script>
 
     </body>
     </html>
@@ -260,7 +150,7 @@ def home():
 # =========================
 
 @app.post("/crear-eterna")
-async def crear_eterna(
+async def crear(
     request: Request,
     customer_name: str = Form(...),
     customer_email: str = Form(...),
@@ -273,8 +163,9 @@ async def crear_eterna(
     giver_video: Optional[UploadFile] = File(None),
     db: Session = Depends(get_db),
 ):
+
     if len(photos) != 6:
-        raise HTTPException(status_code=400, detail="Sube exactamente 6 fotos")
+        raise HTTPException(400, "Sube 6 fotos")
 
     eterna_id = str(uuid.uuid4())
     token = str(uuid.uuid4())
@@ -285,21 +176,14 @@ async def crear_eterna(
     if giver_video:
         await storage.save_uploaded_video(folder, giver_video, "giver")
 
-    customer = Customer(
-        name=customer_name.strip(),
-        email=customer_email.strip()
-    )
+    customer = Customer(name=customer_name, email=customer_email)
     db.add(customer)
     db.commit()
     db.refresh(customer)
 
-    recipient = Recipient(
-        name=recipient_name.strip(),
-        phone=clean_phone(recipient_phone)
-    )
+    recipient = Recipient(name=recipient_name, phone=recipient_phone)
     db.add(recipient)
     db.commit()
-    db.refresh(recipient)
 
     share_url = f"{str(request.base_url).rstrip('/')}/e/{token}"
 
@@ -307,198 +191,143 @@ async def crear_eterna(
         eterna_id=eterna_id,
         customer_id=customer.id,
         recipient_id=recipient.id,
-        phrase1=phrase1.strip(),
-        phrase2=phrase2.strip(),
-        phrase3=phrase3.strip(),
+        phrase1=phrase1,
+        phrase2=phrase2,
+        phrase3=phrase3,
         image_count=6,
         storage_folder=str(folder),
         share_token=token,
-        share_url=share_url
+        share_url=share_url,
+        is_paid=False
     )
 
     db.add(order)
     db.commit()
 
     whatsapp_url = None
-    if recipient.phone:
+    if recipient_phone:
+        phone = recipient_phone.replace("+","").replace(" ","")
         msg = urllib.parse.quote(f"Te han enviado una ETERNA:\n{share_url}")
-        whatsapp_url = f"https://wa.me/{recipient.phone}?text={msg}"
+        whatsapp_url = f"https://wa.me/{phone}?text={msg}"
 
     return {
+        "eterna_id": eterna_id,
         "share_url": share_url,
         "whatsapp_url": whatsapp_url
     }
 
 
 # =========================
-# VER ETERNA + REACCIÓN
+# PAGO STRIPE
+# =========================
+
+@app.get("/pagar/{eterna_id}")
+def pagar(eterna_id: str, db: Session = Depends(get_db)):
+
+    order = db.query(EternaOrder).filter(EternaOrder.eterna_id == eterna_id).first()
+
+    session = stripe.checkout.Session.create(
+        payment_method_types=["card"],
+        line_items=[{
+            "price_data": {
+                "currency": "eur",
+                "product_data": {"name": "ETERNA"},
+                "unit_amount": 1999,
+            },
+            "quantity": 1,
+        }],
+        mode="payment",
+        success_url=order.share_url + "?paid=1",
+        cancel_url=order.share_url,
+    )
+
+    return HTMLResponse(f"<script>window.location='{session.url}'</script>")
+
+
+# =========================
+# VER ETERNA
 # =========================
 
 @app.get("/e/{token}", response_class=HTMLResponse)
-def ver(token: str, db: Session = Depends(get_db)):
+def ver(token: str, paid: int = Query(0), db: Session = Depends(get_db)):
+
     order = db.query(EternaOrder).filter(EternaOrder.share_token == token).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="ETERNA no encontrada")
+
+    if paid == 1:
+        order.is_paid = True
+        db.commit()
+
+    if not order.is_paid:
+        return HTMLResponse(f"""
+        <h2 style="color:white;background:black;padding:40px;">
+        ETERNA bloqueada<br><br>
+        <a href="/pagar/{order.eterna_id}">Pagar</a>
+        </h2>
+        """)
 
     folder = Path(order.storage_folder)
     folder_name = folder.name
 
-    images = []
-    for i in range(1, 7):
-        for ext in [".jpg", ".jpeg", ".png", ".webp"]:
+    imgs = []
+    for i in range(1,7):
+        for ext in [".jpg",".png",".jpeg",".webp"]:
             f = folder / f"foto_{i}{ext}"
             if f.exists():
-                images.append(f"/media/{folder_name}/{f.name}")
+                imgs.append(f"/media/{folder_name}/{f.name}")
                 break
 
-    video_html = ""
-    if (folder / "giver.webm").exists():
-        video_html = f"""
-        <div style="margin:20px 0;">
-            <video controls playsinline style="width:100%;max-width:420px;border-radius:14px;">
-                <source src="/media/{folder_name}/giver.webm" type="video/webm">
-            </video>
-        </div>
-        """
+    giver = ""
+    if (folder/"giver.webm").exists():
+        giver = f"<video controls src='/media/{folder_name}/giver.webm' style='width:100%'></video>"
 
-    phrase1 = html.escape(order.phrase1 or "")
-    phrase2 = html.escape(order.phrase2 or "")
-    phrase3 = html.escape(order.phrase3 or "")
-
-    images_html = "".join(
-        [f'<img src="{img}" style="width:100%;max-width:420px;border-radius:14px;margin:12px 0;">' for img in images]
-    )
+    reaction = ""
+    if (folder/"reaction.webm").exists():
+        reaction = f"<video controls src='/media/{folder_name}/reaction.webm' style='width:100%'></video>"
 
     return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
-        <style>
-            body {{
-                background:black;
-                color:white;
-                text-align:center;
-                font-family:Arial, sans-serif;
-                padding:20px;
-                max-width:500px;
-                margin:auto;
-            }}
-            button {{
-                padding:14px 24px;
-                border:none;
-                border-radius:12px;
-                background:white;
-                color:black;
-                font-weight:bold;
-                cursor:pointer;
-                margin-top:20px;
-            }}
-            #content {{
-                display:none;
-                margin-top:30px;
-            }}
-            #preview {{
-                width:120px;
-                position:fixed;
-                bottom:10px;
-                right:10px;
-                border-radius:12px;
-                background:#111;
-            }}
-            .phrase {{
-                font-size:22px;
-                line-height:1.5;
-                margin:30px 0;
-            }}
-        </style>
-    </head>
-    <body>
+    <html>
+    <body style="background:black;color:white;text-align:center;">
 
-        <h2>Prepárate...</h2>
-        <button id="startBtn" onclick="start()">Comenzar</button>
+    <button onclick="start()">Comenzar</button>
 
-        <div id="content">
-            <p class="phrase">{phrase1}</p>
-            {video_html}
-            {images_html}
-            <p class="phrase">{phrase2}</p>
-            <p class="phrase">{phrase3}</p>
-        </div>
+    <div id="content" style="display:none;">
+    <p>{order.phrase1}</p>
+    {giver}
+    {''.join([f'<img src="{i}" style="width:100%;">' for i in imgs])}
+    <p>{order.phrase2}</p>
+    <p>{order.phrase3}</p>
+    {reaction}
+    </div>
 
-        <video id="preview" autoplay muted playsinline></video>
+    <video id="preview" autoplay muted style="width:120px;position:fixed;bottom:10px;right:10px;"></video>
 
-        <script>
-            let recorder = null;
-            let chunks = [];
-            let stream = null;
+    <script>
+    let r,c=[],s;
 
-            async function start() {{
-                try {{
-                    document.getElementById("startBtn").style.display = "none";
-                    document.getElementById("content").style.display = "block";
+    async function start(){{
+        content.style.display="block";
 
-                    stream = await navigator.mediaDevices.getUserMedia({{
-                        video: {{ facingMode: "user" }},
-                        audio: true
-                    }});
+        s=await navigator.mediaDevices.getUserMedia({{video:true,audio:true}});
+        preview.srcObject=s;
 
-                    const preview = document.getElementById("preview");
-                    preview.srcObject = stream;
+        r=new MediaRecorder(s);
+        r.ondataavailable=e=>c.push(e.data);
+        r.onstop=upload;
+        r.start();
 
-                    recorder = new MediaRecorder(stream);
-                    chunks = [];
+        setTimeout(()=>r.stop(),15000);
+    }}
 
-                    recorder.ondataavailable = (e) => {{
-                        if (e.data && e.data.size > 0) {{
-                            chunks.push(e.data);
-                        }}
-                    }};
+    async function upload(){{
+        const b=new Blob(c);
+        const f=new File([b],"reaction.webm");
+        const fd=new FormData();
+        fd.append("video",f);
 
-                    recorder.onstop = upload;
-                    recorder.start();
-
-                    setTimeout(() => {{
-                        if (recorder && recorder.state !== "inactive") {{
-                            recorder.stop();
-                        }}
-                        if (stream) {{
-                            stream.getTracks().forEach(track => track.stop());
-                        }}
-                    }}, 15000);
-                }} catch (err) {{
-                    console.error(err);
-                    alert("No se pudo iniciar la grabación de la reacción");
-                }}
-            }}
-
-            async function upload() {{
-                try {{
-                    const blob = new Blob(chunks, {{ type: "video/webm" }});
-                    const fd = new FormData();
-                    fd.append("video", blob, "reaction.webm");
-
-                    const res = await fetch("/reaccion/{order.eterna_id}", {{
-                        method: "POST",
-                        body: fd
-                    }});
-
-                    const data = await res.json();
-
-                    if (!res.ok) {{
-                        alert(data.detail || "No se pudo guardar la reacción");
-                        return;
-                    }}
-
-                    alert("Reacción guardada");
-                }} catch (err) {{
-                    console.error(err);
-                    alert("Error al subir la reacción");
-                }}
-            }}
-        </script>
+        await fetch("/reaccion/{order.eterna_id}",{{method:"POST",body:fd}});
+        location.reload();
+    }}
+    </script>
 
     </body>
     </html>
@@ -510,16 +339,8 @@ def ver(token: str, db: Session = Depends(get_db)):
 # =========================
 
 @app.post("/reaccion/{eterna_id}")
-async def reaccion(
-    eterna_id: str,
-    video: UploadFile = File(...),
-    db: Session = Depends(get_db)
-):
+async def reaccion(eterna_id: str, video: UploadFile = File(...), db: Session = Depends(get_db)):
     order = db.query(EternaOrder).filter(EternaOrder.eterna_id == eterna_id).first()
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
-
     folder = Path(order.storage_folder)
     await storage.save_uploaded_video(folder, video, "reaction")
-
     return {"ok": True}
