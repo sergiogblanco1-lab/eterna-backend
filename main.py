@@ -3,7 +3,7 @@ import uuid
 from typing import List
 
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 
 from video_engine import VideoEngine
 
@@ -86,6 +86,7 @@ async def crear_eterna(
     frases = [frase1, frase2, frase3]
     imagenes = []
 
+    # guardar datos
     with open(os.path.join(folder, "datos.txt"), "w", encoding="utf-8") as f:
         f.write(f"nombre={nombre}\n")
         f.write(f"email={email}\n")
@@ -93,10 +94,12 @@ async def crear_eterna(
         f.write(f"nombre_destinatario={nombre_destinatario}\n")
         f.write(f"telefono_destinatario={telefono_destinatario}\n")
 
+    # guardar frases
     with open(os.path.join(folder, "frases.txt"), "w", encoding="utf-8") as f:
         for frase in frases:
             f.write(frase + "\n")
 
+    # guardar imágenes
     for i, foto in enumerate(fotos, start=1):
         extension = os.path.splitext(foto.filename)[1].lower()
         if extension not in [".jpg", ".jpeg", ".png", ".webp"]:
@@ -110,18 +113,22 @@ async def crear_eterna(
 
         imagenes.append(ruta)
 
+    # generar vídeo dentro de la carpeta de esa ETERNA
     video_path = os.path.join(folder, "video.mp4")
 
     try:
-        video_engine.generar_video_eterna(
+        video_generado = video_engine.generar_video_eterna(
             imagenes=imagenes,
             frases=frases,
             output=video_path
         )
+        print("🎬 VIDEO GENERADO EN:", video_generado)
+        print("📁 ESPERADO EN:", os.path.abspath(video_path))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error generando vídeo: {str(e)}")
 
     if not os.path.exists(video_path):
+        print("❌ NO EXISTE TRAS GENERAR:", os.path.abspath(video_path))
         raise HTTPException(status_code=500, detail="El vídeo no se generó")
 
     return {
@@ -141,20 +148,31 @@ async def crear_eterna(
 
 
 @app.get("/video/{eterna_id}")
-def ver_video(eterna_id: str):
-    video_path = os.path.join(STORAGE, eterna_id, "video.mp4")
+def obtener_video(eterna_id: str):
+    ruta = os.path.join(STORAGE, eterna_id, "video.mp4")
+    ruta_absoluta = os.path.abspath(ruta)
 
-    if not os.path.exists(video_path):
-        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
+    print("🔍 BUSCANDO VIDEO EN:", ruta_absoluta)
 
-    return FileResponse(video_path, media_type="video/mp4", filename="video.mp4")
+    if not os.path.exists(ruta):
+        print("❌ NO EXISTE:", ruta_absoluta)
+        return JSONResponse(
+            status_code=404,
+            content={"detail": "Vídeo no encontrado"}
+        )
+
+    return FileResponse(ruta, media_type="video/mp4", filename="video.mp4")
 
 
 @app.get("/preview/{eterna_id}", response_class=HTMLResponse)
 def preview_video(eterna_id: str):
-    video_path = os.path.join(STORAGE, eterna_id, "video.mp4")
+    ruta = os.path.join(STORAGE, eterna_id, "video.mp4")
+    ruta_absoluta = os.path.abspath(ruta)
 
-    if not os.path.exists(video_path):
+    print("🔍 BUSCANDO PREVIEW EN:", ruta_absoluta)
+
+    if not os.path.exists(ruta):
+        print("❌ PREVIEW NO ENCUENTRA VIDEO:", ruta_absoluta)
         raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
     video_url = f"/video/{eterna_id}"
