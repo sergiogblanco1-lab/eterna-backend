@@ -1,7 +1,8 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from typing import Optional
+from typing import List, Optional
 import os
 import uuid
+from pathlib import Path
 
 app = FastAPI()
 
@@ -14,6 +15,23 @@ def home():
     return {"status": "ETERNA OK"}
 
 
+def limpiar_texto(valor: Optional[str]) -> str:
+    if valor is None:
+        return ""
+    return valor.strip()
+
+
+def extension_segura(filename: str) -> str:
+    ext = Path(filename).suffix.lower()
+
+    extensiones_validas = [".jpg", ".jpeg", ".png", ".webp"]
+
+    if ext in extensiones_validas:
+        return ext
+
+    return ".jpg"
+
+
 @app.post("/crear-eterna")
 async def crear_eterna(
     nombre: Optional[str] = Form(None),
@@ -24,20 +42,38 @@ async def crear_eterna(
     frase1: Optional[str] = Form(None),
     frase2: Optional[str] = Form(None),
     frase3: Optional[str] = Form(None),
-    foto1: Optional[UploadFile] = File(None),
-    foto2: Optional[UploadFile] = File(None),
-    foto3: Optional[UploadFile] = File(None),
-    foto4: Optional[UploadFile] = File(None),
-    foto5: Optional[UploadFile] = File(None),
-    foto6: Optional[UploadFile] = File(None),
+    fotos: List[UploadFile] = File([])
 ):
     try:
+        # Limpiar datos
+        nombre = limpiar_texto(nombre)
+        email = limpiar_texto(email)
+        telefono = limpiar_texto(telefono)
+        nombre_destinatario = limpiar_texto(nombre_destinatario)
+        telefono_destinatario = limpiar_texto(telefono_destinatario)
+        frase1 = limpiar_texto(frase1)
+        frase2 = limpiar_texto(frase2)
+        frase3 = limpiar_texto(frase3)
+
+        # Validación básica
+        if len(fotos) == 0:
+            return {
+                "status": "error",
+                "detalle": "No se recibieron fotos"
+            }
+
+        if len(fotos) > 6:
+            return {
+                "status": "error",
+                "detalle": "Solo se permiten hasta 6 fotos"
+            }
+
         eterna_id = str(uuid.uuid4())
         carpeta = os.path.join(STORAGE, eterna_id)
         os.makedirs(carpeta, exist_ok=True)
 
-        # Guardar datos
-        with open(os.path.join(carpeta, "data.txt"), "w") as f:
+        # Guardar datos del pedido
+        with open(os.path.join(carpeta, "data.txt"), "w", encoding="utf-8") as f:
             f.write(f"nombre: {nombre}\n")
             f.write(f"email: {email}\n")
             f.write(f"telefono: {telefono}\n")
@@ -47,17 +83,42 @@ async def crear_eterna(
             f.write(f"frase2: {frase2}\n")
             f.write(f"frase3: {frase3}\n")
 
-        fotos = [foto1, foto2, foto3, foto4, foto5, foto6]
+        fotos_guardadas = []
 
+        # Guardar fotos
         for i, foto in enumerate(fotos):
-            if foto:
-                contenido = await foto.read()
-                with open(os.path.join(carpeta, f"foto{i+1}.jpg"), "wb") as f:
-                    f.write(contenido)
+            if not foto.filename:
+                continue
+
+            contenido = await foto.read()
+
+            if not contenido:
+                continue
+
+            ext = extension_segura(foto.filename)
+            nombre_archivo = f"foto{i+1}{ext}"
+            ruta_foto = os.path.join(carpeta, nombre_archivo)
+
+            with open(ruta_foto, "wb") as f:
+                f.write(contenido)
+
+            fotos_guardadas.append(nombre_archivo)
+
+        if len(fotos_guardadas) == 0:
+            return {
+                "status": "error",
+                "detalle": "Las fotos llegaron vacías o no válidas"
+            }
+
+        # Aquí luego meteremos Stripe de verdad
+        payment_url = f"/pagar/{eterna_id}"
 
         return {
             "status": "ok",
-            "eterna_id": eterna_id
+            "eterna_id": eterna_id,
+            "fotos_recibidas": len(fotos_guardadas),
+            "fotos_guardadas": fotos_guardadas,
+            "payment_url": payment_url
         }
 
     except Exception as e:
