@@ -25,7 +25,7 @@ video_engine = VideoEngine()
 # Asegura carpeta storage
 Path("storage").mkdir(parents=True, exist_ok=True)
 
-# Sirve archivos guardados
+# Sirve archivos
 app.mount("/media", StaticFiles(directory="storage"), name="media")
 
 
@@ -46,197 +46,98 @@ def home(request: Request):
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>ETERNA</title>
         <style>
-            * {{
-                box-sizing: border-box;
-            }}
             body {{
                 margin: 0;
-                font-family: Arial, sans-serif;
+                font-family: Arial;
                 background: #0b0b0b;
                 color: white;
             }}
             .wrap {{
-                max-width: 760px;
-                margin: 0 auto;
-                padding: 40px 20px 80px;
-            }}
-            .brand {{
-                text-align: center;
-                margin-bottom: 30px;
-            }}
-            .brand h1 {{
-                font-size: 48px;
-                margin: 0;
-                letter-spacing: 6px;
-            }}
-            .brand p {{
-                color: #cfcfcf;
-                margin-top: 10px;
-                font-size: 18px;
-            }}
-            .card {{
-                background: #141414;
-                border: 1px solid #222;
-                border-radius: 24px;
-                padding: 24px;
-                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
-            }}
-            label {{
-                display: block;
-                margin: 16px 0 8px;
-                font-weight: bold;
+                max-width: 700px;
+                margin: auto;
+                padding: 30px;
             }}
             input, textarea {{
                 width: 100%;
-                padding: 14px;
-                border-radius: 14px;
+                margin-top: 10px;
+                margin-bottom: 20px;
+                padding: 12px;
+                border-radius: 10px;
                 border: 1px solid #333;
-                background: #0f0f0f;
-                color: white;
-                font-size: 16px;
-            }}
-            textarea {{
-                min-height: 90px;
-                resize: vertical;
-            }}
-            input[type="file"] {{
-                padding: 10px;
                 background: #111;
+                color: white;
             }}
             button {{
                 width: 100%;
-                margin-top: 24px;
-                padding: 16px;
+                padding: 15px;
+                border-radius: 10px;
                 border: none;
-                border-radius: 16px;
                 background: white;
                 color: black;
-                font-size: 17px;
                 font-weight: bold;
                 cursor: pointer;
             }}
-            button:hover {{
-                opacity: 0.92;
-            }}
             .result {{
-                margin-top: 24px;
-                padding: 16px;
-                border-radius: 16px;
-                background: #101820;
-                border: 1px solid #213240;
-                display: none;
-                white-space: pre-wrap;
-            }}
-            .small {{
-                font-size: 14px;
-                color: #b9b9b9;
-                margin-top: 10px;
-            }}
-            a {{
-                color: #9fd3ff;
+                margin-top: 20px;
+                padding: 15px;
+                background: #111;
+                border-radius: 10px;
             }}
         </style>
     </head>
     <body>
         <div class="wrap">
-            <div class="brand">
-                <h1>ETERNA</h1>
-                <p>Transforma 6 fotos y 3 frases en un recuerdo emocional.</p>
-            </div>
+            <h1>ETERNA</h1>
 
-            <div class="card">
-                <form id="eternaForm">
-                    <label>Tu nombre</label>
-                    <input type="text" name="customer_name" required />
+            <form id="form">
+                <input name="customer_name" placeholder="Tu nombre" required />
+                <input name="customer_email" placeholder="Tu email" required />
 
-                    <label>Tu email</label>
-                    <input type="email" name="customer_email" required />
+                <input name="recipient_name" placeholder="Nombre destinatario" required />
+                <input name="recipient_phone" placeholder="Teléfono (opcional)" />
+                <input name="recipient_email" placeholder="Email (opcional)" />
 
-                    <label>Nombre de la persona que recibe la ETERNA</label>
-                    <input type="text" name="recipient_name" required />
+                <textarea name="phrase1" placeholder="Frase 1" required></textarea>
+                <textarea name="phrase2" placeholder="Frase 2" required></textarea>
+                <textarea name="phrase3" placeholder="Frase 3" required></textarea>
 
-                    <label>Teléfono del destinatario (opcional)</label>
-                    <input type="text" name="recipient_phone" />
+                <input type="file" name="photos" multiple accept="image/*" required />
 
-                    <label>Email del destinatario (opcional)</label>
-                    <input type="email" name="recipient_email" />
+                <button>Crear mi ETERNA</button>
+            </form>
 
-                    <label>Frase 1</label>
-                    <textarea name="phrase1" required></textarea>
-
-                    <label>Frase 2</label>
-                    <textarea name="phrase2" required></textarea>
-
-                    <label>Frase 3</label>
-                    <textarea name="phrase3" required></textarea>
-
-                    <label>Sube entre 1 y 6 fotos</label>
-                    <input type="file" name="photos" accept="image/*" multiple required />
-
-                    <div class="small">Consejo: usa fotos verticales o bonitas para que el vídeo quede más emotivo.</div>
-
-                    <button type="submit">Crear mi ETERNA</button>
-                </form>
-
-                <div class="result" id="resultBox"></div>
-            </div>
+            <div class="result" id="result"></div>
         </div>
 
         <script>
-            const form = document.getElementById("eternaForm");
-            const resultBox = document.getElementById("resultBox");
+            const form = document.getElementById("form");
+            const result = document.getElementById("result");
 
-            form.addEventListener("submit", async (e) => {{
+            form.onsubmit = async (e) => {{
                 e.preventDefault();
 
-                resultBox.style.display = "block";
-                resultBox.textContent = "Creando tu ETERNA...";
+                result.innerText = "Creando...";
 
-                const formData = new FormData();
+                const data = new FormData(form);
 
-                formData.append("customer_name", form.customer_name.value);
-                formData.append("customer_email", form.customer_email.value);
-                formData.append("recipient_name", form.recipient_name.value);
-                formData.append("recipient_phone", form.recipient_phone.value);
-                formData.append("recipient_email", form.recipient_email.value);
-                formData.append("phrase1", form.phrase1.value);
-                formData.append("phrase2", form.phrase2.value);
-                formData.append("phrase3", form.phrase3.value);
-
-                const files = form.photos.files;
+                const files = form.querySelector('input[type="file"]').files;
                 for (let i = 0; i < files.length; i++) {{
-                    formData.append("photos", files[i]);
+                    data.append("photos", files[i]);
                 }}
 
                 try {{
                     const res = await fetch("/crear-eterna", {{
                         method: "POST",
-                        body: formData
+                        body: data
                     }});
 
-                    const data = await res.json();
+                    const json = await res.json();
 
-                    if (!res.ok) {{
-                        resultBox.textContent = "Error: " + (data.detail || "No se pudo crear la ETERNA.");
-                        return;
-                    }}
-
-                    let text = "ETERNA creada correctamente.\\n\\n";
-                    text += "ID: " + data.eterna_id + "\\n";
-                    if (data.video_url) {{
-                        const fullVideoUrl = "{base_url}" + data.video_url;
-                        text += "Vídeo: " + fullVideoUrl + "\\n";
-                        text += "\\nAbre este enlace para ver el vídeo.";
-                    }}
-
-                    resultBox.innerHTML = text.replace(
-                        /(https?:\\/\\/[^\\s]+)/g,
-                        '<a href="$1" target="_blank">$1</a>'
-                    );
-                }} catch (err) {{
-                    resultBox.textContent = "Error inesperado al crear la ETERNA.";
+                    result.innerText = JSON.stringify(json, null, 2);
+                }} catch {{
+                    result.innerText = "Error inesperado al crear la ETERNA";
                 }}
-            }});
+            }};
         </script>
     </body>
     </html>
@@ -257,42 +158,35 @@ async def crear_eterna(
     photos: List[UploadFile] = File(...),
     db: Session = Depends(get_db),
 ):
-    if not photos or len(photos) == 0:
-        raise HTTPException(status_code=400, detail="Debes subir al menos 1 foto.")
+    # VALIDACIÓN CLARA (como Carrd)
+    if len(photos) < 1:
+        raise HTTPException(status_code=400, detail="Sube al menos 1 foto")
 
     if len(photos) > 6:
-        raise HTTPException(status_code=400, detail="Solo se permiten hasta 6 fotos.")
+        raise HTTPException(status_code=400, detail="Máximo 6 fotos")
 
     eterna_id = str(uuid.uuid4())
-    eterna_folder = storage.create_eterna_folder(eterna_id)
+    folder = storage.create_eterna_folder(eterna_id)
 
-    phrases = [phrase1.strip(), phrase2.strip(), phrase3.strip()]
-    storage.save_phrases(eterna_folder, phrases)
+    phrases = [phrase1, phrase2, phrase3]
+    storage.save_phrases(folder, phrases)
 
-    try:
-        saved_images = await storage.save_uploaded_images(eterna_folder, photos)
-        output_video_path = storage.get_video_output_path(eterna_folder)
+    # GUARDAR IMÁGENES
+    saved_images = await storage.save_uploaded_images(folder, photos)
 
-        video_engine.generate_video(
-            image_paths=saved_images,
-            phrases=phrases,
-            output_path=output_video_path
-        )
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generando el vídeo: {str(e)}")
+    # 🔴 VIDEO DESACTIVADO TEMPORALMENTE
+    output_video_path = None
 
-    customer = Customer(
-        name=customer_name.strip(),
-        email=customer_email.strip()
-    )
+    # GUARDAR DB
+    customer = Customer(name=customer_name, email=customer_email)
     db.add(customer)
     db.commit()
     db.refresh(customer)
 
     recipient = Recipient(
-        name=recipient_name.strip(),
-        phone=recipient_phone.strip() or None,
-        email=recipient_email.strip() or None
+        name=recipient_name,
+        phone=recipient_phone,
+        email=recipient_email
     )
     db.add(recipient)
     db.commit()
@@ -302,24 +196,22 @@ async def crear_eterna(
         eterna_id=eterna_id,
         customer_id=customer.id,
         recipient_id=recipient.id,
-        phrase1=phrases[0],
-        phrase2=phrases[1],
-        phrase3=phrases[2],
+        phrase1=phrase1,
+        phrase2=phrase2,
+        phrase3=phrase3,
         image_count=len(saved_images),
-        storage_folder=str(eterna_folder),
-        video_path=output_video_path,
-        status="completed"
+        storage_folder=str(folder),
+        video_path=None,
+        status="created"
     )
     db.add(order)
     db.commit()
-
-    video_url = storage.get_public_video_url(eterna_id)
 
     return EternaCreateResponse(
         ok=True,
         eterna_id=eterna_id,
         message="ETERNA creada correctamente",
-        video_url=video_url
+        video_url=None
     )
 
 
@@ -328,23 +220,11 @@ def get_eterna(eterna_id: str, db: Session = Depends(get_db)):
     order = db.query(EternaOrder).filter(EternaOrder.eterna_id == eterna_id).first()
 
     if not order:
-        raise HTTPException(status_code=404, detail="ETERNA no encontrada.")
+        raise HTTPException(status_code=404, detail="No encontrada")
 
-    return JSONResponse({
-        "ok": True,
-        "eterna_id": order.eterna_id,
-        "status": order.status,
-        "customer_name": order.customer.name if order.customer else None,
-        "customer_email": order.customer.email if order.customer else None,
-        "recipient_name": order.recipient.name if order.recipient else None,
-        "recipient_phone": order.recipient.phone if order.recipient else None,
-        "recipient_email": order.recipient.email if order.recipient else None,
-        "phrases": [
-            order.phrase1,
-            order.phrase2,
-            order.phrase3
-        ],
-        "image_count": order.image_count,
-        "video_url": f"/media/{order.eterna_id}/video.mp4" if order.video_path else None,
-        "created_at": order.created_at.isoformat() if order.created_at else None,
-    })
+    return {
+        "id": order.eterna_id,
+        "phrases": [order.phrase1, order.phrase2, order.phrase3],
+        "images": order.image_count,
+        "status": order.status
+    }
