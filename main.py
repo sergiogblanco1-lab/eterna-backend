@@ -2,28 +2,23 @@ from fastapi import FastAPI, UploadFile, File, Form
 from fastapi.responses import RedirectResponse
 from typing import List, Optional
 import uuid
+import os
+from pathlib import Path
 
-from storage_service import StorageService
+app = FastAPI()
 
-app = FastAPI(title="ETERNA backend")
-
-storage = StorageService()
-
-
-def limpiar_texto(valor: Optional[str]) -> str:
-    if valor is None:
-        return ""
-    return valor.strip()
+STORAGE = "storage"
+os.makedirs(STORAGE, exist_ok=True)
 
 
 @app.get("/")
 def home():
-    return {
-        "status": "ETERNA OK",
-        "version": "v2_redirect_gracias"
-    }
+    return {"status": "ETERNA OK"}
 
 
+# =========================
+# CREAR ETERNA
+# =========================
 @app.post("/crear-eterna")
 async def crear_eterna(
     nombre: Optional[str] = Form(None),
@@ -34,64 +29,56 @@ async def crear_eterna(
     frase1: Optional[str] = Form(None),
     frase2: Optional[str] = Form(None),
     frase3: Optional[str] = Form(None),
-    fotos: List[UploadFile] = File(...)
+    fotos: List[UploadFile] = File([])
 ):
-    try:
-        nombre = limpiar_texto(nombre)
-        email = limpiar_texto(email)
-        telefono = limpiar_texto(telefono)
-        nombre_destinatario = limpiar_texto(nombre_destinatario)
-        telefono_destinatario = limpiar_texto(telefono_destinatario)
-        frase1 = limpiar_texto(frase1)
-        frase2 = limpiar_texto(frase2)
-        frase3 = limpiar_texto(frase3)
+    eterna_id = str(uuid.uuid4())
 
-        if len(fotos) == 0:
-            return {
-                "status": "error",
-                "detalle": "Debes subir al menos 1 foto"
-            }
+    carpeta = Path(f"{STORAGE}/{eterna_id}")
+    carpeta.mkdir(parents=True, exist_ok=True)
 
-        if len(fotos) > 6:
-            return {
-                "status": "error",
-                "detalle": "Máximo 6 fotos"
-            }
+    # guardar datos
+    with open(carpeta / "data.txt", "w") as f:
+        f.write(f"nombre: {nombre}\n")
+        f.write(f"email: {email}\n")
+        f.write(f"telefono: {telefono}\n")
+        f.write(f"destinatario: {nombre_destinatario}\n")
+        f.write(f"telefono_dest: {telefono_destinatario}\n")
+        f.write(f"frase1: {frase1}\n")
+        f.write(f"frase2: {frase2}\n")
+        f.write(f"frase3: {frase3}\n")
 
-        eterna_id = str(uuid.uuid4())
-        carpeta = storage.crear_carpeta_eterna(eterna_id)
+    # guardar fotos
+    for i, foto in enumerate(fotos):
+        contenido = await foto.read()
+        with open(carpeta / f"foto{i+1}.jpg", "wb") as f:
+            f.write(contenido)
 
-        storage.guardar_datos(
-            carpeta=carpeta,
-            datos={
-                "nombre": nombre,
-                "email": email,
-                "telefono": telefono,
-                "destinatario": nombre_destinatario,
-                "telefono_dest": telefono_destinatario,
-                "frase1": frase1,
-                "frase2": frase2,
-                "frase3": frase3,
-            }
-        )
+    # link para el destinatario
+    link = f"https://eterna-play.carrd.co/?id={eterna_id}"
 
-        storage.guardar_estado_inicial(carpeta)
+    return {
+        "status": "ok",
+        "eterna_id": eterna_id,
+        "link": link
+    }
 
-        fotos_guardadas = await storage.guardar_fotos(carpeta, fotos)
 
-        if len(fotos_guardadas) == 0:
-            return {
-                "status": "error",
-                "detalle": "Las fotos no son válidas o llegaron vacías"
-            }
+# =========================
+# SUBIR REACCIÓN
+# =========================
+@app.post("/subir-reaccion")
+async def subir_reaccion(
+    eterna_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    carpeta = Path(f"{STORAGE}/{eterna_id}")
+    carpeta.mkdir(parents=True, exist_ok=True)
 
-        return RedirectResponse(
-            url="https://eterna-test.carrd.co/#gracias",
-            status_code=303
-        )
+    ruta = carpeta / "reaccion.webm"
 
-    except Exception as e:
-        return {
-            "status": "error",
-            "detalle": str(e)
-        }
+    contenido = await file.read()
+
+    with open(ruta, "wb") as f:
+        f.write(contenido)
+
+    return {"status": "ok"}
