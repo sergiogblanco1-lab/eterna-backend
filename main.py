@@ -36,13 +36,10 @@ def extension_segura(nombre_archivo: str) -> str:
 def home():
     return {
         "status": "ETERNA OK",
-        "version": "v3_flujo_unificado"
+        "version": "v4_reaccion"
     }
 
 
-# =========================
-# CREAR ETERNA
-# =========================
 @app.post("/crear-eterna")
 async def crear_eterna(
     nombre: Optional[str] = Form(None),
@@ -66,22 +63,15 @@ async def crear_eterna(
         frase3 = limpiar_texto(frase3)
 
         if len(fotos) == 0:
-            return {
-                "status": "error",
-                "detalle": "Debes subir al menos 1 foto"
-            }
+            return {"status": "error", "detalle": "Debes subir al menos 1 foto"}
 
         if len(fotos) > 6:
-            return {
-                "status": "error",
-                "detalle": "Máximo 6 fotos"
-            }
+            return {"status": "error", "detalle": "Máximo 6 fotos"}
 
         eterna_id = str(uuid.uuid4())
         carpeta = STORAGE / eterna_id
         carpeta.mkdir(parents=True, exist_ok=True)
 
-        # guardar datos
         with open(carpeta / "data.txt", "w", encoding="utf-8") as f:
             f.write(f"nombre: {nombre}\n")
             f.write(f"email: {email}\n")
@@ -92,59 +82,27 @@ async def crear_eterna(
             f.write(f"frase2: {frase2}\n")
             f.write(f"frase3: {frase3}\n")
 
-        # guardar estado
-        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
-            f.write("estado: creada\n")
-            f.write("reaccion: no_grabada\n")
-            f.write("video: no_generado\n")
-
-        # guardar fotos
-        fotos_guardadas = []
-
         for i, foto in enumerate(fotos):
-            if not foto.filename:
-                continue
-
             contenido = await foto.read()
             if not contenido:
                 continue
 
-            ext = extension_segura(foto.filename)
-            nombre_archivo = f"foto{i+1}{ext}"
-            ruta = carpeta / nombre_archivo
-
-            with open(ruta, "wb") as f:
+            ext = extension_segura(foto.filename or "")
+            with open(carpeta / f"foto{i+1}{ext}", "wb") as f:
                 f.write(contenido)
 
-            fotos_guardadas.append(nombre_archivo)
-
-        if len(fotos_guardadas) == 0:
-            return {
-                "status": "error",
-                "detalle": "No se pudieron guardar las fotos"
-            }
-
-        # CAMBIA ESTA URL CUANDO TENGAS LA PÁGINA FINAL DEL DESTINATARIO
         link_destinatario = f"https://eterna-test.carrd.co/?id={eterna_id}"
 
         return {
             "status": "ok",
             "eterna_id": eterna_id,
-            "fotos_recibidas": len(fotos_guardadas),
-            "fotos_guardadas": fotos_guardadas,
             "link": link_destinatario
         }
 
     except Exception as e:
-        return {
-            "status": "error",
-            "detalle": str(e)
-        }
+        return {"status": "error", "detalle": str(e)}
 
 
-# =========================
-# SUBIR REACCIÓN
-# =========================
 @app.post("/subir-reaccion")
 async def subir_reaccion(
     eterna_id: str = Form(...),
@@ -154,30 +112,19 @@ async def subir_reaccion(
         eterna_id = limpiar_texto(eterna_id)
 
         if not eterna_id:
-            return {
-                "status": "error",
-                "detalle": "Falta eterna_id"
-            }
+            return {"status": "error", "detalle": "Falta eterna_id"}
 
         carpeta = STORAGE / eterna_id
         carpeta.mkdir(parents=True, exist_ok=True)
 
-        ruta = carpeta / "reaccion.webm"
         contenido = await file.read()
 
         if not contenido:
-            return {
-                "status": "error",
-                "detalle": "Archivo vacío"
-            }
+            return {"status": "error", "detalle": "Archivo vacío"}
 
+        ruta = carpeta / "reaccion.webm"
         with open(ruta, "wb") as f:
             f.write(contenido)
-
-        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
-            f.write("estado: reaccion_recibida\n")
-            f.write("reaccion: grabada\n")
-            f.write("video: no_generado\n")
 
         return {
             "status": "ok",
@@ -186,7 +133,4 @@ async def subir_reaccion(
         }
 
     except Exception as e:
-        return {
-            "status": "error",
-            "detalle": str(e)
-        }
+        return {"status": "error", "detalle": str(e)}
