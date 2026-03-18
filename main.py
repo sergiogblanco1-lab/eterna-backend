@@ -1,117 +1,102 @@
-import uuid
-import urllib.parse
-from pathlib import Path
+from fastapi import FastAPI, UploadFile, File, Form
 from typing import List, Optional
-import os
-import stripe
+import uuid
 
-from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request, Query
-from fastapi.responses import HTMLResponse
-from fastapi.staticfiles import StaticFiles
-from sqlalchemy.orm import Session
-
-from database import Base, engine, get_db
-from models import Customer, Recipient, EternaOrder
 from storage_service import StorageService
 
-
-stripe.api_key = os.getenv("STRIPE_SECRET_KEY")
-
-app = FastAPI()
-
-Base.metadata.create_all(bind=engine)
+app = FastAPI(title="ETERNA backend")
 
 storage = StorageService()
 
-app.mount("/media", StaticFiles(directory=str(storage.media_dir)), name="media")
+
+def limpiar_texto(valor: Optional[str]) -> str:
+    if valor is None:
+        return ""
+    return valor.strip()
 
 
-# =========================
-# HOME
-# =========================
-
-@app.get("/", response_class=HTMLResponse)
+@app.get("/")
 def home():
-    return "<h1>ETERNA OK</h1>"
-
-
-# =========================
-# CREAR
-# =========================
-
-@app.post("/crear-eterna")
-async def crear(
-    request: Request,
-    customer_name: str = Form(...),
-    customer_email: str = Form(...),
-    recipient_name: str = Form(...),
-    recipient_phone: Optional[str] = Form(None),
-    phrase1: str = Form(...),
-    phrase2: str = Form(...),
-    phrase3: str = Form(...),
-    photos: List[UploadFile] = File(...),
-    db: Session = Depends(get_db),
-):
-
-    if len(photos) != 6:
-        raise HTTPException(400)
-
-    eterna_id = str(uuid.uuid4())
-    token = str(uuid.uuid4())
-
-    folder = storage.create_eterna_folder(eterna_id)
-    await storage.save_uploaded_images(folder, photos)
-
-    customer = Customer(name=customer_name, email=customer_email)
-    db.add(customer)
-    db.commit()
-    db.refresh(customer)
-
-    recipient = Recipient(name=recipient_name, phone=recipient_phone)
-    db.add(recipient)
-    db.commit()
-
-    share_url = f"{str(request.base_url).rstrip('/')}/e/{token}"
-
-    order = EternaOrder(
-        eterna_id=eterna_id,
-        customer_id=customer.id,
-        recipient_id=recipient.id,
-        phrase1=phrase1,
-        phrase2=phrase2,
-        phrase3=phrase3,
-        storage_folder=str(folder),
-        share_token=token,
-        share_url=share_url,
-        is_paid=False
-    )
-
-    db.add(order)
-    db.commit()
-
-    whatsapp_url = None
-    if recipient_phone:
-        phone = recipient_phone.replace("+","").replace(" ","")
-        msg = urllib.parse.quote(f"Te han enviado una ETERNA:\n{share_url}")
-        whatsapp_url = f"https://wa.me/{phone}?text={msg}"
-
     return {
-        "eterna_id": eterna_id,
-        "share_url": share_url,
-        "whatsapp_url": whatsapp_url
+        "status": "ETERNA OK",
+        "version": "v1_sin_video"
     }
 
 
-# =========================
-# VER
-# =========================
+@app.post("/crear-eterna")
+async def crear_eterna(
+    nombre: Optional[str] = Form(None),
+    email: Optional[str] = Form(None),
+    telefono: Optional[str] = Form(None),
+    nombre_destinatario: Optional[str] = Form(None),
+    telefono_destinatario: Optional[str] = Form(None),
+    frase1: Optional[str] = Form(None),
+    frase2: Optional[str] = Form(None),
+    frase3: Optional[str] = Form(None),
+    fotos: List[UploadFile] = File(...)
+):
+    try:
+        nombre = limpiar_texto(nombre)
+        email = limpiar_texto(email)
+        telefono = limpiar_texto(telefono)
+        nombre_destinatario = limpiar_texto(nombre_destinatario)
+        telefono_destinatario = limpiar_texto(telefono_destinatario)
+        frase1 = limpiar_texto(frase1)
+        frase2 = limpiar_texto(frase2)
+        frase3 = limpiar_texto(frase3)
 
-@app.get("/e/{token}", response_class=HTMLResponse)
-def ver(token: str, db: Session = Depends(get_db)):
+        if len(fotos) == 0:
+            return {
+                "status": "error",
+                "detalle": "Debes subir al menos 1 foto"
+            }
 
-    order = db.query(EternaOrder).filter(EternaOrder.share_token == token).first()
+        if len(fotos) > 6:
+            return {
+                "status": "error",
+                "detalle": "Máximo 6 fotos"
+            }
 
-    if not order:
-        raise HTTPException(404)
+        eterna_id = str(uuid.uuid4())
+        carpeta = storage.crear_carpeta_eterna(eterna_id)
 
-    return f"<h1>{order.phrase1}</h1><p>{order.phrase2}</p><p>{order.phrase3}</p>"
+        storage.guardar_datos(
+            carpeta=carpeta,
+            datos={
+                "nombre": nombre,
+                "email": email,
+                "telefono": telefono,
+                "destinatario": nombre_destinatario,
+                "telefono_dest": telefono_destinatario,
+                "frase1": frase1,
+                "frase2": frase2,
+                "frase3": frase3,
+            }
+        )
+
+        storage.guardar_estado_inicial(carpeta)
+
+        fotos_guardadas = await storage.guardar_fotos(carpeta, fotos)
+
+        if len(fotos_guardadas) == 0:
+            return {
+                "status": "error",
+                "detalle": "Las fotos no son válidas o llegaron vacías"
+            }
+
+        payment_url = f"/pagar/{eterna_id}"
+
+        return {
+            "status": "ok",
+            "eterna_id": eterna_id,
+            "fotos_recibidas": len(fotos_guardadas),
+            "fotos_guardadas": fotos_guardadas,
+            "payment_url": payment_url,
+            "video_generado": False
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "detalle": str(e)
+        }
