@@ -6,8 +6,18 @@ class HealthResponse(BaseModel):
     service: str
 
 
-class EternaCreateResponse(BaseModel):
+class EternaCreationResponse(BaseModel):
     ok: bool
     eterna_id: str
+    share_url: str
     message: str
-    video_url: str | None = None
+
+
+class ReactionUploadResponse(BaseModel):
+    ok: bool
+    message: str
+    reaction_url: str
+
+
+class ErrorResponse(BaseModel):
+    detail: str
