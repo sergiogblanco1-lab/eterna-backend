@@ -19,7 +19,7 @@ def limpiar_texto(valor: Optional[str]) -> str:
 def home():
     return {
         "status": "ETERNA OK",
-        "version": "v1_sin_video"
+        "version": "v1_sin_video_sin_stripe"
     }
 
 
