@@ -1,664 +1,350 @@
 import os
 import uuid
-from typing import List, Optional
+from pathlib import Path
+from typing import List
 
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Query
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException, Request
+from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from sqlalchemy.orm import Session
 
+from database import Base, engine, get_db
+from models import Customer, Recipient, EternaOrder
+from schemas import HealthResponse, EternaCreateResponse
+from storage_service import StorageService
 from video_engine import VideoEngine
 
-app = FastAPI(title="ETERNA LAB")
 
-STORAGE = "storage"
-TEMP_STORAGE = os.path.join(STORAGE, "temp")
+app = FastAPI(title="ETERNA backend")
 
-os.makedirs(STORAGE, exist_ok=True)
-os.makedirs(TEMP_STORAGE, exist_ok=True)
+Base.metadata.create_all(bind=engine)
 
+storage = StorageService()
 video_engine = VideoEngine()
 
+# Asegura carpeta storage
+Path("storage").mkdir(parents=True, exist_ok=True)
 
-def safe_text(value: str) -> str:
-    return (value or "").replace("\x00", "").strip()
+# Sirve archivos guardados
+app.mount("/media", StaticFiles(directory="storage"), name="media")
+
+
+@app.get("/health", response_model=HealthResponse)
+def health():
+    return HealthResponse(status="ok", service="ETERNA backend")
 
 
 @app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
-        <style>
-            body {
-                background: #0b0b0b;
-                color: white;
-                font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
-                margin: 0;
-                text-align: center;
-                padding: 20px;
-            }
-            .box {
-                max-width: 720px;
-            }
-            h1 {
-                font-size: 42px;
-                margin-bottom: 10px;
-            }
-            p {
-                font-size: 18px;
-                color: #cccccc;
-            }
-            a {
-                color: white;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>ETERNA backend activo</h1>
-            <p>La API está funcionando.</p>
-            <p>Prueba la documentación en <a href="/docs">/docs</a></p>
-        </div>
-    </body>
-    </html>
-    """
-
-
-@app.post("/crear-eterna")
-async def crear_eterna(
-    nombre: str = Form(...),
-    email: str = Form(...),
-    telefono_regalante: str = Form(""),
-    nombre_destinatario: str = Form(""),
-    telefono_destinatario: str = Form(""),
-    frase1: str = Form(...),
-    frase2: str = Form(...),
-    frase3: str = Form(...),
-    incluye_reaccion: bool = Form(True),
-    regalo_activo: bool = Form(False),
-    regalo_amount_eur: float = Form(0.0),
-    regalo_mensaje: str = Form(""),
-    fotos: List[UploadFile] = File(...),
-    video_regalante: Optional[UploadFile] = File(None),
-):
-    if len(fotos) != 6:
-        raise HTTPException(status_code=400, detail="Debes subir exactamente 6 fotos")
-
-    nombre = safe_text(nombre)
-    email = safe_text(email)
-    telefono_regalante = safe_text(telefono_regalante)
-    nombre_destinatario = safe_text(nombre_destinatario)
-    telefono_destinatario = safe_text(telefono_destinatario)
-    frases = [safe_text(frase1), safe_text(frase2), safe_text(frase3)]
-    regalo_mensaje = safe_text(regalo_mensaje)
-
-    if not nombre:
-        raise HTTPException(status_code=400, detail="Falta el nombre")
-    if "@" not in email:
-        raise HTTPException(status_code=400, detail="Email inválido")
-    if any(len(f) < 2 for f in frases):
-        raise HTTPException(status_code=400, detail="Las 3 frases deben tener contenido")
-    if regalo_amount_eur < 0:
-        raise HTTPException(status_code=400, detail="El regalo económico no puede ser negativo")
-
-    eterna_id = str(uuid.uuid4())
-    folder = os.path.join(TEMP_STORAGE, eterna_id)
-    os.makedirs(folder, exist_ok=True)
-
-    imagenes = []
-
-    with open(os.path.join(folder, "datos.txt"), "w", encoding="utf-8") as f:
-        f.write(f"nombre={nombre}\n")
-        f.write(f"email={email}\n")
-        f.write(f"telefono_regalante={telefono_regalante}\n")
-        f.write(f"nombre_destinatario={nombre_destinatario}\n")
-        f.write(f"telefono_destinatario={telefono_destinatario}\n")
-        f.write(f"incluye_reaccion={str(incluye_reaccion).lower()}\n")
-        f.write(f"regalo_activo={str(regalo_activo).lower()}\n")
-        f.write(f"regalo_amount_eur={regalo_amount_eur}\n")
-        f.write(f"regalo_mensaje={regalo_mensaje}\n")
-
-    with open(os.path.join(folder, "frases.txt"), "w", encoding="utf-8") as f:
-        for frase in frases:
-            f.write(frase + "\n")
-
-    for i, foto in enumerate(fotos, start=1):
-        extension = os.path.splitext(foto.filename or "")[1].lower()
-        if extension not in [".jpg", ".jpeg", ".png", ".webp"]:
-            extension = ".jpg"
-
-        ruta = os.path.join(folder, f"foto{i}{extension}")
-        contenido = await foto.read()
-
-        if not contenido:
-            raise HTTPException(status_code=400, detail=f"La foto {i} está vacía")
-
-        with open(ruta, "wb") as f:
-            f.write(contenido)
-
-        imagenes.append(ruta)
-
-    video_regalante_path = None
-    if video_regalante and video_regalante.filename:
-        ext_video = os.path.splitext(video_regalante.filename)[1].lower()
-        if ext_video not in [".mp4", ".mov", ".webm", ".m4v"]:
-            ext_video = ".mp4"
-
-        video_regalante_path = os.path.join(folder, f"video_regalante{ext_video}")
-        contenido_video = await video_regalante.read()
-
-        if not contenido_video:
-            raise HTTPException(status_code=400, detail="El vídeo del regalante está vacío")
-
-        with open(video_regalante_path, "wb") as f:
-            f.write(contenido_video)
-
-    video_path = os.path.join(folder, "video.mp4")
-
-    try:
-        video_generado = video_engine.generar_video_eterna(
-            imagenes=imagenes,
-            frases=frases,
-            output=video_path,
-            video_regalante=video_regalante_path,
-            regalo_activo=regalo_activo,
-            regalo_amount_eur=regalo_amount_eur,
-            regalo_mensaje=regalo_mensaje,
-            nombre_destinatario=nombre_destinatario,
-            nombre_remitente=nombre,
-        )
-        print("🎬 VIDEO GENERADO EN:", video_generado)
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error generando vídeo: {str(e)}")
-
-    if not os.path.exists(video_path):
-        raise HTTPException(status_code=500, detail="El vídeo no se generó")
-
-    return {
-        "ok": True,
-        "eterna_id": eterna_id,
-        "nombre": nombre,
-        "email": email,
-        "telefono_regalante": telefono_regalante,
-        "nombre_destinatario": nombre_destinatario,
-        "telefono_destinatario": telefono_destinatario,
-        "frases": frases,
-        "total_fotos": len(imagenes),
-        "incluye_reaccion": incluye_reaccion,
-        "regalo_activo": regalo_activo,
-        "regalo_amount_eur": regalo_amount_eur,
-        "video_url": f"/video/{eterna_id}",
-        "preview_url": f"/preview/{eterna_id}",
-        "message": "ETERNA creada correctamente"
-    }
-
-
-@app.get("/video/{eterna_id}")
-def obtener_video(eterna_id: str):
-    ruta = os.path.join(TEMP_STORAGE, eterna_id, "video.mp4")
-
-    if not os.path.exists(ruta):
-        return JSONResponse(
-            status_code=404,
-            content={"detail": "Vídeo no encontrado"}
-        )
-
-    return FileResponse(ruta, media_type="video/mp4", filename="video.mp4")
-
-
-@app.post("/reaccion/{eterna_id}")
-async def guardar_reaccion(
-    eterna_id: str,
-    reaction_file: UploadFile = File(...),
-    permiso_publicar: bool = Form(False),
-):
-    folder = os.path.join(TEMP_STORAGE, eterna_id)
-    if not os.path.exists(folder):
-        raise HTTPException(status_code=404, detail="ETERNA no encontrada")
-
-    ext = os.path.splitext(reaction_file.filename or "")[1].lower()
-    if ext not in [".webm", ".mp4", ".mov", ".m4v"]:
-        ext = ".webm"
-
-    ruta = os.path.join(folder, f"reaccion{ext}")
-    contenido = await reaction_file.read()
-
-    if not contenido:
-        raise HTTPException(status_code=400, detail="La reacción está vacía")
-
-    with open(ruta, "wb") as f:
-        f.write(contenido)
-
-    with open(os.path.join(folder, "reaccion_info.txt"), "w", encoding="utf-8") as f:
-        f.write(f"permiso_publicar={str(permiso_publicar).lower()}\n")
-
-    return {
-        "ok": True,
-        "message": "Reacción guardada correctamente",
-        "reaction_url": f"/reaccion/{eterna_id}/ver"
-    }
-
-
-@app.get("/reaccion/{eterna_id}/ver")
-def ver_reaccion(eterna_id: str):
-    folder = os.path.join(TEMP_STORAGE, eterna_id)
-    if not os.path.exists(folder):
-        raise HTTPException(status_code=404, detail="ETERNA no encontrada")
-
-    for nombre in os.listdir(folder):
-        if nombre.startswith("reaccion."):
-            ruta = os.path.join(folder, nombre)
-            ext = os.path.splitext(nombre)[1].lower()
-
-            media_type = "video/webm"
-            if ext in [".mp4", ".m4v"]:
-                media_type = "video/mp4"
-            elif ext == ".mov":
-                media_type = "video/quicktime"
-
-            return FileResponse(ruta, media_type=media_type, filename=nombre)
-
-    raise HTTPException(status_code=404, detail="Reacción no encontrada")
-
-
-@app.get("/preview/{eterna_id}", response_class=HTMLResponse)
-def preview_video(
-    eterna_id: str,
-    autoplay: bool = Query(True),
-):
-    ruta = os.path.join(TEMP_STORAGE, eterna_id, "video.mp4")
-    datos_path = os.path.join(TEMP_STORAGE, eterna_id, "datos.txt")
-
-    if not os.path.exists(ruta):
-        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
-
-    incluye_reaccion = True
-    regalo_activo = False
-    regalo_amount_eur = "0"
-    regalo_mensaje = ""
-
-    if os.path.exists(datos_path):
-        with open(datos_path, "r", encoding="utf-8") as f:
-            contenido = f.read()
-            incluye_reaccion = "incluye_reaccion=true" in contenido
-            regalo_activo = "regalo_activo=true" in contenido
-
-            for linea in contenido.splitlines():
-                if linea.startswith("regalo_amount_eur="):
-                    regalo_amount_eur = linea.split("=", 1)[1].strip()
-                if linea.startswith("regalo_mensaje="):
-                    regalo_mensaje = linea.split("=", 1)[1].strip()
-
-    video_url = f"/video/{eterna_id}"
-    autoplay_attr = "autoplay" if autoplay else ""
+def home(request: Request):
+    base_url = str(request.base_url).rstrip("/")
 
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>ETERNA</title>
         <style>
+            * {{
+                box-sizing: border-box;
+            }}
             body {{
                 margin: 0;
+                font-family: Arial, sans-serif;
                 background: #0b0b0b;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                min-height: 100vh;
                 color: white;
-                font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
-                flex-direction: column;
-                padding: 20px;
             }}
             .wrap {{
-                width: 100%;
-                max-width: 430px;
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 40px 20px 80px;
+            }}
+            .brand {{
                 text-align: center;
+                margin-bottom: 30px;
+            }}
+            .brand h1 {{
+                font-size: 48px;
+                margin: 0;
+                letter-spacing: 6px;
+            }}
+            .brand p {{
+                color: #cfcfcf;
+                margin-top: 10px;
+                font-size: 18px;
             }}
             .card {{
-                width: 100%;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255,255,255,0.08);
+                background: #141414;
+                border: 1px solid #222;
                 border-radius: 24px;
-                padding: 20px;
-                box-sizing: border-box;
-                box-shadow: 0 0 30px rgba(255,255,255,0.05);
+                padding: 24px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.35);
             }}
-            video {{
-                width: 100%;
-                border-radius: 18px;
-                background: black;
-            }}
-            h1 {{
-                margin-bottom: 14px;
-                font-size: 24px;
-            }}
-            p {{
-                color: #cccccc;
-                line-height: 1.5;
-            }}
-            .btn {{
+            label {{
                 display: block;
+                margin: 16px 0 8px;
+                font-weight: bold;
+            }}
+            input, textarea {{
                 width: 100%;
-                padding: 15px;
-                border-radius: 16px;
-                border: none;
-                cursor: pointer;
-                font-weight: 700;
-                margin-top: 12px;
+                padding: 14px;
+                border-radius: 14px;
+                border: 1px solid #333;
+                background: #0f0f0f;
+                color: white;
                 font-size: 16px;
             }}
-            .btn-primary {{
-                background: white;
-                color: #111;
+            textarea {{
+                min-height: 90px;
+                resize: vertical;
             }}
-            .btn-secondary {{
-                background: #1a1a1a;
-                color: white;
-                border: 1px solid rgba(255,255,255,0.08);
+            input[type="file"] {{
+                padding: 10px;
+                background: #111;
             }}
-            .hidden {{
-                display: none;
-            }}
-            .muted {{
-                font-size: 14px;
-                color: #aaaaaa;
-            }}
-            .box {{
-                margin-top: 16px;
-                padding: 14px;
+            button {{
+                width: 100%;
+                margin-top: 24px;
+                padding: 16px;
+                border: none;
                 border-radius: 16px;
-                background: rgba(255,255,255,0.03);
-                border: 1px solid rgba(255,255,255,0.08);
+                background: white;
+                color: black;
+                font-size: 17px;
+                font-weight: bold;
+                cursor: pointer;
+            }}
+            button:hover {{
+                opacity: 0.92;
+            }}
+            .result {{
+                margin-top: 24px;
+                padding: 16px;
+                border-radius: 16px;
+                background: #101820;
+                border: 1px solid #213240;
+                display: none;
+                white-space: pre-wrap;
+            }}
+            .small {{
+                font-size: 14px;
+                color: #b9b9b9;
+                margin-top: 10px;
+            }}
+            a {{
+                color: #9fd3ff;
             }}
         </style>
     </head>
     <body>
         <div class="wrap">
+            <div class="brand">
+                <h1>ETERNA</h1>
+                <p>Transforma 6 fotos y 3 frases en un recuerdo emocional.</p>
+            </div>
+
             <div class="card">
-                <div id="introScreen">
-                    <h1>Alguien ha preparado algo para ti</h1>
-                    <p>Hay momentos que merecen quedarse para siempre.</p>
-                    <button class="btn btn-primary" id="btnStart">Ver mi ETERNA</button>
-                </div>
+                <form id="eternaForm">
+                    <label>Tu nombre</label>
+                    <input type="text" name="customer_name" required />
 
-                <div id="prepareScreen" class="hidden">
-                    <h1>Antes de empezar…</h1>
-                    <p>Vívelo con calma. Puede ser un momento especial.</p>
-                    {"<p class='muted'>Puedes activar la cámara ahora. Solo decidirás al final si quieres guardar tu reacción.</p>" if incluye_reaccion else ""}
-                    {"<button class='btn btn-primary' id='btnCamera'>Activar cámara y continuar</button>" if incluye_reaccion else ""}
-                    <button class="btn btn-secondary" id="btnContinue">Continuar</button>
-                </div>
+                    <label>Tu email</label>
+                    <input type="email" name="customer_email" required />
 
-                <div id="cameraBox" class="hidden box">
-                    <p class="muted">Cámara preparada</p>
-                    <video id="cameraPreview" autoplay muted playsinline></video>
-                </div>
+                    <label>Nombre de la persona que recibe la ETERNA</label>
+                    <input type="text" name="recipient_name" required />
 
-                <div id="videoBox" class="hidden">
-                    <video id="eternaVideo" controls playsinline preload="auto" {autoplay_attr}>
-                        <source src="{video_url}" type="video/mp4">
-                        Tu navegador no soporta vídeo.
-                    </video>
-                </div>
+                    <label>Teléfono del destinatario (opcional)</label>
+                    <input type="text" name="recipient_phone" />
 
-                <div id="pauseBox" class="hidden box">
-                    <p>...</p>
-                </div>
+                    <label>Email del destinatario (opcional)</label>
+                    <input type="email" name="recipient_email" />
 
-                <div id="afterVideo" class="hidden">
-                    <h1>Este momento también puede quedarse para siempre</h1>
-                    <p id="afterText">Gracias por vivirlo.</p>
+                    <label>Frase 1</label>
+                    <textarea name="phrase1" required></textarea>
 
-                    <div id="giftBox" class="hidden box">
-                        <p><strong>Y además…</strong></p>
-                        <p>{regalo_amount_eur}€ para ti</p>
-                        {f"<p class='muted'>{regalo_mensaje}</p>" if regalo_mensaje else ""}
-                    </div>
+                    <label>Frase 2</label>
+                    <textarea name="phrase2" required></textarea>
 
-                    <div id="reactionReveal" class="hidden">
-                        <button class="btn btn-primary" id="btnShowSaveReaction">Guardar mi reacción</button>
-                        <button class="btn btn-secondary" id="btnSkipReaction">Ahora no</button>
-                    </div>
+                    <label>Frase 3</label>
+                    <textarea name="phrase3" required></textarea>
 
-                    <div id="permissionBox" class="hidden">
-                        <label class="muted" style="display:block;margin:14px 0;">
-                            <input type="checkbox" id="permisoPublicar" />
-                            Doy permiso para que ETERNA use mi reacción con fines promocionales
-                        </label>
-                        <button class="btn btn-primary" id="btnUploadReaction">Enviar reacción</button>
-                    </div>
+                    <label>Sube entre 1 y 6 fotos</label>
+                    <input type="file" name="photos" accept="image/*" multiple required />
 
-                    <div id="shareBox" class="hidden">
-                        <button class="btn btn-secondary" id="btnCopyLink">Copiar enlace</button>
-                        <a class="btn btn-secondary" id="btnWhatsapp" target="_blank" style="text-decoration:none;box-sizing:border-box;">Compartir por WhatsApp</a>
-                    </div>
-                </div>
+                    <div class="small">Consejo: usa fotos verticales o bonitas para que el vídeo quede más emotivo.</div>
+
+                    <button type="submit">Crear mi ETERNA</button>
+                </form>
+
+                <div class="result" id="resultBox"></div>
             </div>
         </div>
 
         <script>
-        const allowReaction = {str(incluye_reaccion).lower()};
-        const giftActive = {str(regalo_activo).lower()};
-        const shareUrl = window.location.href;
+            const form = document.getElementById("eternaForm");
+            const resultBox = document.getElementById("resultBox");
 
-        const introScreen = document.getElementById('introScreen');
-        const prepareScreen = document.getElementById('prepareScreen');
-        const cameraBox = document.getElementById('cameraBox');
-        const cameraPreview = document.getElementById('cameraPreview');
-        const videoBox = document.getElementById('videoBox');
-        const videoEl = document.getElementById('eternaVideo');
-        const pauseBox = document.getElementById('pauseBox');
-        const afterVideo = document.getElementById('afterVideo');
-        const giftBox = document.getElementById('giftBox');
-        const reactionReveal = document.getElementById('reactionReveal');
-        const permissionBox = document.getElementById('permissionBox');
-        const btnStart = document.getElementById('btnStart');
-        const btnCamera = document.getElementById('btnCamera');
-        const btnContinue = document.getElementById('btnContinue');
-        const btnShowSaveReaction = document.getElementById('btnShowSaveReaction');
-        const btnSkipReaction = document.getElementById('btnSkipReaction');
-        const btnUploadReaction = document.getElementById('btnUploadReaction');
-        const permisoPublicar = document.getElementById('permisoPublicar');
-        const btnCopyLink = document.getElementById('btnCopyLink');
-        const btnWhatsapp = document.getElementById('btnWhatsapp');
+            form.addEventListener("submit", async (e) => {{
+                e.preventDefault();
 
-        let stream = null;
-        let recorder = null;
-        let chunks = [];
-        let recordedBlob = null;
-        let cameraArmed = false;
-
-        function stopStream() {{
-            if (stream) {{
-                stream.getTracks().forEach(track => track.stop());
-                stream = null;
-            }}
-            if (cameraPreview) {{
-                cameraPreview.srcObject = null;
-            }}
-        }}
-
-        async function armCamera() {{
-            if (!navigator.mediaDevices || !window.MediaRecorder) {{
-                return false;
-            }}
-            try {{
-                stream = await navigator.mediaDevices.getUserMedia({{
-                    video: {{ facingMode: "user" }},
-                    audio: true
-                }});
-
-                cameraPreview.srcObject = stream;
-                cameraBox.classList.remove('hidden');
-
-                let mimeType = "";
-                if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {{
-                    mimeType = "video/webm;codecs=vp9,opus";
-                }} else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
-                    mimeType = "video/webm;codecs=vp8,opus";
-                }} else if (MediaRecorder.isTypeSupported("video/webm")) {{
-                    mimeType = "video/webm";
-                }}
-
-                recorder = mimeType ? new MediaRecorder(stream, {{ mimeType }}) : new MediaRecorder(stream);
-                chunks = [];
-
-                recorder.ondataavailable = (e) => {{
-                    if (e.data && e.data.size > 0) chunks.push(e.data);
-                }};
-
-                recorder.onstop = () => {{
-                    recordedBlob = new Blob(chunks, {{ type: recorder.mimeType || "video/webm" }});
-                    stopStream();
-                }};
-
-                cameraArmed = true;
-                return true;
-            }} catch (err) {{
-                console.error(err);
-                return false;
-            }}
-        }}
-
-        function startPlayback() {{
-            prepareScreen.classList.add('hidden');
-            videoBox.classList.remove('hidden');
-
-            if (cameraArmed && recorder) {{
-                try {{
-                    recorder.start();
-                }} catch (err) {{
-                    console.error(err);
-                }}
-            }}
-
-            videoEl.play().catch(() => {{}});
-        }}
-
-        btnStart.addEventListener('click', () => {{
-            introScreen.classList.add('hidden');
-            prepareScreen.classList.remove('hidden');
-        }});
-
-        if (btnCamera) {{
-            btnCamera.addEventListener('click', async () => {{
-                await armCamera();
-                startPlayback();
-            }});
-        }}
-
-        btnContinue.addEventListener('click', () => {{
-            startPlayback();
-        }});
-
-        videoEl.addEventListener('ended', () => {{
-            if (cameraArmed && recorder && recorder.state !== 'inactive') {{
-                try {{
-                    recorder.stop();
-                }} catch (err) {{
-                    console.error(err);
-                }}
-            }}
-
-            pauseBox.classList.remove('hidden');
-
-            setTimeout(() => {{
-                pauseBox.classList.add('hidden');
-                afterVideo.classList.remove('hidden');
-
-                if (giftActive) {{
-                    giftBox.classList.remove('hidden');
-                }}
-
-                if (allowReaction && recordedBlob) {{
-                    reactionReveal.classList.remove('hidden');
-                }} else {{
-                    prepareShare();
-                }}
-
-                afterVideo.scrollIntoView({{ behavior: 'smooth', block: 'start' }});
-            }}, 1200);
-        }});
-
-        if (btnShowSaveReaction) {{
-            btnShowSaveReaction.addEventListener('click', () => {{
-                reactionReveal.classList.add('hidden');
-                permissionBox.classList.remove('hidden');
-            }});
-        }}
-
-        if (btnSkipReaction) {{
-            btnSkipReaction.addEventListener('click', () => {{
-                reactionReveal.classList.add('hidden');
-                prepareShare();
-            }});
-        }}
-
-        if (btnUploadReaction) {{
-            btnUploadReaction.addEventListener('click', async () => {{
-                if (!recordedBlob) {{
-                    alert('No hay reacción grabada.');
-                    return;
-                }}
-
-                btnUploadReaction.disabled = true;
-                btnUploadReaction.textContent = 'Enviando reacción…';
-
-                const ext = recordedBlob.type.includes('mp4') ? 'mp4' : 'webm';
-                const file = new File([recordedBlob], `reaction.${{ext}}`, {{ type: recordedBlob.type || 'video/webm' }});
+                resultBox.style.display = "block";
+                resultBox.textContent = "Creando tu ETERNA...";
 
                 const formData = new FormData();
-                formData.append('reaction_file', file);
-                formData.append('permiso_publicar', permisoPublicar.checked ? 'true' : 'false');
+
+                formData.append("customer_name", form.customer_name.value);
+                formData.append("customer_email", form.customer_email.value);
+                formData.append("recipient_name", form.recipient_name.value);
+                formData.append("recipient_phone", form.recipient_phone.value);
+                formData.append("recipient_email", form.recipient_email.value);
+                formData.append("phrase1", form.phrase1.value);
+                formData.append("phrase2", form.phrase2.value);
+                formData.append("phrase3", form.phrase3.value);
+
+                const files = form.photos.files;
+                for (let i = 0; i < files.length; i++) {{
+                    formData.append("photos", files[i]);
+                }}
 
                 try {{
-                    const res = await fetch('/reaccion/{eterna_id}', {{
-                        method: 'POST',
+                    const res = await fetch("/crear-eterna", {{
+                        method: "POST",
                         body: formData
                     }});
 
                     const data = await res.json();
-                    if (!res.ok) throw new Error(data.detail || 'No se pudo subir la reacción');
 
-                    permissionBox.classList.add('hidden');
-                    prepareShare();
+                    if (!res.ok) {{
+                        resultBox.textContent = "Error: " + (data.detail || "No se pudo crear la ETERNA.");
+                        return;
+                    }}
+
+                    let text = "ETERNA creada correctamente.\\n\\n";
+                    text += "ID: " + data.eterna_id + "\\n";
+                    if (data.video_url) {{
+                        const fullVideoUrl = "{base_url}" + data.video_url;
+                        text += "Vídeo: " + fullVideoUrl + "\\n";
+                        text += "\\nAbre este enlace para ver el vídeo.";
+                    }}
+
+                    resultBox.innerHTML = text.replace(
+                        /(https?:\\/\\/[^\\s]+)/g,
+                        '<a href="$1" target="_blank">$1</a>'
+                    );
                 }} catch (err) {{
-                    console.error(err);
-                    btnUploadReaction.disabled = false;
-                    btnUploadReaction.textContent = 'Enviar reacción';
-                    alert(err.message || 'Error al subir la reacción');
+                    resultBox.textContent = "Error inesperado al crear la ETERNA.";
                 }}
             }});
-        }}
-
-        function prepareShare() {{
-            const shareBox = document.getElementById('shareBox');
-            shareBox.classList.remove('hidden');
-
-            const text = encodeURIComponent("Quiero compartir contigo este momento de ETERNA");
-            const url = encodeURIComponent(shareUrl);
-            btnWhatsapp.href = `https://wa.me/?text=${{text}}%20${{url}}`;
-        }}
-
-        btnCopyLink.addEventListener('click', async () => {{
-            try {{
-                await navigator.clipboard.writeText(shareUrl);
-                btnCopyLink.textContent = 'Enlace copiado';
-            }} catch (err) {{
-                alert('No se pudo copiar el enlace');
-            }}
-        }});
         </script>
     </body>
     </html>
     """
+
+
+@app.post("/crear-eterna", response_model=EternaCreateResponse)
+async def crear_eterna(
+    request: Request,
+    customer_name: str = Form(...),
+    customer_email: str = Form(...),
+    recipient_name: str = Form(...),
+    recipient_phone: str = Form(""),
+    recipient_email: str = Form(""),
+    phrase1: str = Form(...),
+    phrase2: str = Form(...),
+    phrase3: str = Form(...),
+    photos: List[UploadFile] = File(...),
+    db: Session = Depends(get_db),
+):
+    if not photos or len(photos) == 0:
+        raise HTTPException(status_code=400, detail="Debes subir al menos 1 foto.")
+
+    if len(photos) > 6:
+        raise HTTPException(status_code=400, detail="Solo se permiten hasta 6 fotos.")
+
+    eterna_id = str(uuid.uuid4())
+    eterna_folder = storage.create_eterna_folder(eterna_id)
+
+    phrases = [phrase1.strip(), phrase2.strip(), phrase3.strip()]
+    storage.save_phrases(eterna_folder, phrases)
+
+    try:
+        saved_images = await storage.save_uploaded_images(eterna_folder, photos)
+        output_video_path = storage.get_video_output_path(eterna_folder)
+
+        video_engine.generate_video(
+            image_paths=saved_images,
+            phrases=phrases,
+            output_path=output_video_path
+        )
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error generando el vídeo: {str(e)}")
+
+    customer = Customer(
+        name=customer_name.strip(),
+        email=customer_email.strip()
+    )
+    db.add(customer)
+    db.commit()
+    db.refresh(customer)
+
+    recipient = Recipient(
+        name=recipient_name.strip(),
+        phone=recipient_phone.strip() or None,
+        email=recipient_email.strip() or None
+    )
+    db.add(recipient)
+    db.commit()
+    db.refresh(recipient)
+
+    order = EternaOrder(
+        eterna_id=eterna_id,
+        customer_id=customer.id,
+        recipient_id=recipient.id,
+        phrase1=phrases[0],
+        phrase2=phrases[1],
+        phrase3=phrases[2],
+        image_count=len(saved_images),
+        storage_folder=str(eterna_folder),
+        video_path=output_video_path,
+        status="completed"
+    )
+    db.add(order)
+    db.commit()
+
+    video_url = storage.get_public_video_url(eterna_id)
+
+    return EternaCreateResponse(
+        ok=True,
+        eterna_id=eterna_id,
+        message="ETERNA creada correctamente",
+        video_url=video_url
+    )
+
+
+@app.get("/eterna/{eterna_id}")
+def get_eterna(eterna_id: str, db: Session = Depends(get_db)):
+    order = db.query(EternaOrder).filter(EternaOrder.eterna_id == eterna_id).first()
+
+    if not order:
+        raise HTTPException(status_code=404, detail="ETERNA no encontrada.")
+
+    return JSONResponse({
+        "ok": True,
+        "eterna_id": order.eterna_id,
+        "status": order.status,
+        "customer_name": order.customer.name if order.customer else None,
+        "customer_email": order.customer.email if order.customer else None,
+        "recipient_name": order.recipient.name if order.recipient else None,
+        "recipient_phone": order.recipient.phone if order.recipient else None,
+        "recipient_email": order.recipient.email if order.recipient else None,
+        "phrases": [
+            order.phrase1,
+            order.phrase2,
+            order.phrase3
+        ],
+        "image_count": order.image_count,
+        "video_url": f"/media/{order.eterna_id}/video.mp4" if order.video_path else None,
+        "created_at": order.created_at.isoformat() if order.created_at else None,
+    })
