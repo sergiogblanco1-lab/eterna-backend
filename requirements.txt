@@ -4,3 +4,4 @@ python-multipart==0.0.9
 SQLAlchemy==2.0.25
 pydantic==2.6.1
 stripe==12.0.1
+stripe==8.0.0
