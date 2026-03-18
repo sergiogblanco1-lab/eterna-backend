@@ -1,31 +1,69 @@
 from pathlib import Path
-from typing import List
+from typing import List, Dict
 from fastapi import UploadFile
 
 
 class StorageService:
+    def __init__(self, base_dir: Path | None = None):
+        if base_dir is None:
+            base_dir = Path(__file__).resolve().parent
 
-    def __init__(self):
-        self.base = Path("storage")
-        self.base.mkdir(exist_ok=True)
+        self.base_dir = base_dir
+        self.storage_dir = self.base_dir / "storage"
+        self.storage_dir.mkdir(parents=True, exist_ok=True)
 
-        self.media_dir = self.base
-        
+    def crear_carpeta_eterna(self, eterna_id: str) -> Path:
+        carpeta = self.storage_dir / eterna_id
+        carpeta.mkdir(parents=True, exist_ok=True)
+        return carpeta
 
-    def create_eterna_folder(self, eterna_id: str):
-        folder = self.base / eterna_id
-        folder.mkdir(exist_ok=True)
-        return folder
+    def guardar_datos(self, carpeta: Path, datos: Dict[str, str]) -> Path:
+        ruta = carpeta / "data.txt"
 
+        with open(ruta, "w", encoding="utf-8") as f:
+            for clave, valor in datos.items():
+                f.write(f"{clave}: {valor}\n")
 
-    async def save_uploaded_images(self, folder, photos: List[UploadFile]):
-        for i, photo in enumerate(photos, start=1):
-            content = await photo.read()
-            with open(folder / f"foto_{i}.jpg", "wb") as f:
-                f.write(content)
+        return ruta
 
+    def guardar_estado_inicial(self, carpeta: Path) -> Path:
+        ruta = carpeta / "status.txt"
 
-    async def save_uploaded_video(self, folder, video: UploadFile, name: str):
-        content = await video.read()
-        with open(folder / f"{name}.webm", "wb") as f:
-            f.write(content)
+        with open(ruta, "w", encoding="utf-8") as f:
+            f.write("estado: pendiente_pago\n")
+            f.write("video: no_generado\n")
+            f.write("reaccion: no_grabada\n")
+
+        return ruta
+
+    async def guardar_fotos(self, carpeta: Path, fotos: List[UploadFile]) -> List[str]:
+        fotos_guardadas = []
+
+        for i, foto in enumerate(fotos):
+            if not foto.filename:
+                continue
+
+            contenido = await foto.read()
+
+            if not contenido:
+                continue
+
+            ext = self.extension_segura(foto.filename)
+            nombre_archivo = f"foto{i+1}{ext}"
+            ruta = carpeta / nombre_archivo
+
+            with open(ruta, "wb") as f:
+                f.write(contenido)
+
+            fotos_guardadas.append(nombre_archivo)
+
+        return fotos_guardadas
+
+    def extension_segura(self, filename: str) -> str:
+        ext = Path(filename).suffix.lower()
+        extensiones_validas = [".jpg", ".jpeg", ".png", ".webp"]
+
+        if ext in extensiones_validas:
+            return ext
+
+        return ".jpg"
