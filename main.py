@@ -10,7 +10,10 @@ from video_engine import VideoEngine
 app = FastAPI(title="ETERNA Backend")
 
 STORAGE = "storage"
+TEMP_STORAGE = os.path.join(STORAGE, "temp")
+
 os.makedirs(STORAGE, exist_ok=True)
+os.makedirs(TEMP_STORAGE, exist_ok=True)
 
 video_engine = VideoEngine()
 
@@ -80,7 +83,7 @@ async def crear_eterna(
         raise HTTPException(status_code=400, detail="Debes subir al menos una foto")
 
     eterna_id = str(uuid.uuid4())
-    folder = os.path.join(STORAGE, eterna_id)
+    folder = os.path.join(TEMP_STORAGE, eterna_id)
     os.makedirs(folder, exist_ok=True)
 
     frases = [frase1, frase2, frase3]
@@ -145,7 +148,7 @@ async def crear_eterna(
 
 @app.get("/video/{eterna_id}")
 def obtener_video(eterna_id: str):
-    ruta = os.path.join(STORAGE, eterna_id, "video.mp4")
+    ruta = os.path.join(TEMP_STORAGE, eterna_id, "video.mp4")
     print("🔍 BUSCANDO VIDEO EN:", ruta)
 
     if not os.path.exists(ruta):
@@ -160,7 +163,7 @@ def obtener_video(eterna_id: str):
 
 @app.get("/preview/{eterna_id}", response_class=HTMLResponse)
 def preview_video(eterna_id: str):
-    ruta = os.path.join(STORAGE, eterna_id, "video.mp4")
+    ruta = os.path.join(TEMP_STORAGE, eterna_id, "video.mp4")
     print("🔍 BUSCANDO PREVIEW EN:", ruta)
 
     if not os.path.exists(ruta):
