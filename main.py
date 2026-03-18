@@ -1,19 +1,43 @@
 from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import RedirectResponse
+from fastapi.middleware.cors import CORSMiddleware
 from typing import List, Optional
 import uuid
-import os
 from pathlib import Path
 
-app = FastAPI()
+app = FastAPI(title="ETERNA backend")
 
-STORAGE = "storage"
-os.makedirs(STORAGE, exist_ok=True)
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+STORAGE = Path("storage")
+STORAGE.mkdir(parents=True, exist_ok=True)
+
+
+def limpiar_texto(valor: Optional[str]) -> str:
+    if valor is None:
+        return ""
+    return valor.strip()
+
+
+def extension_segura(nombre_archivo: str) -> str:
+    ext = Path(nombre_archivo).suffix.lower()
+    validas = [".jpg", ".jpeg", ".png", ".webp"]
+    if ext in validas:
+        return ext
+    return ".jpg"
 
 
 @app.get("/")
 def home():
-    return {"status": "ETERNA OK"}
+    return {
+        "status": "ETERNA OK",
+        "version": "v3_flujo_unificado"
+    }
 
 
 # =========================
@@ -29,38 +53,93 @@ async def crear_eterna(
     frase1: Optional[str] = Form(None),
     frase2: Optional[str] = Form(None),
     frase3: Optional[str] = Form(None),
-    fotos: List[UploadFile] = File([])
+    fotos: List[UploadFile] = File(...)
 ):
-    eterna_id = str(uuid.uuid4())
+    try:
+        nombre = limpiar_texto(nombre)
+        email = limpiar_texto(email)
+        telefono = limpiar_texto(telefono)
+        nombre_destinatario = limpiar_texto(nombre_destinatario)
+        telefono_destinatario = limpiar_texto(telefono_destinatario)
+        frase1 = limpiar_texto(frase1)
+        frase2 = limpiar_texto(frase2)
+        frase3 = limpiar_texto(frase3)
 
-    carpeta = Path(f"{STORAGE}/{eterna_id}")
-    carpeta.mkdir(parents=True, exist_ok=True)
+        if len(fotos) == 0:
+            return {
+                "status": "error",
+                "detalle": "Debes subir al menos 1 foto"
+            }
 
-    # guardar datos
-    with open(carpeta / "data.txt", "w") as f:
-        f.write(f"nombre: {nombre}\n")
-        f.write(f"email: {email}\n")
-        f.write(f"telefono: {telefono}\n")
-        f.write(f"destinatario: {nombre_destinatario}\n")
-        f.write(f"telefono_dest: {telefono_destinatario}\n")
-        f.write(f"frase1: {frase1}\n")
-        f.write(f"frase2: {frase2}\n")
-        f.write(f"frase3: {frase3}\n")
+        if len(fotos) > 6:
+            return {
+                "status": "error",
+                "detalle": "Máximo 6 fotos"
+            }
 
-    # guardar fotos
-    for i, foto in enumerate(fotos):
-        contenido = await foto.read()
-        with open(carpeta / f"foto{i+1}.jpg", "wb") as f:
-            f.write(contenido)
+        eterna_id = str(uuid.uuid4())
+        carpeta = STORAGE / eterna_id
+        carpeta.mkdir(parents=True, exist_ok=True)
 
-    # link para el destinatario
-    link = f"https://eterna-play.carrd.co/?id={eterna_id}"
+        # guardar datos
+        with open(carpeta / "data.txt", "w", encoding="utf-8") as f:
+            f.write(f"nombre: {nombre}\n")
+            f.write(f"email: {email}\n")
+            f.write(f"telefono: {telefono}\n")
+            f.write(f"destinatario: {nombre_destinatario}\n")
+            f.write(f"telefono_dest: {telefono_destinatario}\n")
+            f.write(f"frase1: {frase1}\n")
+            f.write(f"frase2: {frase2}\n")
+            f.write(f"frase3: {frase3}\n")
 
-    return {
-        "status": "ok",
-        "eterna_id": eterna_id,
-        "link": link
-    }
+        # guardar estado
+        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
+            f.write("estado: creada\n")
+            f.write("reaccion: no_grabada\n")
+            f.write("video: no_generado\n")
+
+        # guardar fotos
+        fotos_guardadas = []
+
+        for i, foto in enumerate(fotos):
+            if not foto.filename:
+                continue
+
+            contenido = await foto.read()
+            if not contenido:
+                continue
+
+            ext = extension_segura(foto.filename)
+            nombre_archivo = f"foto{i+1}{ext}"
+            ruta = carpeta / nombre_archivo
+
+            with open(ruta, "wb") as f:
+                f.write(contenido)
+
+            fotos_guardadas.append(nombre_archivo)
+
+        if len(fotos_guardadas) == 0:
+            return {
+                "status": "error",
+                "detalle": "No se pudieron guardar las fotos"
+            }
+
+        # CAMBIA ESTA URL CUANDO TENGAS LA PÁGINA FINAL DEL DESTINATARIO
+        link_destinatario = f"https://eterna-test.carrd.co/?id={eterna_id}"
+
+        return {
+            "status": "ok",
+            "eterna_id": eterna_id,
+            "fotos_recibidas": len(fotos_guardadas),
+            "fotos_guardadas": fotos_guardadas,
+            "link": link_destinatario
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "detalle": str(e)
+        }
 
 
 # =========================
@@ -71,14 +150,43 @@ async def subir_reaccion(
     eterna_id: str = Form(...),
     file: UploadFile = File(...)
 ):
-    carpeta = Path(f"{STORAGE}/{eterna_id}")
-    carpeta.mkdir(parents=True, exist_ok=True)
+    try:
+        eterna_id = limpiar_texto(eterna_id)
 
-    ruta = carpeta / "reaccion.webm"
+        if not eterna_id:
+            return {
+                "status": "error",
+                "detalle": "Falta eterna_id"
+            }
 
-    contenido = await file.read()
+        carpeta = STORAGE / eterna_id
+        carpeta.mkdir(parents=True, exist_ok=True)
 
-    with open(ruta, "wb") as f:
-        f.write(contenido)
+        ruta = carpeta / "reaccion.webm"
+        contenido = await file.read()
 
-    return {"status": "ok"}
+        if not contenido:
+            return {
+                "status": "error",
+                "detalle": "Archivo vacío"
+            }
+
+        with open(ruta, "wb") as f:
+            f.write(contenido)
+
+        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
+            f.write("estado: reaccion_recibida\n")
+            f.write("reaccion: grabada\n")
+            f.write("video: no_generado\n")
+
+        return {
+            "status": "ok",
+            "eterna_id": eterna_id,
+            "archivo": "reaccion.webm"
+        }
+
+    except Exception as e:
+        return {
+            "status": "error",
+            "detalle": str(e)
+        }
