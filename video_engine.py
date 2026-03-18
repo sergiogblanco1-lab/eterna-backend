@@ -1,202 +1,151 @@
 import os
 import subprocess
-from typing import List, Optional
-from PIL import Image, ImageOps
+from pathlib import Path
+from typing import List
+
+from PIL import Image, ImageOps, ImageFilter
 
 
 class VideoEngine:
-    def generar_video_eterna(
+    def __init__(self, temp_dir: str = "temp_frames"):
+        self.temp_dir = Path(temp_dir)
+        self.temp_dir.mkdir(parents=True, exist_ok=True)
+
+    def _prepare_image_for_video(
         self,
-        imagenes: List[str],
-        frases: List[str],
-        output: str,
-        video_regalante: Optional[str] = None,
-        regalo_activo: bool = False,
-        regalo_amount_eur: float = 0.0,
-        regalo_mensaje: str = "",
-        nombre_destinatario: str = "",
-        nombre_remitente: str = "",
-    ):
-        imagenes = [img for img in imagenes if os.path.exists(img)]
+        input_path: str,
+        output_path: str,
+        size: tuple[int, int] = (720, 1280)
+    ) -> None:
+        target_w, target_h = size
 
-        if not imagenes:
-            raise ValueError("No hay imágenes válidas")
-
-        if len(imagenes) != 6:
-            raise ValueError("ETERNA necesita exactamente 6 imágenes")
-
-        output_dir = os.path.dirname(output)
-        os.makedirs(output_dir, exist_ok=True)
-
-        normalizadas_dir = os.path.join(output_dir, "normalizadas")
-        os.makedirs(normalizadas_dir, exist_ok=True)
-
-        imagenes_normalizadas = []
-        for i, img_path in enumerate(imagenes, start=1):
-            nueva = os.path.join(normalizadas_dir, f"img_{i}.jpg")
-            self._normalizar_imagen(img_path, nueva)
-            imagenes_normalizadas.append(os.path.abspath(nueva))
-
-        clips = []
-
-        for i, img in enumerate(imagenes_normalizadas, start=1):
-            clip_path = os.path.join(output_dir, f"clip_{i}.mp4")
-
-            comando_clip = [
-                "ffmpeg",
-                "-y",
-                "-loop", "1",
-                "-i", img,
-                "-t", "4",
-                "-vf", (
-                    "scale=720:1280:force_original_aspect_ratio=increase,"
-                    "crop=720:1280,"
-                    "format=yuv420p"
-                ),
-                "-r", "25",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                clip_path
-            ]
-
-            self._run_ffmpeg(comando_clip)
-            clips.append(os.path.abspath(clip_path))
-
-        if frases:
-            frases = [self._limpiar_texto_ffmpeg(f) for f in frases if f.strip()]
-
-        if frases:
-            texto_clip = os.path.join(output_dir, "texto_final.mp4")
-            texto = frases[-1] if frases else "ETERNA"
-
-            comando_texto = [
-                "ffmpeg",
-                "-y",
-                "-f", "lavfi",
-                "-i", "color=c=black:s=720x1280:d=3",
-                "-vf",
-                (
-                    f"drawtext=text='{texto}':"
-                    "fontcolor=white:"
-                    "fontsize=42:"
-                    "x=(w-text_w)/2:"
-                    "y=(h-text_h)/2"
-                ),
-                "-r", "25",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                texto_clip
-            ]
-
-            self._run_ffmpeg(comando_texto)
-            clips.append(os.path.abspath(texto_clip))
-
-        if regalo_activo and regalo_amount_eur > 0:
-            regalo_clip = os.path.join(output_dir, "regalo.mp4")
-            regalo_texto = f"{regalo_amount_eur:.2f} EUR para ti"
-            regalo_texto = self._limpiar_texto_ffmpeg(regalo_texto)
-
-            comando_regalo = [
-                "ffmpeg",
-                "-y",
-                "-f", "lavfi",
-                "-i", "color=c=black:s=720x1280:d=3",
-                "-vf",
-                (
-                    f"drawtext=text='{regalo_texto}':"
-                    "fontcolor=white:"
-                    "fontsize=42:"
-                    "x=(w-text_w)/2:"
-                    "y=(h-text_h)/2"
-                ),
-                "-r", "25",
-                "-c:v", "libx264",
-                "-pix_fmt", "yuv420p",
-                regalo_clip
-            ]
-
-            self._run_ffmpeg(comando_regalo)
-            clips.append(os.path.abspath(regalo_clip))
-
-        if video_regalante and os.path.exists(video_regalante):
-            video_regalante_clip = os.path.join(output_dir, "video_regalante_final.mp4")
-
-            comando_regalante = [
-                "ffmpeg",
-                "-y",
-                "-i", video_regalante,
-                "-vf",
-                (
-                    "scale=720:1280:force_original_aspect_ratio=increase,"
-                    "crop=720:1280,"
-                    "format=yuv420p"
-                ),
-                "-r", "25",
-                "-c:v", "libx264",
-                "-c:a", "aac",
-                "-pix_fmt", "yuv420p",
-                video_regalante_clip
-            ]
-
-            self._run_ffmpeg(comando_regalante)
-            clips.append(os.path.abspath(video_regalante_clip))
-
-        lista_concat = os.path.join(output_dir, "concat.txt")
-        with open(lista_concat, "w", encoding="utf-8") as f:
-            for clip in clips:
-                f.write(f"file '{clip}'\n")
-
-        comando_final = [
-            "ffmpeg",
-            "-y",
-            "-f", "concat",
-            "-safe", "0",
-            "-i", lista_concat,
-            "-c:v", "libx264",
-            "-c:a", "aac",
-            "-pix_fmt", "yuv420p",
-            output
-        ]
-
-        self._run_ffmpeg(comando_final)
-
-        if not os.path.exists(output):
-            raise RuntimeError(f"El vídeo no se generó en: {output}")
-
-        if os.path.getsize(output) == 0:
-            raise RuntimeError("El vídeo se creó vacío")
-
-        print("✅ VIDEO FINAL GUARDADO EN:", output)
-        return output
-
-    def _normalizar_imagen(self, origen: str, destino: str):
-        with Image.open(origen) as img:
-            img = ImageOps.exif_transpose(img)
+        with Image.open(input_path) as img:
             img = img.convert("RGB")
-            img.save(destino, "JPEG", quality=92)
 
-    def _limpiar_texto_ffmpeg(self, texto: str) -> str:
+            # Fondo desenfocado cinematográfico
+            bg = ImageOps.fit(img.copy(), size, method=Image.Resampling.LANCZOS)
+            bg = bg.filter(ImageFilter.GaussianBlur(radius=20))
+
+            # Imagen principal encajada
+            fg = ImageOps.contain(img, size, method=Image.Resampling.LANCZOS)
+
+            canvas = bg.copy()
+            x = (target_w - fg.width) // 2
+            y = (target_h - fg.height) // 2
+            canvas.paste(fg, (x, y))
+
+            canvas.save(output_path, format="JPEG", quality=95)
+
+    def _escape_drawtext(self, text: str) -> str:
         return (
-            texto.replace("'", "")
-            .replace('"', "")
-            .replace(":", "")
-            .replace("\\", "")
-            .replace("%", "")
-            .replace("\n", " ")
-            .strip()
+            text.replace("\\", "\\\\")
+            .replace(":", "\\:")
+            .replace("'", "\\'")
+            .replace(",", "\\,")
+            .replace("[", "\\[")
+            .replace("]", "\\]")
+            .replace("%", "\\%")
         )
 
-    def _run_ffmpeg(self, comando: List[str]):
-        try:
-            resultado = subprocess.run(
-                comando,
-                check=True,
-                capture_output=True,
-                text=True
+    def generate_video(
+        self,
+        image_paths: List[str],
+        phrases: List[str],
+        output_path: str,
+        fps: int = 30,
+        seconds_per_image: float = 5.5,
+        transition_duration: float = 1.0
+    ) -> str:
+        if not image_paths:
+            raise ValueError("No hay imágenes para generar el vídeo.")
+
+        work_dir = Path(output_path).parent
+        prepared_images: List[str] = []
+
+        for i, img_path in enumerate(image_paths, start=1):
+            prepared = str(work_dir / f"prepared_{i}.jpg")
+            self._prepare_image_for_video(img_path, prepared)
+            prepared_images.append(prepared)
+
+        total_inputs = []
+        for img in prepared_images:
+            total_inputs.extend(["-loop", "1", "-t", str(seconds_per_image), "-i", img])
+
+        filter_parts = []
+        stream_names = []
+
+        for i in range(len(prepared_images)):
+            label = f"v{i}"
+            draw = ""
+
+            if i < len(phrases) and phrases[i].strip():
+                phrase = self._escape_drawtext(phrases[i].strip())
+                draw = (
+                    f",drawtext=text='{phrase}':"
+                    f"fontcolor=white:fontsize=42:"
+                    f"x=(w-text_w)/2:y=h-220:"
+                    f"box=1:boxcolor=black@0.35:boxborderw=20"
+                )
+
+            filter_parts.append(
+                f"[{i}:v]"
+                f"scale=720:1280,"
+                f"setsar=1,"
+                f"format=yuv420p"
+                f"{draw}"
+                f"[{label}]"
             )
-            return resultado
-        except subprocess.CalledProcessError as e:
-            print("❌ ERROR FFMPEG")
-            print("COMANDO:", " ".join(comando))
-            print("STDERR:", e.stderr)
-            raise RuntimeError(f"FFmpeg falló: {e.stderr}") from e
+            stream_names.append(f"[{label}]")
+
+        current = "v0"
+        offset = seconds_per_image - transition_duration
+
+        if len(prepared_images) == 1:
+            final_video_label = "[v0]"
+        else:
+            last_label = None
+            for i in range(1, len(prepared_images)):
+                in_a = f"[{current}]" if i == 1 else f"[x{i-1}]"
+                in_b = f"[v{i}]"
+                out = f"[x{i}]"
+                filter_parts.append(
+                    f"{in_a}{in_b}xfade=transition=fade:duration={transition_duration}:offset={offset}{out}"
+                )
+                offset += seconds_per_image - transition_duration
+                last_label = out
+
+            final_video_label = last_label
+
+        filter_complex = ";".join(filter_parts)
+
+        cmd = [
+            "ffmpeg",
+            "-y",
+            *total_inputs,
+            "-filter_complex",
+            filter_complex,
+            "-map",
+            final_video_label,
+            "-r",
+            str(fps),
+            "-pix_fmt",
+            "yuv420p",
+            "-movflags",
+            "+faststart",
+            output_path,
+        ]
+
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+
+        if result.returncode != 0:
+            raise RuntimeError(
+                "FFmpeg falló al generar el vídeo.\n\n"
+                f"STDERR:\n{result.stderr}"
+            )
+
+        return output_path
