@@ -1,4 +1,5 @@
 from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import RedirectResponse
 from typing import List, Optional
 import uuid
 
@@ -19,7 +20,7 @@ def limpiar_texto(valor: Optional[str]) -> str:
 def home():
     return {
         "status": "ETERNA OK",
-        "version": "v1_sin_video_sin_stripe"
+        "version": "v2_redirect_gracias"
     }
 
 
@@ -84,16 +85,10 @@ async def crear_eterna(
                 "detalle": "Las fotos no son válidas o llegaron vacías"
             }
 
-        payment_url = f"/pagar/{eterna_id}"
-
-        return {
-            "status": "ok",
-            "eterna_id": eterna_id,
-            "fotos_recibidas": len(fotos_guardadas),
-            "fotos_guardadas": fotos_guardadas,
-            "payment_url": payment_url,
-            "video_generado": False
-        }
+        return RedirectResponse(
+            url="https://eterna-test.carrd.co/#gracias",
+            status_code=303
+        )
 
     except Exception as e:
         return {
