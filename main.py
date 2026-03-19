@@ -1,10 +1,10 @@
+import os
 import uuid
 import urllib.parse
-import os
 
 import stripe
 from fastapi import FastAPI, Form, Request, HTTPException
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 
 app = FastAPI(title="ETERNA backend")
 
@@ -14,8 +14,9 @@ app = FastAPI(title="ETERNA backend")
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
-STRIPE_PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK")
 PUBLIC_URL = os.getenv("PUBLIC_BASE_URL")
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 if not STRIPE_SECRET_KEY:
     print("❌ Falta STRIPE_SECRET_KEY")
@@ -23,20 +24,14 @@ if not STRIPE_SECRET_KEY:
 if not STRIPE_WEBHOOK_SECRET:
     print("❌ Falta STRIPE_WEBHOOK_SECRET")
 
-if not STRIPE_PAYMENT_LINK:
-    print("❌ Falta STRIPE_PAYMENT_LINK")
-
 if not PUBLIC_URL:
     print("❌ Falta PUBLIC_BASE_URL")
 
-stripe.api_key = STRIPE_SECRET_KEY
-
 # =========================
-# MEMORIA SIMPLE (SOLO TEST)
+# MEMORIA SIMPLE (TEST)
 # =========================
 
 ORDERS = {}
-LAST_ORDER_ID = None
 
 # =========================
 # HOME
@@ -60,16 +55,13 @@ async def crear_eterna(
     phrase_2: str = Form(...),
     phrase_3: str = Form(...)
 ):
-    global LAST_ORDER_ID
-
-    if not STRIPE_PAYMENT_LINK:
-        raise HTTPException(status_code=500, detail="Falta STRIPE_PAYMENT_LINK")
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY")
 
     if not PUBLIC_URL:
         raise HTTPException(status_code=500, detail="Falta PUBLIC_BASE_URL")
 
     order_id = str(uuid.uuid4())
-    LAST_ORDER_ID = order_id
 
     ORDERS[order_id] = {
         "paid": False,
@@ -80,38 +72,43 @@ async def crear_eterna(
         "phrases": [phrase_1, phrase_2, phrase_3],
     }
 
-    success_url = f"{PUBLIC_URL}/pedido/{order_id}"
-
-    payment_url = (
-        f"{STRIPE_PAYMENT_LINK}"
-        f"?client_reference_id={urllib.parse.quote(order_id)}"
-        f"&redirect_url={urllib.parse.quote(success_url)}"
-    )
-
     print("🆕 Pedido creado:", order_id)
-    print("➡️ Último pedido guardado:", LAST_ORDER_ID)
-    print("➡️ Redirigiendo a Stripe:", payment_url)
 
-    return HTMLResponse(f"""
-    <html>
-        <head>
-            <meta charset="UTF-8">
-            <title>ETERNA - Redirigiendo</title>
-        </head>
-        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial,sans-serif;">
-            <h1>Redirigiendo a pago...</h1>
-            <p>Si no sales automáticamente, pulsa abajo:</p>
-            <p>
-                <a href="{payment_url}" style="color:white;font-size:18px;">
-                    Ir a pagar
-                </a>
-            </p>
-            <script>
-                window.location.href = "{payment_url}";
-            </script>
-        </body>
-    </html>
-    """)
+    try:
+        checkout_session = stripe.checkout.Session.create(
+            mode="payment",
+            payment_method_types=["card"],
+            line_items=[
+                {
+                    "price_data": {
+                        "currency": "eur",
+                        "product_data": {
+                            "name": "ETERNA RECUERDOS",
+                            "description": "Recuerdo emocional creado a partir de tus fotos y frases.",
+                        },
+                        "unit_amount": 2900,  # 29,00 €
+                    },
+                    "quantity": 1,
+                }
+            ],
+            customer_email=customer_email,
+            metadata={
+                "order_id": order_id,
+                "customer_name": customer_name,
+                "recipient_name": recipient_name,
+                "recipient_phone": recipient_phone,
+            },
+            success_url=f"{PUBLIC_URL}/pedido/{order_id}?paid=1",
+            cancel_url=f"{PUBLIC_URL}/pedido/{order_id}?cancelled=1",
+        )
+    except Exception as e:
+        print("❌ Error creando Checkout Session:", e)
+        raise HTTPException(status_code=500, detail="No se pudo crear la sesión de pago")
+
+    print("➡️ Checkout Session creada:", checkout_session.id)
+    print("➡️ URL Stripe:", checkout_session.url)
+
+    return RedirectResponse(url=checkout_session.url, status_code=303)
 
 # =========================
 # WEBHOOK STRIPE
@@ -119,8 +116,6 @@ async def crear_eterna(
 
 @app.post("/webhook")
 async def stripe_webhook(request: Request):
-    global LAST_ORDER_ID
-
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
@@ -139,15 +134,10 @@ async def stripe_webhook(request: Request):
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
 
-        order_id = session.get("client_reference_id")
+        metadata = session.get("metadata", {})
+        order_id = metadata.get("order_id")
 
-        print("💰 Pago completado. client_reference_id:", order_id)
-
-        # Payment Link no siempre manda client_reference_id
-        # Entonces para test usamos el último pedido creado
-        if not order_id:
-            print("⚠️ Stripe no devolvió order_id. Usando LAST_ORDER_ID para pruebas.")
-            order_id = LAST_ORDER_ID
+        print("💰 Pago completado. order_id:", order_id)
 
         if order_id and order_id in ORDERS:
             ORDERS[order_id]["paid"] = True
@@ -162,7 +152,7 @@ async def stripe_webhook(request: Request):
 # =========================
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
-def ver_pedido(order_id: str):
+def ver_pedido(order_id: str, paid: int = 0, cancelled: int = 0):
     order = ORDERS.get(order_id)
 
     if not order:
@@ -174,7 +164,22 @@ def ver_pedido(order_id: str):
         </head>
         <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial,sans-serif;">
             <h1>Pedido no encontrado</h1>
-            <p>Puede que el servidor se haya reiniciado o que el pedido aún no exista en memoria.</p>
+            <p>Puede que el servidor se haya reiniciado o que el pedido no exista ya en memoria.</p>
+        </body>
+        </html>
+        """)
+
+    if cancelled:
+        return HTMLResponse(f"""
+        <html>
+        <head>
+            <meta charset="UTF-8">
+            <title>Pago cancelado</title>
+        </head>
+        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial,sans-serif;">
+            <h1>Pago cancelado</h1>
+            <p>Tu pedido sigue guardado, pero no se ha completado el pago.</p>
+            <p><strong>Pedido:</strong> {order_id}</p>
         </body>
         </html>
         """)
@@ -229,12 +234,9 @@ Alguien ha creado algo muy especial para ti.
     """)
 
 # =========================
-# DEBUG PEDIDOS (SOLO TEST)
+# DEBUG
 # =========================
 
 @app.get("/debug/orders")
 def debug_orders():
-    return {
-        "last_order_id": LAST_ORDER_ID,
-        "orders": ORDERS
-    }
+    return ORDERS
