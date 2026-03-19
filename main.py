@@ -7,13 +7,8 @@ from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="ETERNA backend")
 
-# 🧠 "base de datos" temporal (luego la cambiamos por real)
 PEDIDOS = {}
 
-
-# =========================
-# WHATSAPP
-# =========================
 
 def crear_link_whatsapp(telefono, nombre, anonimo, link_video):
     telefono = "".join(filter(str.isdigit, telefono))
@@ -41,18 +36,10 @@ Alguien ha creado algo muy especial para ti.
     return f"https://wa.me/{telefono}?text={mensaje}"
 
 
-# =========================
-# HOME
-# =========================
-
 @app.get("/")
 def home():
     return {"status": "ETERNA funcionando"}
 
-
-# =========================
-# CREAR ETERNA
-# =========================
 
 @app.post("/crear-eterna", response_class=HTMLResponse)
 async def crear_eterna(
@@ -73,14 +60,18 @@ async def crear_eterna(
     order_id = str(uuid.uuid4())
     is_anonymous = anonimo is not None
 
-    # 💾 GUARDAMOS PEDIDO (clave para luego)
     PEDIDOS[order_id] = {
         "nombre_cliente": nombre_cliente,
+        "email_cliente": email_cliente,
+        "telefono_cliente": telefono_cliente,
+        "nombre_destinatario": nombre_destinatario,
         "telefono_destinatario": telefono_destinatario,
-        "anonimo": is_anonymous
+        "frase_1": frase_1,
+        "frase_2": frase_2,
+        "frase_3": frase_3,
+        "anonimo": is_anonymous,
     }
 
-    # 👉 TU LINK REAL DE STRIPE
     stripe_payment_link = "https://buy.stripe.com/XXXXXXXX"
 
     payment_url = f"{stripe_payment_link}?client_reference_id={urllib.parse.quote(order_id)}"
@@ -88,22 +79,23 @@ async def crear_eterna(
     return f"""
     <html>
         <head>
-            <meta http-equiv="refresh" content="0; url={payment_url}" />
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="2; url={payment_url}" />
+            <title>Redirigiendo al pago</title>
         </head>
-        <body style="background:black;color:white;text-align:center;padding-top:50px;">
+        <body style="background:black;color:white;text-align:center;padding-top:50px;font-family:Arial;">
             <h2>Redirigiendo al pago...</h2>
+            <p>Tu pedido es:</p>
+            <p><b>{order_id}</b></p>
+            <p>Guárdalo por si necesitas abrir luego tu página de envío:</p>
+            <p>/pedido/{order_id}</p>
         </body>
     </html>
     """
 
 
-# =========================
-# PÁGINA FINAL
-# =========================
-
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
 def ver_pedido(order_id: str):
-
     pedido = PEDIDOS.get(order_id)
 
     if not pedido:
@@ -144,6 +136,7 @@ def ver_pedido(order_id: str):
 
     <h1>ETERNA lista 💔</h1>
     <p>Pedido: {order_id}</p>
+    <p>Destinatario: {pedido["nombre_destinatario"]}</p>
 
     <a href="{link_whatsapp}" target="_blank">
     Enviar por WhatsApp
@@ -154,13 +147,8 @@ def ver_pedido(order_id: str):
     """
 
 
-# =========================
-# TEST WHATSAPP
-# =========================
-
 @app.get("/test-whatsapp", response_class=HTMLResponse)
 def test_whatsapp():
-
     link_video = "https://eterna-v2-lab.onrender.com/demo"
 
     link_whatsapp = crear_link_whatsapp(
