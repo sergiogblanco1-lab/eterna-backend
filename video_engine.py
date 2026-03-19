@@ -1,4 +1,3 @@
-import os
 import shutil
 import subprocess
 from pathlib import Path
@@ -23,11 +22,9 @@ class VideoEngine:
         with Image.open(input_path) as img:
             img = img.convert("RGB")
 
-            # Fondo desenfocado cinematográfico
             bg = ImageOps.fit(img.copy(), size, method=Image.Resampling.LANCZOS)
             bg = bg.filter(ImageFilter.GaussianBlur(radius=20))
 
-            # Imagen principal encajada
             fg = ImageOps.contain(img, size, method=Image.Resampling.LANCZOS)
 
             canvas = bg.copy()
