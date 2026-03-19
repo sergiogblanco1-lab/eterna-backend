@@ -1,200 +1,101 @@
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.middleware.cors import CORSMiddleware
-from typing import List, Optional
+import os
 import uuid
 from pathlib import Path
-import os
-import uvicorn
+from typing import List
+
+from fastapi import FastAPI, UploadFile, File, Form
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 app = FastAPI(title="ETERNA backend")
 
-# CORS para permitir peticiones desde Carrd
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=False,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+# =========================
+# STORAGE
+# =========================
 
-STORAGE = Path("storage")
-STORAGE.mkdir(parents=True, exist_ok=True)
+BASE_DIR = Path(__file__).resolve().parent
+STORAGE = BASE_DIR / "storage"
 
+STORAGE.mkdir(exist_ok=True)
 
-def limpiar_texto(valor: Optional[str]) -> str:
-    if valor is None:
-        return ""
-    return valor.strip()
+# Servir archivos (videos, imágenes)
+app.mount("/media", StaticFiles(directory=str(STORAGE)), name="media")
 
 
-def extension_segura(nombre_archivo: str) -> str:
-    ext = Path(nombre_archivo).suffix.lower()
-    validas = [".jpg", ".jpeg", ".png", ".webp"]
-    if ext in validas:
-        return ext
-    return ".jpg"
-
+# =========================
+# HOME
+# =========================
 
 @app.get("/")
 def home():
-    return {
-        "status": "ETERNA OK",
-        "version": "v6_clean"
-    }
+    return {"status": "ETERNA backend alive"}
 
 
 # =========================
 # CREAR ETERNA
 # =========================
+
 @app.post("/crear-eterna")
 async def crear_eterna(
-    nombre: Optional[str] = Form(None),
-    email: Optional[str] = Form(None),
-    telefono: Optional[str] = Form(None),
-    nombre_destinatario: Optional[str] = Form(None),
-    telefono_destinatario: Optional[str] = Form(None),
-    frase1: Optional[str] = Form(None),
-    frase2: Optional[str] = Form(None),
-    frase3: Optional[str] = Form(None),
+    customer_name: str = Form(...),
+    customer_email: str = Form(...),
+    frase1: str = Form(...),
+    frase2: str = Form(...),
+    frase3: str = Form(...),
     fotos: List[UploadFile] = File(...)
 ):
-    try:
-        nombre = limpiar_texto(nombre)
-        email = limpiar_texto(email)
-        telefono = limpiar_texto(telefono)
-        nombre_destinatario = limpiar_texto(nombre_destinatario)
-        telefono_destinatario = limpiar_texto(telefono_destinatario)
-        frase1 = limpiar_texto(frase1)
-        frase2 = limpiar_texto(frase2)
-        frase3 = limpiar_texto(frase3)
 
-        if len(fotos) == 0:
-            return {
-                "status": "error",
-                "detalle": "Debes subir al menos 1 foto"
-            }
+    eterna_id = str(uuid.uuid4())
+    folder = STORAGE / eterna_id
+    folder.mkdir(parents=True, exist_ok=True)
 
-        if len(fotos) > 6:
-            return {
-                "status": "error",
-                "detalle": "Máximo 6 fotos"
-            }
+    # Guardar frases
+    frases = [frase1, frase2, frase3]
+    with open(folder / "frases.txt", "w", encoding="utf-8") as f:
+        for frase in frases:
+            f.write(frase + "\n")
 
-        eterna_id = str(uuid.uuid4())
-        carpeta = STORAGE / eterna_id
-        carpeta.mkdir(parents=True, exist_ok=True)
+    # Guardar imágenes
+    saved_files = []
 
-        # Guardar datos
-        with open(carpeta / "data.txt", "w", encoding="utf-8") as f:
-            f.write(f"nombre: {nombre}\n")
-            f.write(f"email: {email}\n")
-            f.write(f"telefono: {telefono}\n")
-            f.write(f"destinatario: {nombre_destinatario}\n")
-            f.write(f"telefono_dest: {telefono_destinatario}\n")
-            f.write(f"frase1: {frase1}\n")
-            f.write(f"frase2: {frase2}\n")
-            f.write(f"frase3: {frase3}\n")
+    for i, foto in enumerate(fotos):
+        filename = f"foto{i+1}.jpg"
+        file_path = folder / filename
 
-        # Guardar estado
-        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
-            f.write("estado: creada\n")
-            f.write("reaccion: no_grabada\n")
-            f.write("video: no_generado\n")
+        content = await foto.read()
+        with open(file_path, "wb") as f:
+            f.write(content)
 
-        # Guardar fotos
-        fotos_guardadas = []
+        saved_files.append(filename)
 
-        for i, foto in enumerate(fotos):
-            contenido = await foto.read()
+    # ⚠️ Simulación de video (por ahora)
+    video_path = folder / "video.mp4"
 
-            if not contenido:
-                continue
+    # Crear archivo vacío de video (placeholder)
+    with open(video_path, "wb") as f:
+        f.write(b"")
 
-            ext = extension_segura(foto.filename or "")
-            nombre_archivo = f"foto{i+1}{ext}"
-            ruta = carpeta / nombre_archivo
+    video_url = f"https://eterna-v2-lab.onrender.com/media/{eterna_id}/video.mp4"
 
-            with open(ruta, "wb") as f:
-                f.write(contenido)
-
-            fotos_guardadas.append(nombre_archivo)
-
-        if len(fotos_guardadas) == 0:
-            return {
-                "status": "error",
-                "detalle": "No se pudieron guardar las fotos"
-            }
-
-        # IMPORTANTE:
-        # Esta URL apunta a tu página de experiencia en Carrd
-        link_destinatario = f"https://eterna-test.carrd.co/?id={eterna_id}"
-
-        return {
-            "status": "ok",
-            "eterna_id": eterna_id,
-            "fotos_recibidas": len(fotos_guardadas),
-            "fotos_guardadas": fotos_guardadas,
-            "link": link_destinatario
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "detalle": str(e)
-        }
+    return {
+        "status": "ok",
+        "eterna_id": eterna_id,
+        "fotos_recibidas": len(fotos),
+        "fotos_guardadas": saved_files,
+        "video_url": video_url,
+        "link": f"https://eterna-test.carrd.co/?id={eterna_id}"
+    }
 
 
 # =========================
-# SUBIR REACCIÓN
+# OBTENER ETERNA (VIDEO)
 # =========================
-@app.post("/subir-reaccion")
-async def subir_reaccion(
-    eterna_id: str = Form(...),
-    file: UploadFile = File(...)
-):
-    try:
-        eterna_id = limpiar_texto(eterna_id)
 
-        if not eterna_id:
-            return {
-                "status": "error",
-                "detalle": "Falta eterna_id"
-            }
+@app.get("/eterna/{eterna_id}")
+def get_eterna(eterna_id: str):
 
-        carpeta = STORAGE / eterna_id
-        carpeta.mkdir(parents=True, exist_ok=True)
+    video_url = f"https://eterna-v2-lab.onrender.com/media/{eterna_id}/video.mp4"
 
-        contenido = await file.read()
-
-        if not contenido:
-            return {
-                "status": "error",
-                "detalle": "Archivo vacío"
-            }
-
-        ruta = carpeta / "reaccion.webm"
-
-        with open(ruta, "wb") as f:
-            f.write(contenido)
-
-        with open(carpeta / "status.txt", "w", encoding="utf-8") as f:
-            f.write("estado: reaccion_recibida\n")
-            f.write("reaccion: grabada\n")
-            f.write("video: no_generado\n")
-
-        return {
-            "status": "ok",
-            "eterna_id": eterna_id,
-            "archivo": "reaccion.webm"
-        }
-
-    except Exception as e:
-        return {
-            "status": "error",
-            "detalle": str(e)
-        }
-
-
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 10000))
-    uvicorn.run("main:app", host="0.0.0.0", port=port)
+    return {
+        "video_url": video_url
+    }
