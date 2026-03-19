@@ -6,7 +6,7 @@ from typing import List
 
 import stripe
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 
@@ -18,22 +18,28 @@ app = FastAPI(title="ETERNA backend")
 
 BASE_DIR = Path(__file__).resolve().parent
 STORAGE_DIR = BASE_DIR / "storage"
+PENDIENTES_DIR = STORAGE_DIR / "pendientes"
+ORDENES_DIR = STORAGE_DIR / "ordenes"
 MEDIA_DIR = STORAGE_DIR / "media"
-PENDING_DIR = STORAGE_DIR / "pending"
-ORDERS_DIR = STORAGE_DIR / "orders"
 
+PENDIENTES_DIR.mkdir(parents=True, exist_ok=True)
+ORDENES_DIR.mkdir(parents=True, exist_ok=True)
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
-PENDING_DIR.mkdir(parents=True, exist_ok=True)
-ORDERS_DIR.mkdir(parents=True, exist_ok=True)
 
 app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PAYMENT_LINK = os.getenv(
-    "STRIPE_PAYMENT_LINK",
-    "https://buy.stripe.com/9B6dR9eDo3d91UBfjxaZi00"
-)
+BASE_URL = os.getenv("BASE_URL", "").rstrip("/")
+
+if not STRIPE_SECRET_KEY:
+    print("⚠️ Falta STRIPE_SECRET_KEY en variables de entorno")
+
+if not STRIPE_WEBHOOK_SECRET:
+    print("⚠️ Falta STRIPE_WEBHOOK_SECRET en variables de entorno")
+
+if not BASE_URL:
+    print("⚠️ Falta BASE_URL en variables de entorno")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
@@ -43,28 +49,24 @@ stripe.api_key = STRIPE_SECRET_KEY
 # =========================================================
 
 def guardar_datos_pendientes(data: dict, archivos_fotos: List[tuple]) -> str:
-    """
-    Guarda datos y fotos antes del pago.
-    archivos_fotos = [(filename, bytes), ...]
-    """
     eterna_id = str(uuid.uuid4())
-    carpeta = PENDING_DIR / eterna_id
+    carpeta = PENDIENTES_DIR / eterna_id
     carpeta.mkdir(parents=True, exist_ok=True)
 
-    carpeta_fotos = carpeta / "photos"
-    carpeta_fotos.mkdir(exist_ok=True)
+    carpeta_fotos = carpeta / "fotos"
+    carpeta_fotos.mkdir(parents=True, exist_ok=True)
 
     fotos_guardadas = []
 
-    for i, (filename, content) in enumerate(archivos_fotos, start=1):
-        ext = Path(filename).suffix.lower() or ".jpg"
-        nombre_limpio = f"foto_{i}{ext}"
-        ruta_foto = carpeta_fotos / nombre_limpio
+    for i, (nombre_original, contenido) in enumerate(archivos_fotos, start=1):
+        extension = Path(nombre_original).suffix.lower() or ".jpg"
+        nombre_archivo = f"foto_{i}{extension}"
+        ruta_archivo = carpeta_fotos / nombre_archivo
 
-        with open(ruta_foto, "wb") as f:
-            f.write(content)
+        with open(ruta_archivo, "wb") as f:
+            f.write(contenido)
 
-        fotos_guardadas.append(str(ruta_foto))
+        fotos_guardadas.append(str(ruta_archivo))
 
     data["fotos_guardadas"] = fotos_guardadas
 
@@ -75,22 +77,26 @@ def guardar_datos_pendientes(data: dict, archivos_fotos: List[tuple]) -> str:
 
 
 def cargar_datos_pendientes(eterna_id: str) -> dict:
-    carpeta = PENDING_DIR / eterna_id
-    archivo_data = carpeta / "data.json"
-
-    if not archivo_data.exists():
+    archivo = PENDIENTES_DIR / eterna_id / "data.json"
+    if not archivo.exists():
         raise FileNotFoundError(f"No existe data.json para {eterna_id}")
 
-    with open(archivo_data, "r", encoding="utf-8") as f:
+    with open(archivo, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
+def guardar_datos_pendientes_actualizados(eterna_id: str, data: dict) -> None:
+    archivo = PENDIENTES_DIR / eterna_id / "data.json"
+    with open(archivo, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+
 def mover_pendiente_a_orden(eterna_id: str) -> Path:
-    carpeta_pendiente = PENDING_DIR / eterna_id
-    carpeta_orden = ORDERS_DIR / eterna_id
+    carpeta_pendiente = PENDIENTES_DIR / eterna_id
+    carpeta_orden = ORDENES_DIR / eterna_id
 
     if not carpeta_pendiente.exists():
-        raise FileNotFoundError(f"No existe carpeta pending para {eterna_id}")
+        raise FileNotFoundError(f"No existe carpeta pendiente para {eterna_id}")
 
     if carpeta_orden.exists():
         return carpeta_orden
@@ -102,13 +108,19 @@ def mover_pendiente_a_orden(eterna_id: str) -> Path:
 def crear_video_temporal(carpeta_orden: Path) -> str:
     """
     Temporal.
-    Luego aquí meteremos el generador real del vídeo.
+    Aquí luego pondremos el generador real del vídeo.
     """
     archivo_salida = carpeta_orden / "video_generado.txt"
     with open(archivo_salida, "w", encoding="utf-8") as f:
         f.write("VIDEO GENERADO CORRECTAMENTE PARA ETERNA\n")
 
     return str(archivo_salida)
+
+
+def construir_url_base(request: Request) -> str:
+    if BASE_URL:
+        return BASE_URL
+    return str(request.base_url).rstrip("/")
 
 
 # =========================================================
@@ -129,12 +141,16 @@ def home():
           background: #0b0b0b;
           color: white;
           font-family: Arial, sans-serif;
-          max-width: 700px;
+          max-width: 760px;
           margin: 0 auto;
           padding: 30px 20px;
         }
         h1 {
           letter-spacing: 3px;
+          margin-bottom: 12px;
+        }
+        p {
+          line-height: 1.5;
         }
         input, textarea, button {
           width: 100%;
@@ -145,6 +161,11 @@ def home():
           background: #161616;
           color: white;
           box-sizing: border-box;
+          font-size: 16px;
+        }
+        textarea {
+          min-height: 95px;
+          resize: vertical;
         }
         button {
           background: white;
@@ -160,7 +181,7 @@ def home():
     </head>
     <body>
       <h1>ETERNA</h1>
-      <p>Sube tus fotos, escribe tus frases y pasa al pago.</p>
+      <p>Sube tus fotos, escribe tus frases y completa el pago.</p>
 
       <form action="/preparar-pago" method="post" enctype="multipart/form-data">
         <input type="text" name="nombre_cliente" placeholder="Tu nombre" required>
@@ -179,18 +200,19 @@ def home():
         <button type="submit">Crear mi ETERNA</button>
       </form>
 
-      <p class="small">Después del pago, tu pedido quedará confirmado.</p>
+      <p class="small">Al pagar, tu pedido quedará confirmado automáticamente.</p>
     </body>
     </html>
     """
 
 
 # =========================================================
-# GUARDAR FORMULARIO Y REDIRIGIR A STRIPE
+# PREPARAR PAGO: GUARDA DATOS Y CREA SESIÓN REAL DE STRIPE
 # =========================================================
 
 @app.post("/preparar-pago")
 async def preparar_pago(
+    request: Request,
     nombre_cliente: str = Form(...),
     email_cliente: str = Form(...),
     telefono_cliente: str = Form(""),
@@ -210,7 +232,12 @@ async def preparar_pago(
     archivos_fotos = []
     for foto in fotos:
         contenido = await foto.read()
-        archivos_fotos.append((foto.filename, contenido))
+        if not contenido:
+            continue
+        archivos_fotos.append((foto.filename or "foto.jpg", contenido))
+
+    if len(archivos_fotos) < 1:
+        raise HTTPException(status_code=400, detail="No se pudo leer ninguna foto.")
 
     data = {
         "nombre_cliente": nombre_cliente,
@@ -225,42 +252,19 @@ async def preparar_pago(
     }
 
     eterna_id = guardar_datos_pendientes(data, archivos_fotos)
+    url_base = construir_url_base(request)
 
-    payment_url = f"{STRIPE_PAYMENT_LINK}?client_reference_id={eterna_id}"
-
-    return HTMLResponse(f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-      <meta charset="UTF-8">
-      <meta http-equiv="refresh" content="0; url={payment_url}">
-      <title>Redirigiendo...</title>
-    </head>
-    <body style="background:black;color:white;font-family:Arial;padding:40px;">
-      <p>Redirigiendo a Stripe...</p>
-      <p>Si no pasa automáticamente, pulsa aquí:</p>
-      <a href="{payment_url}" style="color:white;">Ir al pago</a>
-    </body>
-    </html>
-    """)
-
-
-# =========================================================
-# OPCIONAL: CREAR CHECKOUT SESSION DESDE BACKEND
-# =========================================================
-
-@app.post("/crear-checkout-session")
-async def crear_checkout_session(request: Request):
     try:
-        body = await request.json()
-        eterna_id = body.get("eterna_id")
-
-        if not eterna_id:
-            raise HTTPException(status_code=400, detail="Falta eterna_id.")
-
         session = stripe.checkout.Session.create(
-            payment_method_types=["card"],
             mode="payment",
+            payment_method_types=["card"],
+            customer_email=email_cliente,
+            client_reference_id=eterna_id,
+            metadata={
+                "eterna_id": eterna_id,
+                "nombre_cliente": nombre_cliente,
+                "nombre_destinatario": nombre_destinatario
+            },
             line_items=[
                 {
                     "price_data": {
@@ -271,18 +275,16 @@ async def crear_checkout_session(request: Request):
                         },
                         "unit_amount": 4900
                     },
-                    "quantity": 1,
+                    "quantity": 1
                 }
             ],
-            client_reference_id=eterna_id,
-            success_url=f"{request.base_url}gracias?eterna_id={eterna_id}",
-            cancel_url=f"{request.base_url}cancelado?eterna_id={eterna_id}",
+            success_url=f"{url_base}/gracias?eterna_id={eterna_id}",
+            cancel_url=f"{url_base}/cancelado?eterna_id={eterna_id}"
         )
-
-        return {"checkout_url": session.url}
-
     except Exception as e:
-        return JSONResponse(status_code=500, content={"error": str(e)})
+        raise HTTPException(status_code=500, detail=f"Error creando sesión Stripe: {e}")
+
+    return RedirectResponse(url=session.url, status_code=303)
 
 
 # =========================================================
@@ -308,8 +310,8 @@ async def stripe_webhook(request: Request):
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
 
-        eterna_id = session.get("client_reference_id")
-        email_pagado = session.get("customer_details", {}).get("email")
+        eterna_id = session.get("client_reference_id") or session.get("metadata", {}).get("eterna_id")
+        email_pagado = session.get("customer_details", {}).get("email") or session.get("customer_email")
         payment_status = session.get("payment_status")
 
         if eterna_id and payment_status == "paid":
@@ -317,10 +319,9 @@ async def stripe_webhook(request: Request):
                 data = cargar_datos_pendientes(eterna_id)
                 data["payment_status"] = "paid"
                 data["email_pagado"] = email_pagado or ""
+                data["stripe_session_id"] = session.get("id", "")
 
-                carpeta_pendiente = PENDING_DIR / eterna_id
-                with open(carpeta_pendiente / "data.json", "w", encoding="utf-8") as f:
-                    json.dump(data, f, ensure_ascii=False, indent=2)
+                guardar_datos_pendientes_actualizados(eterna_id, data)
 
                 carpeta_orden = mover_pendiente_a_orden(eterna_id)
                 crear_video_temporal(carpeta_orden)
@@ -344,9 +345,19 @@ def gracias(eterna_id: str = ""):
     <html lang="es">
     <head>
       <meta charset="UTF-8">
-      <title>Gracias</title>
+      <title>Pago completado</title>
+      <style>
+        body {{
+          background: black;
+          color: white;
+          font-family: Arial, sans-serif;
+          padding: 40px 20px;
+          max-width: 700px;
+          margin: 0 auto;
+        }}
+      </style>
     </head>
-    <body style="background:black;color:white;font-family:Arial;padding:40px;">
+    <body>
       <h1>Pago completado</h1>
       <p>Tu ETERNA ha sido confirmada correctamente.</p>
       <p>ID: {eterna_id}</p>
@@ -363,8 +374,18 @@ def cancelado(eterna_id: str = ""):
     <head>
       <meta charset="UTF-8">
       <title>Pago cancelado</title>
+      <style>
+        body {{
+          background: black;
+          color: white;
+          font-family: Arial, sans-serif;
+          padding: 40px 20px;
+          max-width: 700px;
+          margin: 0 auto;
+        }}
+      </style>
     </head>
-    <body style="background:black;color:white;font-family:Arial;padding:40px;">
+    <body>
       <h1>Pago cancelado</h1>
       <p>No se completó el pago de tu ETERNA.</p>
       <p>ID: {eterna_id}</p>
@@ -374,7 +395,7 @@ def cancelado(eterna_id: str = ""):
 
 
 # =========================================================
-# RUTAS DE PRUEBA
+# SALUD Y DEBUG
 # =========================================================
 
 @app.get("/health")
@@ -385,7 +406,7 @@ def health():
 @app.get("/debug-pendientes")
 def debug_pendientes():
     items = []
-    for p in PENDING_DIR.iterdir():
+    for p in PENDIENTES_DIR.iterdir():
         if p.is_dir():
             items.append(p.name)
     return {"pendientes": items}
@@ -394,7 +415,23 @@ def debug_pendientes():
 @app.get("/debug-ordenes")
 def debug_ordenes():
     items = []
-    for p in ORDERS_DIR.iterdir():
+    for p in ORDENES_DIR.iterdir():
         if p.is_dir():
             items.append(p.name)
     return {"ordenes": items}
+
+
+@app.get("/debug-eterna/{eterna_id}")
+def debug_eterna(eterna_id: str):
+    pendiente = PENDIENTES_DIR / eterna_id / "data.json"
+    orden = ORDENES_DIR / eterna_id / "data.json"
+
+    if pendiente.exists():
+        with open(pendiente, "r", encoding="utf-8") as f:
+            return JSONResponse(content=json.load(f))
+
+    if orden.exists():
+        with open(orden, "r", encoding="utf-8") as f:
+            return JSONResponse(content=json.load(f))
+
+    raise HTTPException(status_code=404, detail="ETERNA no encontrada")
