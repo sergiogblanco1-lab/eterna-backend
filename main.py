@@ -3,11 +3,20 @@ import urllib.parse
 from typing import Optional
 
 from fastapi import FastAPI, Form
+from fastapi.responses import HTMLResponse
 
 app = FastAPI(title="ETERNA backend")
 
 
-@app.post("/crear-eterna")
+@app.get("/")
+def home():
+    return {
+        "status": "ETERNA backend activo",
+        "endpoint_formulario": "/crear-eterna"
+    }
+
+
+@app.post("/crear-eterna", response_class=HTMLResponse)
 async def crear_eterna(
     nombre_cliente: str = Form(...),
     email_cliente: str = Form(...),
@@ -20,55 +29,95 @@ async def crear_eterna(
     anonimo: Optional[str] = Form(None),
     consentimiento: Optional[str] = Form(None),
 ):
-    # Validación básica
+    # Validación mínima
     if not consentimiento:
-        return {
-            "ok": False,
-            "error": "Debes aceptar el consentimiento para continuar."
-        }
+        return """
+        <html>
+            <body style="background:black;color:white;font-family:Arial;text-align:center;padding-top:60px;">
+                <h1>Falta el consentimiento</h1>
+                <p>Debes aceptar que este contenido será enviado a la persona indicada.</p>
+            </body>
+        </html>
+        """
 
     # Traducción interna a variables del sistema
-    customer_name = nombre_cliente
-    customer_email = email_cliente
-    customer_phone = telefono_cliente
-    recipient_name = nombre_destinatario
-    recipient_phone = telefono_destinatario
-    phrase_1 = frase_1.strip()
-    phrase_2 = frase_2.strip()
-    phrase_3 = frase_3.strip()
-    is_anonymous = anonimo is not None
+    customer_name = nombre_cliente.strip()
+    customer_email = email_cliente.strip()
+    customer_phone = telefono_cliente.strip() if telefono_cliente else None
 
-    # Nombre que verá el destinatario
+    recipient_name = nombre_destinatario.strip()
+    recipient_phone = telefono_destinatario.strip()
+
+    phrase_1_clean = frase_1.strip()
+    phrase_2_clean = frase_2.strip()
+    phrase_3_clean = frase_3.strip()
+
+    is_anonymous = anonimo is not None
     sender_name = "Alguien" if is_anonymous else customer_name
 
-    # Crear ID único del pedido
+    # Crear pedido
     order_id = str(uuid.uuid4())
 
-    # Aquí luego guardarás en base de datos si quieres
-    pedido = {
+    # Aquí, más adelante, podrás guardar en base de datos
+    order_data = {
         "order_id": order_id,
         "customer_name": customer_name,
         "customer_email": customer_email,
         "customer_phone": customer_phone,
         "recipient_name": recipient_name,
         "recipient_phone": recipient_phone,
-        "phrase_1": phrase_1,
-        "phrase_2": phrase_2,
-        "phrase_3": phrase_3,
+        "phrase_1": phrase_1_clean,
+        "phrase_2": phrase_2_clean,
+        "phrase_3": phrase_3_clean,
         "is_anonymous": is_anonymous,
         "sender_name": sender_name,
         "paid": False,
     }
 
-    # Tu link de pago real de Stripe
+    print("Nuevo pedido ETERNA:")
+    print(order_data)
+
+    # TU LINK REAL DE STRIPE
     stripe_payment_link = "https://buy.stripe.com/TU_LINK_REAL"
 
-    # Pasamos el order_id en la URL para identificar el pago
+    # Añadimos el order_id para identificar el pago
     payment_url = f"{stripe_payment_link}?client_reference_id={urllib.parse.quote(order_id)}"
 
-    return {
-        "ok": True,
-        "message": "Pedido creado correctamente",
-        "pedido": pedido,
-        "payment_url": payment_url
-    }
+    # Redirección automática a Stripe
+    return f"""
+    <html>
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="0; url={payment_url}" />
+            <title>Redirigiendo al pago</title>
+            <style>
+                body {{
+                    background: #000000;
+                    color: #ffffff;
+                    font-family: Arial, sans-serif;
+                    text-align: center;
+                    padding-top: 80px;
+                }}
+                .box {{
+                    max-width: 600px;
+                    margin: 0 auto;
+                    padding: 30px;
+                    border: 1px solid #222;
+                    border-radius: 16px;
+                    background: #0d0d0d;
+                }}
+                a {{
+                    color: #ffffff;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="box">
+                <h1>Redirigiendo al pago...</h1>
+                <p>En unos segundos se abrirá Stripe.</p>
+                <p>Si no ocurre automáticamente, pulsa aquí:</p>
+                <p><a href="{payment_url}">Ir al pago</a></p>
+            </div>
+        </body>
+    </html>
+    """
