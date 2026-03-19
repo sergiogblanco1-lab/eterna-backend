@@ -1,54 +1,24 @@
-from datetime import datetime
-
-from sqlalchemy import Column, Integer, String, DateTime, ForeignKey, Text
-from sqlalchemy.orm import relationship
+from sqlalchemy import Boolean, Column, DateTime, String, Text
+from sqlalchemy.sql import func
 
 from database import Base
-
-
-class Customer(Base):
-    __tablename__ = "customers"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    email = Column(String(255), nullable=False, index=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    orders = relationship("EternaOrder", back_populates="customer")
-
-
-class Recipient(Base):
-    __tablename__ = "recipients"
-
-    id = Column(Integer, primary_key=True, index=True)
-    name = Column(String(255), nullable=False)
-    phone = Column(String(100), nullable=True)
-    email = Column(String(255), nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    orders = relationship("EternaOrder", back_populates="recipient")
 
 
 class EternaOrder(Base):
     __tablename__ = "eterna_orders"
 
-    id = Column(Integer, primary_key=True, index=True)
-    eterna_id = Column(String(100), unique=True, nullable=False, index=True)
+    id = Column(String, primary_key=True, index=True)
+    paid = Column(Boolean, default=False, nullable=False)
 
-    customer_id = Column(Integer, ForeignKey("customers.id"), nullable=False)
-    recipient_id = Column(Integer, ForeignKey("recipients.id"), nullable=True)
+    customer_name = Column(String, nullable=False)
+    customer_email = Column(String, nullable=False)
 
-    phrase1 = Column(Text, nullable=False)
-    phrase2 = Column(Text, nullable=False)
-    phrase3 = Column(Text, nullable=False)
+    recipient_name = Column(String, nullable=False)
+    recipient_phone = Column(String, nullable=False)
 
-    image_count = Column(Integer, default=0)
+    phrase_1 = Column(Text, nullable=True)
+    phrase_2 = Column(Text, nullable=True)
+    phrase_3 = Column(Text, nullable=True)
 
-    storage_folder = Column(String(500), nullable=False)
-    video_path = Column(String(500), nullable=True)
-    status = Column(String(50), default="created")
-
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-    customer = relationship("Customer", back_populates="orders")
-    recipient = relationship("Recipient", back_populates="orders")
+    stripe_session_id = Column(String, nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
