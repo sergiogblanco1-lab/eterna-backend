@@ -1,15 +1,20 @@
 import os
 import uuid
-from fastapi import FastAPI, UploadFile, File, Form, Request
+import subprocess
+from pathlib import Path
+
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-app = FastAPI()
 
-STORAGE = "media"
-os.makedirs(STORAGE, exist_ok=True)
+app = FastAPI(title="ETERNA backend")
 
-app.mount("/media", StaticFiles(directory=STORAGE), name="media")
+BASE_DIR = Path(__file__).resolve().parent
+STORAGE = BASE_DIR / "media"
+STORAGE.mkdir(parents=True, exist_ok=True)
+
+app.mount("/media", StaticFiles(directory=str(STORAGE)), name="media")
 
 
 @app.get("/")
@@ -19,61 +24,102 @@ def home():
 
 @app.post("/crear-eterna")
 async def crear_eterna(request: Request):
+    try:
+        form = await request.form()
 
-    form = await request.form()
+        eterna_id = str(uuid.uuid4())
+        carpeta = STORAGE / eterna_id
+        carpeta.mkdir(parents=True, exist_ok=True)
 
-    eterna_id = str(uuid.uuid4())
-    carpeta = os.path.join(STORAGE, eterna_id)
-    os.makedirs(carpeta, exist_ok=True)
+        datos = {}
+        fotos_guardadas = []
 
-    # =====================
-    # DATOS
-    # =====================
-    datos = {}
-    fotos = []
+        for key, value in form.multi_items():
+            # Detectar archivos subidos
+            if hasattr(value, "filename") and value.filename:
+                contenido = await value.read()
 
-    for key in form:
-        value = form[key]
+                # Guardar solo imágenes
+                content_type = getattr(value, "content_type", "") or ""
+                if content_type.startswith("image/"):
+                    nombre_archivo = f"foto{len(fotos_guardadas) + 1}.jpg"
+                    ruta_archivo = carpeta / nombre_archivo
 
-        # detectar fotos automáticamente
-        if hasattr(value, "filename"):
-            contenido = await value.read()
-            ruta = os.path.join(carpeta, value.filename)
+                    with open(ruta_archivo, "wb") as f:
+                        f.write(contenido)
 
-            with open(ruta, "wb") as f:
-                f.write(contenido)
+                    fotos_guardadas.append(str(ruta_archivo))
+            else:
+                datos[key] = str(value)
 
-            fotos.append(ruta)
+        if len(fotos_guardadas) == 0:
+            return JSONResponse(
+                status_code=400,
+                content={"detail": "No se recibieron fotos."}
+            )
 
-        else:
-            datos[key] = value
+        # Guardar datos del formulario
+        data_path = carpeta / "data.txt"
+        with open(data_path, "w", encoding="utf-8") as f:
+            for k, v in datos.items():
+                f.write(f"{k}: {v}\n")
 
-    if len(fotos) == 0:
-        return JSONResponse({"detail": "No se recibieron fotos"}, status_code=400)
+        # Generar vídeo placeholder estable
+        video_path = carpeta / "video.mp4"
 
-    # =====================
-    # GUARDAR DATOS
-    # =====================
-    with open(os.path.join(carpeta, "data.txt"), "w") as f:
-        for k, v in datos.items():
-            f.write(f"{k}: {v}\n")
+        cmd = [
+            "ffmpeg",
+            "-f", "lavfi",
+            "-i", "color=c=black:s=720x1280:d=5",
+            "-vf",
+            "drawtext=text='ETERNA':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2",
+            "-c:v", "libx264",
+            "-pix_fmt", "yuv420p",
+            "-movflags", "+faststart",
+            "-y",
+            str(video_path)
+        ]
 
-    # =====================
-    # VIDEO PLACEHOLDER
-    # =====================
-    video_path = os.path.join(carpeta, "video.mp4")
+        result = subprocess.run(
+            cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
 
-    os.system(
-        f'ffmpeg -f lavfi -i color=c=black:s=720x1280:d=5 '
-        f'-vf "drawtext=text=\'ETERNA\':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2" '
-        f'-y {video_path}'
-    )
+        print("=== FFMPEG STDOUT ===")
+        print(result.stdout)
+        print("=== FFMPEG STDERR ===")
+        print(result.stderr)
 
-    video_url = f"https://eterna-v2-lab.onrender.com/media/{eterna_id}/video.mp4"
+        if result.returncode != 0:
+            return JSONResponse(
+                status_code=500,
+                content={
+                    "error": "Error generando video",
+                    "detalle": result.stderr
+                }
+            )
 
-    return {
-        "status": "ok",
-        "eterna_id": eterna_id,
-        "fotos": len(fotos),
-        "video_url": video_url
-    }
+        if not video_path.exists():
+            return JSONResponse(
+                status_code=500,
+                content={"error": "video no generado"}
+            )
+
+        video_url = f"{request.base_url}media/{eterna_id}/video.mp4"
+
+        return JSONResponse({
+            "status": "ok",
+            "eterna_id": eterna_id,
+            "fotos": len(fotos_guardadas),
+            "video_url": video_url
+        })
+
+    except Exception as e:
+        print("=== ERROR GENERAL ===")
+        print(str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"detail": str(e)}
+        )
