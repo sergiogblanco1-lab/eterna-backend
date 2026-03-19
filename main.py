@@ -3,8 +3,12 @@ import uuid
 import urllib.parse
 
 import stripe
-from fastapi import FastAPI, Form, Request, HTTPException
+from fastapi import FastAPI, Form, Request, HTTPException, Depends
 from fastapi.responses import HTMLResponse, RedirectResponse
+from sqlalchemy.orm import Session
+
+from database import Base, engine, get_db
+from models import EternaOrder
 
 app = FastAPI(title="ETERNA backend")
 
@@ -16,8 +20,6 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET")
 PUBLIC_URL = os.getenv("PUBLIC_BASE_URL")
 
-stripe.api_key = STRIPE_SECRET_KEY
-
 if not STRIPE_SECRET_KEY:
     print("❌ Falta STRIPE_SECRET_KEY")
 
@@ -27,11 +29,9 @@ if not STRIPE_WEBHOOK_SECRET:
 if not PUBLIC_URL:
     print("❌ Falta PUBLIC_BASE_URL")
 
-# =========================
-# MEMORIA SIMPLE (TEST)
-# =========================
+stripe.api_key = STRIPE_SECRET_KEY
 
-ORDERS = {}
+Base.metadata.create_all(bind=engine)
 
 # =========================
 # HOME
@@ -53,7 +53,8 @@ async def crear_eterna(
     recipient_phone: str = Form(...),
     phrase_1: str = Form(...),
     phrase_2: str = Form(...),
-    phrase_3: str = Form(...)
+    phrase_3: str = Form(...),
+    db: Session = Depends(get_db),
 ):
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY")
@@ -63,16 +64,22 @@ async def crear_eterna(
 
     order_id = str(uuid.uuid4())
 
-    ORDERS[order_id] = {
-        "paid": False,
-        "customer_name": customer_name,
-        "customer_email": customer_email,
-        "recipient_name": recipient_name,
-        "recipient_phone": recipient_phone,
-        "phrases": [phrase_1, phrase_2, phrase_3],
-    }
+    order = EternaOrder(
+        id=order_id,
+        paid=False,
+        customer_name=customer_name,
+        customer_email=customer_email,
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        phrase_1=phrase_1,
+        phrase_2=phrase_2,
+        phrase_3=phrase_3,
+    )
 
-    print("🆕 Pedido creado:", order_id)
+    db.add(order)
+    db.commit()
+
+    print("🆕 Pedido guardado en DB:", order_id)
 
     try:
         checkout_session = stripe.checkout.Session.create(
@@ -86,7 +93,7 @@ async def crear_eterna(
                             "name": "ETERNA RECUERDOS",
                             "description": "Recuerdo emocional creado a partir de tus fotos y frases.",
                         },
-                        "unit_amount": 2900,  # 29,00 €
+                        "unit_amount": 2900,
                     },
                     "quantity": 1,
                 }
@@ -94,9 +101,6 @@ async def crear_eterna(
             customer_email=customer_email,
             metadata={
                 "order_id": order_id,
-                "customer_name": customer_name,
-                "recipient_name": recipient_name,
-                "recipient_phone": recipient_phone,
             },
             success_url=f"{PUBLIC_URL}/pedido/{order_id}?paid=1",
             cancel_url=f"{PUBLIC_URL}/pedido/{order_id}?cancelled=1",
@@ -104,6 +108,9 @@ async def crear_eterna(
     except Exception as e:
         print("❌ Error creando Checkout Session:", e)
         raise HTTPException(status_code=500, detail="No se pudo crear la sesión de pago")
+
+    order.stripe_session_id = checkout_session.id
+    db.commit()
 
     print("➡️ Checkout Session creada:", checkout_session.id)
     print("➡️ URL Stripe:", checkout_session.url)
@@ -115,7 +122,7 @@ async def crear_eterna(
 # =========================
 
 @app.post("/webhook")
-async def stripe_webhook(request: Request):
+async def stripe_webhook(request: Request, db: Session = Depends(get_db)):
     payload = await request.body()
     sig_header = request.headers.get("stripe-signature")
 
@@ -136,14 +143,25 @@ async def stripe_webhook(request: Request):
 
         metadata = session.get("metadata", {})
         order_id = metadata.get("order_id")
+        stripe_session_id = session.get("id")
 
         print("💰 Pago completado. order_id:", order_id)
+        print("💰 Stripe session id:", stripe_session_id)
 
-        if order_id and order_id in ORDERS:
-            ORDERS[order_id]["paid"] = True
-            print(f"✅ Pedido {order_id} marcado como pagado")
+        order = None
+
+        if order_id:
+            order = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
+
+        if not order and stripe_session_id:
+            order = db.query(EternaOrder).filter(EternaOrder.stripe_session_id == stripe_session_id).first()
+
+        if order:
+            order.paid = True
+            db.commit()
+            print(f"✅ Pedido {order.id} marcado como pagado")
         else:
-            print("⚠️ Pedido no encontrado en memoria")
+            print("⚠️ Pedido no encontrado en base de datos")
 
     return {"status": "ok"}
 
@@ -152,8 +170,13 @@ async def stripe_webhook(request: Request):
 # =========================
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
-def ver_pedido(order_id: str, paid: int = 0, cancelled: int = 0):
-    order = ORDERS.get(order_id)
+def ver_pedido(
+    order_id: str,
+    paid: int = 0,
+    cancelled: int = 0,
+    db: Session = Depends(get_db),
+):
+    order = db.query(EternaOrder).filter(EternaOrder.id == order_id).first()
 
     if not order:
         return HTMLResponse("""
@@ -164,7 +187,6 @@ def ver_pedido(order_id: str, paid: int = 0, cancelled: int = 0):
         </head>
         <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial,sans-serif;">
             <h1>Pedido no encontrado</h1>
-            <p>Puede que el servidor se haya reiniciado o que el pedido no exista ya en memoria.</p>
         </body>
         </html>
         """)
@@ -178,13 +200,13 @@ def ver_pedido(order_id: str, paid: int = 0, cancelled: int = 0):
         </head>
         <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial,sans-serif;">
             <h1>Pago cancelado</h1>
-            <p>Tu pedido sigue guardado, pero no se ha completado el pago.</p>
+            <p>Tu pedido existe, pero no se ha completado el pago.</p>
             <p><strong>Pedido:</strong> {order_id}</p>
         </body>
         </html>
         """)
 
-    if not order["paid"]:
+    if not order.paid:
         return HTMLResponse(f"""
         <html>
         <head>
@@ -199,7 +221,7 @@ def ver_pedido(order_id: str, paid: int = 0, cancelled: int = 0):
         </html>
         """)
 
-    telefono = "".join(filter(str.isdigit, order["recipient_phone"]))
+    telefono = "".join(filter(str.isdigit, order.recipient_phone))
 
     mensaje = f"""
 Hola ❤️
@@ -238,5 +260,18 @@ Alguien ha creado algo muy especial para ti.
 # =========================
 
 @app.get("/debug/orders")
-def debug_orders():
-    return ORDERS
+def debug_orders(db: Session = Depends(get_db)):
+    orders = db.query(EternaOrder).all()
+
+    return [
+        {
+            "id": o.id,
+            "paid": o.paid,
+            "customer_name": o.customer_name,
+            "customer_email": o.customer_email,
+            "recipient_name": o.recipient_name,
+            "recipient_phone": o.recipient_phone,
+            "stripe_session_id": o.stripe_session_id,
+        }
+        for o in orders
+    ]
