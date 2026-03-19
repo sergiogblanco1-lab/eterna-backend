@@ -1,4 +1,4 @@
-import os
+  import os
 import uuid
 import subprocess
 from pathlib import Path
@@ -35,12 +35,10 @@ async def crear_eterna(request: Request):
         fotos_guardadas = []
 
         for key, value in form.multi_items():
-            # Detectar archivos subidos
             if hasattr(value, "filename") and value.filename:
                 contenido = await value.read()
-
-                # Guardar solo imágenes
                 content_type = getattr(value, "content_type", "") or ""
+
                 if content_type.startswith("image/"):
                     nombre_archivo = f"foto{len(fotos_guardadas) + 1}.jpg"
                     ruta_archivo = carpeta / nombre_archivo
@@ -58,13 +56,11 @@ async def crear_eterna(request: Request):
                 content={"detail": "No se recibieron fotos."}
             )
 
-        # Guardar datos del formulario
         data_path = carpeta / "data.txt"
         with open(data_path, "w", encoding="utf-8") as f:
             for k, v in datos.items():
                 f.write(f"{k}: {v}\n")
 
-        # Generar vídeo placeholder estable
         video_path = carpeta / "video.mp4"
 
         cmd = [
