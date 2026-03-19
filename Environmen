@@ -1,0 +1,3 @@
+STRIPE_SECRET_KEY=sk_live_o_sk_test_TU_CLAVE
+STRIPE_WEBHOOK_SECRET=whsec_00X5yxxDADutJpsOYPSXcuhhsvU254WQ
+STRIPE_PAYMENT_LINK=https://buy.stripe.com/9B6dR9eDo3d91UBfjxaZi00
