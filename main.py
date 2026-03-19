@@ -7,7 +7,6 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-
 app = FastAPI(title="ETERNA backend")
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -34,6 +33,9 @@ async def crear_eterna(request: Request):
         datos = {}
         fotos_guardadas = []
 
+        # =========================
+        # GUARDAR DATOS Y FOTOS
+        # =========================
         for key, value in form.multi_items():
             if hasattr(value, "filename") and value.filename:
                 contenido = await value.read()
@@ -53,14 +55,16 @@ async def crear_eterna(request: Request):
         if len(fotos_guardadas) == 0:
             return JSONResponse(
                 status_code=400,
-                content={"detail": "No se recibieron fotos."}
+                content={"detail": "No se recibieron fotos"}
             )
 
-        data_path = carpeta / "data.txt"
-        with open(data_path, "w", encoding="utf-8") as f:
+        with open(carpeta / "data.txt", "w", encoding="utf-8") as f:
             for k, v in datos.items():
                 f.write(f"{k}: {v}\n")
 
+        # =========================
+        # GENERAR VIDEO (TEST SIMPLE)
+        # =========================
         video_path = carpeta / "video.mp4"
 
         cmd = [
@@ -83,17 +87,29 @@ async def crear_eterna(request: Request):
             text=True
         )
 
-        print("=== FFMPEG STDOUT ===")
+        # =========================
+        # DEBUG REAL
+        # =========================
+        print("====== FFMPEG STDOUT ======")
         print(result.stdout)
-        print("=== FFMPEG STDERR ===")
+
+        print("====== FFMPEG STDERR ======")
         print(result.stderr)
 
+        print("====== VIDEO CHECK ======")
+        print("VIDEO PATH:", video_path)
+        print("EXISTS:", video_path.exists())
+        print("FILES:", list(carpeta.iterdir()))
+
+        # =========================
+        # VALIDACIÓN
+        # =========================
         if result.returncode != 0:
             return JSONResponse(
                 status_code=500,
                 content={
-                    "error": "Error generando video",
-                    "detalle": result.stderr
+                    "error": "FFmpeg falló",
+                    "stderr": result.stderr
                 }
             )
 
@@ -113,8 +129,9 @@ async def crear_eterna(request: Request):
         })
 
     except Exception as e:
-        print("=== ERROR GENERAL ===")
+        print("====== ERROR GENERAL ======")
         print(str(e))
+
         return JSONResponse(
             status_code=500,
             content={"detail": str(e)}
