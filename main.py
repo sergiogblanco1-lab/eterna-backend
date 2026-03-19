@@ -1,103 +1,79 @@
-from fastapi import FastAPI, Request, UploadFile, HTTPException
+import os
+import uuid
+from fastapi import FastAPI, UploadFile, File, Form, Request
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-import uuid
-import os
-from pathlib import Path
-from typing import List
-
-from video_engine import VideoEngine
-
-
-# 🔥 ESTO ES LO QUE RENDER NECESITA
 app = FastAPI()
 
-# =========================
-# CONFIG
-# =========================
-BASE_DIR = Path(__file__).resolve().parent
-STORAGE = BASE_DIR / "storage"
-STORAGE.mkdir(parents=True, exist_ok=True)
+STORAGE = "media"
+os.makedirs(STORAGE, exist_ok=True)
 
-# SERVIR MEDIA
-app.mount("/media", StaticFiles(directory=str(STORAGE)), name="media")
-
-video_engine = VideoEngine()
+app.mount("/media", StaticFiles(directory=STORAGE), name="media")
 
 
-# =========================
-# ENDPOINT PRINCIPAL
-# =========================
+@app.get("/")
+def home():
+    return {"status": "ETERNA backend activo"}
+
+
 @app.post("/crear-eterna")
 async def crear_eterna(request: Request):
 
-    try:
-        form = await request.form()
+    form = await request.form()
 
-        frase1 = (form.get("frase1") or "").strip()
-        frase2 = (form.get("frase2") or "").strip()
-        frase3 = (form.get("frase3") or "").strip()
+    eterna_id = str(uuid.uuid4())
+    carpeta = os.path.join(STORAGE, eterna_id)
+    os.makedirs(carpeta, exist_ok=True)
 
-        frases = [frase1, frase2, frase3]
+    # =====================
+    # DATOS
+    # =====================
+    datos = {}
+    fotos = []
 
-        fotos: List[UploadFile] = []
+    for key in form:
+        value = form[key]
 
-        for _, value in form.multi_items():
-            if isinstance(value, UploadFile):
-                if value.filename and value.content_type.startswith("image"):
-                    fotos.append(value)
+        # detectar fotos automáticamente
+        if hasattr(value, "filename"):
+            contenido = await value.read()
+            ruta = os.path.join(carpeta, value.filename)
 
-        if not fotos:
-            raise HTTPException(status_code=400, detail="No se recibieron fotos")
+            with open(ruta, "wb") as f:
+                f.write(contenido)
 
-        eterna_id = str(uuid.uuid4())
-        folder = STORAGE / eterna_id
-        folder.mkdir(parents=True, exist_ok=True)
+            fotos.append(ruta)
 
-        image_paths = []
+        else:
+            datos[key] = value
 
-        for i, foto in enumerate(fotos[:6], start=1):
-            path = folder / f"foto{i}.jpg"
+    if len(fotos) == 0:
+        return JSONResponse({"detail": "No se recibieron fotos"}, status_code=400)
 
-            with open(path, "wb") as f:
-                f.write(await foto.read())
+    # =====================
+    # GUARDAR DATOS
+    # =====================
+    with open(os.path.join(carpeta, "data.txt"), "w") as f:
+        for k, v in datos.items():
+            f.write(f"{k}: {v}\n")
 
-            image_paths.append(str(path))
+    # =====================
+    # VIDEO PLACEHOLDER
+    # =====================
+    video_path = os.path.join(carpeta, "video.mp4")
 
-        video_path = folder / "video.mp4"
+    os.system(
+        f'ffmpeg -f lavfi -i color=c=black:s=720x1280:d=5 '
+        f'-vf "drawtext=text=\'ETERNA\':fontcolor=white:fontsize=60:x=(w-text_w)/2:y=(h-text_h)/2" '
+        f'-y {video_path}'
+    )
 
-        video_engine.generate_video(
-            image_paths=image_paths,
-            phrases=frases,
-            output_path=str(video_path)
-        )
+    video_url = f"https://eterna-v2-lab.onrender.com/media/{eterna_id}/video.mp4"
 
-        print("VIDEO PATH:", video_path)
-        print("EXISTE:", os.path.exists(video_path))
-
-        if not video_path.exists():
-            raise HTTPException(status_code=500, detail="No se creó el vídeo")
-
-        video_url = f"{request.base_url}media/{eterna_id}/video.mp4"
-
-        return JSONResponse({
-            "status": "ok",
-            "eterna_id": eterna_id,
-            "video_url": video_url
-        })
-
-    except Exception as e:
-        print("ERROR:", str(e))
-        return JSONResponse(
-            status_code=500,
-            content={"status": "error", "detail": str(e)}
-        )
-
-
-# =========================
-# HEALTH CHECK
-# =========================
-@app.get("/")
-def home():
-    return {"status": "ETERNA backend live"}
+    return {
+        "status": "ok",
+        "eterna_id": eterna_id,
+        "fotos": len(fotos),
+        "video_url": video_url
+    }
