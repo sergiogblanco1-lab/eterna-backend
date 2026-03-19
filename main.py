@@ -42,73 +42,73 @@ stripe.api_key = STRIPE_SECRET_KEY
 # FUNCIONES AUXILIARES
 # =========================================================
 
-def save_pending_data(data: dict, files_data: List[tuple]) -> str:
+def guardar_datos_pendientes(data: dict, archivos_fotos: List[tuple]) -> str:
     """
     Guarda datos y fotos antes del pago.
-    files_data = [(filename, bytes), ...]
+    archivos_fotos = [(filename, bytes), ...]
     """
     eterna_id = str(uuid.uuid4())
-    folder = PENDING_DIR / eterna_id
-    folder.mkdir(parents=True, exist_ok=True)
+    carpeta = PENDING_DIR / eterna_id
+    carpeta.mkdir(parents=True, exist_ok=True)
 
-    photos_dir = folder / "photos"
-    photos_dir.mkdir(exist_ok=True)
+    carpeta_fotos = carpeta / "photos"
+    carpeta_fotos.mkdir(exist_ok=True)
 
-    saved_photos = []
+    fotos_guardadas = []
 
-    for i, (filename, content) in enumerate(files_data, start=1):
+    for i, (filename, content) in enumerate(archivos_fotos, start=1):
         ext = Path(filename).suffix.lower() or ".jpg"
-        clean_name = f"foto_{i}{ext}"
-        photo_path = photos_dir / clean_name
+        nombre_limpio = f"foto_{i}{ext}"
+        ruta_foto = carpeta_fotos / nombre_limpio
 
-        with open(photo_path, "wb") as f:
+        with open(ruta_foto, "wb") as f:
             f.write(content)
 
-        saved_photos.append(str(photo_path))
+        fotos_guardadas.append(str(ruta_foto))
 
-    data["saved_photos"] = saved_photos
+    data["fotos_guardadas"] = fotos_guardadas
 
-    with open(folder / "data.json", "w", encoding="utf-8") as f:
+    with open(carpeta / "data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
     return eterna_id
 
 
-def load_pending_data(eterna_id: str) -> dict:
-    folder = PENDING_DIR / eterna_id
-    data_file = folder / "data.json"
+def cargar_datos_pendientes(eterna_id: str) -> dict:
+    carpeta = PENDING_DIR / eterna_id
+    archivo_data = carpeta / "data.json"
 
-    if not data_file.exists():
+    if not archivo_data.exists():
         raise FileNotFoundError(f"No existe data.json para {eterna_id}")
 
-    with open(data_file, "r", encoding="utf-8") as f:
+    with open(archivo_data, "r", encoding="utf-8") as f:
         return json.load(f)
 
 
-def move_pending_to_order(eterna_id: str) -> Path:
-    pending_folder = PENDING_DIR / eterna_id
-    order_folder = ORDERS_DIR / eterna_id
+def mover_pendiente_a_orden(eterna_id: str) -> Path:
+    carpeta_pendiente = PENDING_DIR / eterna_id
+    carpeta_orden = ORDERS_DIR / eterna_id
 
-    if not pending_folder.exists():
+    if not carpeta_pendiente.exists():
         raise FileNotFoundError(f"No existe carpeta pending para {eterna_id}")
 
-    if order_folder.exists():
-        return order_folder
+    if carpeta_orden.exists():
+        return carpeta_orden
 
-    pending_folder.rename(order_folder)
-    return order_folder
+    carpeta_pendiente.rename(carpeta_orden)
+    return carpeta_orden
 
 
-def create_fake_video(order_folder: Path) -> str:
+def crear_video_temporal(carpeta_orden: Path) -> str:
     """
-    Placeholder temporal.
+    Temporal.
     Luego aquí meteremos el generador real del vídeo.
     """
-    output_file = order_folder / "video_generado.txt"
-    with open(output_file, "w", encoding="utf-8") as f:
+    archivo_salida = carpeta_orden / "video_generado.txt"
+    with open(archivo_salida, "w", encoding="utf-8") as f:
         f.write("VIDEO GENERADO CORRECTAMENTE PARA ETERNA\n")
 
-    return str(output_file)
+    return str(archivo_salida)
 
 
 # =========================================================
@@ -163,18 +163,18 @@ def home():
       <p>Sube tus fotos, escribe tus frases y pasa al pago.</p>
 
       <form action="/preparar-pago" method="post" enctype="multipart/form-data">
-        <input type="text" name="customer_name" placeholder="Tu nombre" required>
-        <input type="email" name="customer_email" placeholder="Tu email" required>
-        <input type="text" name="customer_phone" placeholder="Tu teléfono">
+        <input type="text" name="nombre_cliente" placeholder="Tu nombre" required>
+        <input type="email" name="email_cliente" placeholder="Tu email" required>
+        <input type="text" name="telefono_cliente" placeholder="Tu teléfono">
 
-        <input type="text" name="recipient_name" placeholder="Nombre de la persona que recibirá la ETERNA" required>
-        <input type="text" name="recipient_phone" placeholder="Teléfono de la persona que la recibirá">
+        <input type="text" name="nombre_destinatario" placeholder="Nombre de quien recibirá la ETERNA" required>
+        <input type="text" name="telefono_destinatario" placeholder="Teléfono de quien la recibirá">
 
-        <textarea name="phrase_1" placeholder="Frase 1" required></textarea>
-        <textarea name="phrase_2" placeholder="Frase 2" required></textarea>
-        <textarea name="phrase_3" placeholder="Frase 3" required></textarea>
+        <textarea name="frase_1" placeholder="Frase 1" required></textarea>
+        <textarea name="frase_2" placeholder="Frase 2" required></textarea>
+        <textarea name="frase_3" placeholder="Frase 3" required></textarea>
 
-        <input type="file" name="photos" accept="image/*" multiple required>
+        <input type="file" name="fotos" accept="image/*" multiple required>
 
         <button type="submit">Crear mi ETERNA</button>
       </form>
@@ -186,45 +186,45 @@ def home():
 
 
 # =========================================================
-# PASO 1: GUARDAR FORMULARIO Y REDIRIGIR A STRIPE
+# GUARDAR FORMULARIO Y REDIRIGIR A STRIPE
 # =========================================================
 
 @app.post("/preparar-pago")
 async def preparar_pago(
-    customer_name: str = Form(...),
-    customer_email: str = Form(...),
-    customer_phone: str = Form(""),
-    recipient_name: str = Form(...),
-    recipient_phone: str = Form(""),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
-    photos: List[UploadFile] = File(...)
+    nombre_cliente: str = Form(...),
+    email_cliente: str = Form(...),
+    telefono_cliente: str = Form(""),
+    nombre_destinatario: str = Form(...),
+    telefono_destinatario: str = Form(""),
+    frase_1: str = Form(...),
+    frase_2: str = Form(...),
+    frase_3: str = Form(...),
+    fotos: List[UploadFile] = File(...)
 ):
-    if len(photos) < 1:
+    if len(fotos) < 1:
         raise HTTPException(status_code=400, detail="Debes subir al menos 1 foto.")
 
-    if len(photos) > 10:
+    if len(fotos) > 10:
         raise HTTPException(status_code=400, detail="Máximo 10 fotos.")
 
-    files_data = []
-    for photo in photos:
-        content = await photo.read()
-        files_data.append((photo.filename, content))
+    archivos_fotos = []
+    for foto in fotos:
+        contenido = await foto.read()
+        archivos_fotos.append((foto.filename, contenido))
 
     data = {
-        "customer_name": customer_name,
-        "customer_email": customer_email,
-        "customer_phone": customer_phone,
-        "recipient_name": recipient_name,
-        "recipient_phone": recipient_phone,
-        "phrase_1": phrase_1,
-        "phrase_2": phrase_2,
-        "phrase_3": phrase_3,
+        "nombre_cliente": nombre_cliente,
+        "email_cliente": email_cliente,
+        "telefono_cliente": telefono_cliente,
+        "nombre_destinatario": nombre_destinatario,
+        "telefono_destinatario": telefono_destinatario,
+        "frase_1": frase_1,
+        "frase_2": frase_2,
+        "frase_3": frase_3,
         "payment_status": "pending"
     }
 
-    eterna_id = save_pending_data(data, files_data)
+    eterna_id = guardar_datos_pendientes(data, archivos_fotos)
 
     payment_url = f"{STRIPE_PAYMENT_LINK}?client_reference_id={eterna_id}"
 
@@ -246,7 +246,7 @@ async def preparar_pago(
 
 
 # =========================================================
-# OPCIONAL: CREAR CHECKOUT SESSION DESDE EL BACKEND
+# OPCIONAL: CREAR CHECKOUT SESSION DESDE BACKEND
 # =========================================================
 
 @app.post("/crear-checkout-session")
@@ -267,7 +267,7 @@ async def crear_checkout_session(request: Request):
                         "currency": "eur",
                         "product_data": {
                             "name": "ETERNA",
-                            "description": "Video emocional personalizado"
+                            "description": "Vídeo emocional personalizado"
                         },
                         "unit_amount": 4900
                     },
@@ -309,21 +309,21 @@ async def stripe_webhook(request: Request):
         session = event["data"]["object"]
 
         eterna_id = session.get("client_reference_id")
-        customer_email_paid = session.get("customer_details", {}).get("email")
+        email_pagado = session.get("customer_details", {}).get("email")
         payment_status = session.get("payment_status")
 
         if eterna_id and payment_status == "paid":
             try:
-                data = load_pending_data(eterna_id)
+                data = cargar_datos_pendientes(eterna_id)
                 data["payment_status"] = "paid"
-                data["paid_email"] = customer_email_paid or ""
+                data["email_pagado"] = email_pagado or ""
 
-                pending_folder = PENDING_DIR / eterna_id
-                with open(pending_folder / "data.json", "w", encoding="utf-8") as f:
+                carpeta_pendiente = PENDING_DIR / eterna_id
+                with open(carpeta_pendiente / "data.json", "w", encoding="utf-8") as f:
                     json.dump(data, f, ensure_ascii=False, indent=2)
 
-                order_folder = move_pending_to_order(eterna_id)
-                create_fake_video(order_folder)
+                carpeta_orden = mover_pendiente_a_orden(eterna_id)
+                crear_video_temporal(carpeta_orden)
 
                 print(f"✅ PAGO CONFIRMADO - ETERNA {eterna_id}")
 
@@ -382,19 +382,19 @@ def health():
     return {"status": "ok"}
 
 
-@app.get("/debug-pending")
-def debug_pending():
+@app.get("/debug-pendientes")
+def debug_pendientes():
     items = []
     for p in PENDING_DIR.iterdir():
         if p.is_dir():
             items.append(p.name)
-    return {"pending": items}
+    return {"pendientes": items}
 
 
-@app.get("/debug-orders")
-def debug_orders():
+@app.get("/debug-ordenes")
+def debug_ordenes():
     items = []
     for p in ORDERS_DIR.iterdir():
         if p.is_dir():
             items.append(p.name)
-    return {"orders": items}
+    return {"ordenes": items}
