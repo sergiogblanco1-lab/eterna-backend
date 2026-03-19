@@ -11,7 +11,7 @@ from fastapi.staticfiles import StaticFiles
 
 
 # =========================================================
-# CONFIG
+# CONFIGURACIÓN
 # =========================================================
 
 app = FastAPI(title="ETERNA backend")
@@ -30,33 +30,32 @@ app.mount("/media", StaticFiles(directory=str(MEDIA_DIR)), name="media")
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-STRIPE_PAYMENT_LINK = os.getenv("STRIPE_PAYMENT_LINK", "https://buy.stripe.com/9B6dR9eDo3d91UBfjxaZi00")
+STRIPE_PAYMENT_LINK = os.getenv(
+    "STRIPE_PAYMENT_LINK",
+    "https://buy.stripe.com/9B6dR9eDo3d91UBfjxaZi00"
+)
 
 stripe.api_key = STRIPE_SECRET_KEY
 
 
 # =========================================================
-# HELPERS
+# FUNCIONES AUXILIARES
 # =========================================================
 
 def save_pending_data(data: dict, files_data: List[tuple]) -> str:
     """
-    Guarda los datos del formulario y fotos antes del pago.
+    Guarda datos y fotos antes del pago.
     files_data = [(filename, bytes), ...]
     """
     eterna_id = str(uuid.uuid4())
     folder = PENDING_DIR / eterna_id
     folder.mkdir(parents=True, exist_ok=True)
 
-    # guardar json
-    with open(folder / "data.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    # guardar fotos
     photos_dir = folder / "photos"
     photos_dir.mkdir(exist_ok=True)
 
     saved_photos = []
+
     for i, (filename, content) in enumerate(files_data, start=1):
         ext = Path(filename).suffix.lower() or ".jpg"
         clean_name = f"foto_{i}{ext}"
@@ -68,6 +67,7 @@ def save_pending_data(data: dict, files_data: List[tuple]) -> str:
         saved_photos.append(str(photo_path))
 
     data["saved_photos"] = saved_photos
+
     with open(folder / "data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
@@ -101,23 +101,14 @@ def move_pending_to_order(eterna_id: str) -> Path:
 
 def create_fake_video(order_folder: Path) -> str:
     """
-    Placeholder.
-    Aquí luego meteremos el generador real de vídeo.
-    Ahora solo crea un archivo texto para confirmar el flujo.
+    Placeholder temporal.
+    Luego aquí meteremos el generador real del vídeo.
     """
     output_file = order_folder / "video_generado.txt"
     with open(output_file, "w", encoding="utf-8") as f:
         f.write("VIDEO GENERADO CORRECTAMENTE PARA ETERNA\n")
 
     return str(output_file)
-
-
-def get_success_url(eterna_id: str) -> str:
-    return f"/gracias?eterna_id={eterna_id}"
-
-
-def get_cancel_url(eterna_id: str) -> str:
-    return f"/cancelado?eterna_id={eterna_id}"
 
 
 # =========================================================
@@ -177,7 +168,6 @@ def home():
         <input type="text" name="customer_phone" placeholder="Tu teléfono">
 
         <input type="text" name="recipient_name" placeholder="Nombre de la persona que recibirá la ETERNA" required>
-        <input type="email" name="recipient_email" placeholder="Email de la persona que la recibirá" required>
         <input type="text" name="recipient_phone" placeholder="Teléfono de la persona que la recibirá">
 
         <textarea name="phrase_1" placeholder="Frase 1" required></textarea>
@@ -196,7 +186,7 @@ def home():
 
 
 # =========================================================
-# PASO 1: GUARDAR FORMULARIO + REDIRIGIR A STRIPE
+# PASO 1: GUARDAR FORMULARIO Y REDIRIGIR A STRIPE
 # =========================================================
 
 @app.post("/preparar-pago")
@@ -205,7 +195,6 @@ async def preparar_pago(
     customer_email: str = Form(...),
     customer_phone: str = Form(""),
     recipient_name: str = Form(...),
-    recipient_email: str = Form(...),
     recipient_phone: str = Form(""),
     phrase_1: str = Form(...),
     phrase_2: str = Form(...),
@@ -228,7 +217,6 @@ async def preparar_pago(
         "customer_email": customer_email,
         "customer_phone": customer_phone,
         "recipient_name": recipient_name,
-        "recipient_email": recipient_email,
         "recipient_phone": recipient_phone,
         "phrase_1": phrase_1,
         "phrase_2": phrase_2,
@@ -238,7 +226,6 @@ async def preparar_pago(
 
     eterna_id = save_pending_data(data, files_data)
 
-    # Si quieres usar PAYMENT LINK fijo:
     payment_url = f"{STRIPE_PAYMENT_LINK}?client_reference_id={eterna_id}"
 
     return HTMLResponse(f"""
@@ -259,15 +246,11 @@ async def preparar_pago(
 
 
 # =========================================================
-# OPCIÓN MEJOR: CREAR SESIÓN STRIPE DESDE BACKEND
+# OPCIONAL: CREAR CHECKOUT SESSION DESDE EL BACKEND
 # =========================================================
 
 @app.post("/crear-checkout-session")
 async def crear_checkout_session(request: Request):
-    """
-    Esta ruta la puedes usar más adelante si prefieres
-    no depender de un payment link fijo.
-    """
     try:
         body = await request.json()
         eterna_id = body.get("eterna_id")
@@ -286,7 +269,7 @@ async def crear_checkout_session(request: Request):
                             "name": "ETERNA",
                             "description": "Video emocional personalizado"
                         },
-                        "unit_amount": 4900,  # 49,00 €
+                        "unit_amount": 4900
                     },
                     "quantity": 1,
                 }
@@ -303,7 +286,7 @@ async def crear_checkout_session(request: Request):
 
 
 # =========================================================
-# WEBHOOK STRIPE
+# WEBHOOK DE STRIPE
 # =========================================================
 
 @app.post("/webhook")
@@ -326,14 +309,14 @@ async def stripe_webhook(request: Request):
         session = event["data"]["object"]
 
         eterna_id = session.get("client_reference_id")
-        customer_email = session.get("customer_details", {}).get("email")
+        customer_email_paid = session.get("customer_details", {}).get("email")
         payment_status = session.get("payment_status")
 
         if eterna_id and payment_status == "paid":
             try:
                 data = load_pending_data(eterna_id)
                 data["payment_status"] = "paid"
-                data["paid_email"] = customer_email or ""
+                data["paid_email"] = customer_email_paid or ""
 
                 pending_folder = PENDING_DIR / eterna_id
                 with open(pending_folder / "data.json", "w", encoding="utf-8") as f:
@@ -391,7 +374,7 @@ def cancelado(eterna_id: str = ""):
 
 
 # =========================================================
-# TEST
+# RUTAS DE PRUEBA
 # =========================================================
 
 @app.get("/health")
