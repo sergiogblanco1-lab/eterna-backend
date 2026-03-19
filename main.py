@@ -1,121 +1,103 @@
-import subprocess
-import shutil
+from fastapi import FastAPI, Request, UploadFile, HTTPException
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+import uuid
+import os
 from pathlib import Path
 from typing import List
 
-from PIL import Image, ImageOps
+from video_engine import VideoEngine
 
 
-class VideoEngine:
+# 🔥 ESTO ES LO QUE RENDER NECESITA
+app = FastAPI()
 
-    def generate_video(
-        self,
-        image_paths: List[str],
-        phrases: List[str],
-        output_path: str,
-        seconds_per_image: int = 5
-    ) -> str:
+# =========================
+# CONFIG
+# =========================
+BASE_DIR = Path(__file__).resolve().parent
+STORAGE = BASE_DIR / "storage"
+STORAGE.mkdir(parents=True, exist_ok=True)
 
-        if not image_paths:
-            raise ValueError("No hay imágenes")
+# SERVIR MEDIA
+app.mount("/media", StaticFiles(directory=str(STORAGE)), name="media")
 
-        if shutil.which("ffmpeg") is None:
-            raise RuntimeError("FFmpeg no está instalado")
+video_engine = VideoEngine()
 
-        output_file = Path(output_path)
-        output_file.parent.mkdir(parents=True, exist_ok=True)
 
-        temp_dir = output_file.parent / "frames"
-        temp_dir.mkdir(exist_ok=True)
+# =========================
+# ENDPOINT PRINCIPAL
+# =========================
+@app.post("/crear-eterna")
+async def crear_eterna(request: Request):
 
-        prepared_images = []
+    try:
+        form = await request.form()
 
-        # =====================
-        # PREPARAR IMÁGENES
-        # =====================
-        for i, img_path in enumerate(image_paths):
+        frase1 = (form.get("frase1") or "").strip()
+        frase2 = (form.get("frase2") or "").strip()
+        frase3 = (form.get("frase3") or "").strip()
 
-            out_path = temp_dir / f"img_{i}.jpg"
+        frases = [frase1, frase2, frase3]
 
-            with Image.open(img_path) as img:
-                img = img.convert("L")  # blanco y negro
-                img = ImageOps.fit(img, (720, 1280))
-                img.save(out_path, "JPEG", quality=95)
+        fotos: List[UploadFile] = []
 
-            prepared_images.append(str(out_path))
+        for _, value in form.multi_items():
+            if isinstance(value, UploadFile):
+                if value.filename and value.content_type.startswith("image"):
+                    fotos.append(value)
 
-        # =====================
-        # CREAR INPUTS
-        # =====================
-        inputs = []
-        for img in prepared_images:
-            inputs += ["-loop", "1", "-t", str(seconds_per_image), "-i", img]
+        if not fotos:
+            raise HTTPException(status_code=400, detail="No se recibieron fotos")
 
-        # =====================
-        # TEXTO
-        # =====================
-        filters = []
+        eterna_id = str(uuid.uuid4())
+        folder = STORAGE / eterna_id
+        folder.mkdir(parents=True, exist_ok=True)
 
-        for i in range(len(prepared_images)):
+        image_paths = []
 
-            text = ""
-            if i < len(phrases) and phrases[i]:
-                safe = phrases[i].replace(":", "").replace("'", "")
-                text = (
-                    f",drawtext=text='{safe}':"
-                    f"fontcolor=white:fontsize=40:"
-                    f"x=(w-text_w)/2:y=h-200"
-                )
+        for i, foto in enumerate(fotos[:6], start=1):
+            path = folder / f"foto{i}.jpg"
 
-            filters.append(
-                f"[{i}:v]scale=720:1280,format=yuv420p{text}[v{i}]"
-            )
+            with open(path, "wb") as f:
+                f.write(await foto.read())
 
-        # =====================
-        # TRANSICIONES
-        # =====================
-        if len(prepared_images) == 1:
-            final = "[v0]"
-        else:
-            offset = seconds_per_image - 1
+            image_paths.append(str(path))
 
-            for i in range(1, len(prepared_images)):
-                a = "[v0]" if i == 1 else f"[x{i-1}]"
-                b = f"[v{i}]"
-                out = f"[x{i}]"
+        video_path = folder / "video.mp4"
 
-                filters.append(
-                    f"{a}{b}xfade=transition=fade:duration=1:offset={offset}{out}"
-                )
+        video_engine.generate_video(
+            image_paths=image_paths,
+            phrases=frases,
+            output_path=str(video_path)
+        )
 
-                offset += seconds_per_image - 1
+        print("VIDEO PATH:", video_path)
+        print("EXISTE:", os.path.exists(video_path))
 
-            final = f"[x{len(prepared_images)-1}]"
+        if not video_path.exists():
+            raise HTTPException(status_code=500, detail="No se creó el vídeo")
 
-        filter_complex = ";".join(filters)
+        video_url = f"{request.base_url}media/{eterna_id}/video.mp4"
 
-        # =====================
-        # COMANDO FFMPEG
-        # =====================
-        cmd = [
-            "ffmpeg",
-            "-y",
-            *inputs,
-            "-filter_complex",
-            filter_complex,
-            "-map",
-            final,
-            "-pix_fmt",
-            "yuv420p",
-            str(output_file),
-        ]
+        return JSONResponse({
+            "status": "ok",
+            "eterna_id": eterna_id,
+            "video_url": video_url
+        })
 
-        result = subprocess.run(cmd, capture_output=True, text=True)
+    except Exception as e:
+        print("ERROR:", str(e))
+        return JSONResponse(
+            status_code=500,
+            content={"status": "error", "detail": str(e)}
+        )
 
-        if result.returncode != 0:
-            raise RuntimeError(result.stderr)
 
-        if not output_file.exists():
-            raise RuntimeError("No se creó el vídeo")
-
-        return str(output_file)
+# =========================
+# HEALTH CHECK
+# =========================
+@app.get("/")
+def home():
+    return {"status": "ETERNA backend live"}
