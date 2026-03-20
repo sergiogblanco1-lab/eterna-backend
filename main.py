@@ -3,6 +3,7 @@ import os
 import uuid
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 
 import stripe
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
@@ -17,14 +18,15 @@ STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
 STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
 
-ETERNA_PRICE_CENTS = int(os.getenv("ETERNA_PRICE_CENTS", "4900"))
+ETERNA_BASE_PRICE_EUR = float(os.getenv("ETERNA_BASE_PRICE_EUR", "29"))
+GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 ETERNA_CURRENCY = os.getenv("ETERNA_CURRENCY", "eur")
 
 ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "123456")
 
 stripe.api_key = STRIPE_SECRET_KEY
 
-app = FastAPI(title="ETERNA MAQUINON V1")
+app = FastAPI(title="ETERNA MAQUINON")
 
 # =========================
 # CARPETAS
@@ -53,7 +55,6 @@ app.mount("/gift_uploads", StaticFiles(directory=str(GIFT_DIR)), name="gift_uplo
 app.mount("/reacciones", StaticFiles(directory=str(REACTION_DIR)), name="reacciones")
 app.mount("/final_returns", StaticFiles(directory=str(FINAL_DIR)), name="final_returns")
 
-
 # =========================
 # UTILIDADES
 # =========================
@@ -61,6 +62,13 @@ app.mount("/final_returns", StaticFiles(directory=str(FINAL_DIR)), name="final_r
 def now_iso() -> str:
     return datetime.utcnow().isoformat()
 
+def euros(n: float) -> str:
+    return f"{n:.2f}€".replace(".", ",")
+
+def phone_for_wa(phone: str | None) -> str:
+    if not phone:
+        return ""
+    return "".join(ch for ch in phone if ch.isdigit())
 
 def load_orders() -> dict:
     try:
@@ -68,17 +76,14 @@ def load_orders() -> dict:
     except Exception:
         return {}
 
-
 def save_orders(orders: dict) -> None:
     ORDERS_FILE.write_text(
         json.dumps(orders, ensure_ascii=False, indent=2),
         encoding="utf-8"
     )
 
-
 def get_order(order_id: str) -> dict | None:
     return load_orders().get(order_id)
-
 
 def update_order(order_id: str, **fields) -> dict | None:
     orders = load_orders()
@@ -90,6 +95,23 @@ def update_order(order_id: str, **fields) -> dict | None:
     save_orders(orders)
     return order
 
+def admin_guard(token: str | None):
+    if token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="No autorizado.")
+
+def save_upload_file(upload: UploadFile, folder: Path, forced_name: str | None = None) -> str:
+    ext = Path(upload.filename or "").suffix.lower() or ".bin"
+    filename = forced_name if forced_name else f"{uuid.uuid4().hex}{ext}"
+    file_path = folder / filename
+    with open(file_path, "wb") as f:
+        f.write(upload.file.read())
+    return filename
+
+def calc_totals(gift_amount: float) -> tuple[float, float, float]:
+    gift_amount = max(0.0, round(float(gift_amount or 0), 2))
+    commission = round(gift_amount * GIFT_COMMISSION_RATE, 2)
+    total = round(ETERNA_BASE_PRICE_EUR + gift_amount + commission, 2)
+    return gift_amount, commission, total
 
 def create_order_record(
     customer_name: str,
@@ -101,6 +123,9 @@ def create_order_record(
     phrase_2: str,
     phrase_3: str,
     gift_video_filename: str | None,
+    gift_amount: float,
+    gift_commission: float,
+    total_paid: float,
 ) -> str:
     orders = load_orders()
     order_id = str(uuid.uuid4())[:12]
@@ -124,6 +149,11 @@ def create_order_record(
         "phrase_2": phrase_2,
         "phrase_3": phrase_3,
 
+        "gift_amount": gift_amount,
+        "gift_commission": gift_commission,
+        "eterna_base_price": ETERNA_BASE_PRICE_EUR,
+        "total_paid": total_paid,
+
         "gift_video_filename": gift_video_filename,
         "reaction_video_filename": None,
         "final_return_video_filename": None,
@@ -134,30 +164,13 @@ def create_order_record(
     save_orders(orders)
     return order_id
 
-
-def admin_guard(token: str | None):
-    if token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="No autorizado.")
-
-
-def save_upload_file(upload: UploadFile, folder: Path, forced_name: str | None = None) -> str:
-    ext = Path(upload.filename or "").suffix.lower() or ".bin"
-    filename = forced_name if forced_name else f"{uuid.uuid4().hex}{ext}"
-    file_path = folder / filename
-
-    with open(file_path, "wb") as f:
-        f.write(upload.file.read())
-
-    return filename
-
-
 # =========================
 # HOME
 # =========================
 
 @app.get("/", response_class=HTMLResponse)
 def home():
-    return """
+    return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
@@ -165,9 +178,8 @@ def home():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            * { box-sizing: border-box; }
-
-            body {
+            * {{ box-sizing: border-box; }}
+            body {{
                 margin: 0;
                 min-height: 100vh;
                 background:
@@ -176,45 +188,38 @@ def home():
                 color: white;
                 font-family: Arial, sans-serif;
                 padding: 24px;
-            }
-
-            .wrap {
+            }}
+            .wrap {{
                 width: 100%;
                 max-width: 760px;
                 margin: 0 auto;
-            }
-
-            .box {
+            }}
+            .box {{
                 width: 100%;
                 margin: 40px auto;
                 padding: 28px;
                 border-radius: 24px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
-                backdrop-filter: blur(6px);
-            }
-
-            h1 {
+            }}
+            h1 {{
                 margin: 0 0 14px;
                 font-size: 44px;
                 font-weight: 500;
                 text-align: center;
-            }
-
-            p.top {
+            }}
+            p.top {{
                 margin: 0 0 24px;
                 color: rgba(255,255,255,0.82);
                 line-height: 1.6;
                 text-align: center;
-            }
-
-            .grid {
+            }}
+            .grid {{
                 display: grid;
                 grid-template-columns: 1fr 1fr;
                 gap: 14px;
-            }
-
-            input, textarea {
+            }}
+            input {{
                 width: 100%;
                 padding: 14px 16px;
                 margin-top: 12px;
@@ -224,28 +229,19 @@ def home():
                 color: white;
                 font-size: 16px;
                 outline: none;
-            }
-
-            textarea {
-                min-height: 90px;
-                resize: vertical;
-            }
-
-            input::placeholder, textarea::placeholder {
+            }}
+            input::placeholder {{
                 color: rgba(255,255,255,0.45);
-            }
-
-            .full {
+            }}
+            .full {{
                 grid-column: 1 / -1;
-            }
-
-            .label {
+            }}
+            .label {{
                 margin-top: 18px;
                 font-size: 14px;
                 color: rgba(255,255,255,0.68);
-            }
-
-            button {
+            }}
+            button {{
                 width: 100%;
                 padding: 16px;
                 margin-top: 24px;
@@ -256,20 +252,26 @@ def home():
                 font-size: 16px;
                 font-weight: bold;
                 cursor: pointer;
-            }
-
-            .mini {
+            }}
+            .mini {{
                 margin-top: 14px;
                 font-size: 13px;
                 color: rgba(255,255,255,0.55);
                 text-align: center;
-            }
-
-            @media (max-width: 700px) {
-                .grid {
+            }}
+            .pricebox {{
+                margin-top: 18px;
+                padding: 16px;
+                border-radius: 18px;
+                background: rgba(255,255,255,0.05);
+                color: rgba(255,255,255,0.9);
+                line-height: 1.7;
+            }}
+            @media (max-width: 700px) {{
+                .grid {{
                     grid-template-columns: 1fr;
-                }
-            }
+                }}
+            }}
         </style>
     </head>
     <body>
@@ -296,8 +298,16 @@ def home():
                         <input name="phrase_2" placeholder="Segunda frase" required class="full">
                         <input name="phrase_3" placeholder="Tercera frase" required class="full">
 
+                        <input name="gift_amount" type="number" step="0.01" min="0" placeholder="Cantidad a regalar (€)" class="full">
+
                         <div class="full label">Vídeo base que envías (opcional por ahora)</div>
                         <input name="gift_video" type="file" accept="video/*" class="full">
+                    </div>
+
+                    <div class="pricebox">
+                        ETERNA: {euros(ETERNA_BASE_PRICE_EUR)}<br>
+                        Comisión del regalo: {int(GIFT_COMMISSION_RATE * 100)}%<br>
+                        El dinero regalado se suma aparte.
                     </div>
 
                     <button type="submit">CREAR MI ETERNA</button>
@@ -312,7 +322,6 @@ def home():
     </html>
     """
 
-
 # =========================
 # CREAR PEDIDO + STRIPE
 # =========================
@@ -321,16 +330,19 @@ def home():
 async def crear_eterna(
     customer_name: str = Form(...),
     customer_email: str = Form(...),
-    customer_phone: str = Form(...),
+    customer_phone: str = Form(""),
     recipient_name: str = Form(...),
-    recipient_phone: str = Form(...),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
+    recipient_phone: str = Form(""),
+    phrase_1: str = Form(""),
+    phrase_2: str = Form(""),
+    phrase_3: str = Form(""),
+    gift_amount: float = Form(0),
     gift_video: UploadFile | None = File(None),
 ):
     if not STRIPE_SECRET_KEY:
         raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY.")
+
+    gift_amount, gift_commission, total_paid = calc_totals(gift_amount)
 
     gift_video_filename = None
     if gift_video and gift_video.filename:
@@ -351,6 +363,9 @@ async def crear_eterna(
         phrase_2=phrase_2,
         phrase_3=phrase_3,
         gift_video_filename=gift_video_filename,
+        gift_amount=gift_amount,
+        gift_commission=gift_commission,
+        total_paid=total_paid,
     )
 
     session = stripe.checkout.Session.create(
@@ -360,6 +375,7 @@ async def crear_eterna(
             "order_id": order_id,
             "customer_name": customer_name,
             "recipient_name": recipient_name,
+            "gift_amount": str(gift_amount),
         },
         line_items=[
             {
@@ -367,9 +383,9 @@ async def crear_eterna(
                     "currency": ETERNA_CURRENCY,
                     "product_data": {
                         "name": "ETERNA",
-                        "description": "Experiencia emocional ETERNA",
+                        "description": f"Experiencia ETERNA + regalo {euros(gift_amount)} + comisión {euros(gift_commission)}",
                     },
-                    "unit_amount": ETERNA_PRICE_CENTS,
+                    "unit_amount": int(round(total_paid * 100)),
                 },
                 "quantity": 1,
             }
@@ -385,7 +401,6 @@ async def crear_eterna(
     )
 
     return RedirectResponse(url=session.url, status_code=303)
-
 
 # =========================
 # POST PAGO / CANCELADO
@@ -410,20 +425,23 @@ def post_pago(session_id: str):
         return HTMLResponse(f"""
         <html>
         <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div style="max-width:680px;">
+            <div style="max-width:720px;">
                 <h1>Pago confirmado</h1>
                 <p>Tu ETERNA ya está creada.</p>
+
                 <p>
                     Enlace del receptor:
                     <br>
                     <strong>{PUBLIC_BASE_URL}/pedido/{order_id}</strong>
                 </p>
+
                 <p>
-                    Luego, cuando viva la experiencia, tú recibirás:
-                    <br>
-                    lo que mandaste + la emoción que provocaste.
+                    Regalo: <strong>{euros(order["gift_amount"])}</strong><br>
+                    Comisión regalo: <strong>{euros(order["gift_commission"])}</strong><br>
+                    Total pagado: <strong>{euros(order["total_paid"])}</strong>
                 </p>
-                <a href="/resumen/{order_id}" style="display:inline-block;margin-top:24px;padding:14px 24px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">
+
+                <a href="/resumen/{order_id}" style="display:inline-block;margin-top:20px;padding:14px 24px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">
                     VER RESUMEN DEL PEDIDO
                 </a>
             </div>
@@ -442,7 +460,6 @@ def post_pago(session_id: str):
     </html>
     """)
 
-
 @app.get("/cancelado", response_class=HTMLResponse)
 def cancelado(order_id: str | None = None):
     return HTMLResponse(f"""
@@ -456,7 +473,6 @@ def cancelado(order_id: str | None = None):
     </body>
     </html>
     """)
-
 
 # =========================
 # WEBHOOK
@@ -495,7 +511,6 @@ async def stripe_webhook(request: Request):
 
     return {"ok": True}
 
-
 # =========================
 # RESUMEN PEDIDO
 # =========================
@@ -510,11 +525,23 @@ def resumen_pedido(order_id: str):
     reaction_link = f"/reacciones/{order['reaction_video_filename']}" if order.get("reaction_video_filename") else None
     final_link = f"/final_returns/{order['final_return_video_filename']}" if order.get("final_return_video_filename") else None
 
+    wa_phone = phone_for_wa(order.get("recipient_phone"))
+    wa_text = quote(
+        f"Hola ❤️\n\n"
+        f"Alguien ha creado algo muy especial para ti.\n\n"
+        f"No es un vídeo.\nNo es un mensaje.\n\n"
+        f"Es algo que solo ocurre una vez.\n\n"
+        f"Ábrelo cuando estés listo.\n\n"
+        f"👉 {PUBLIC_BASE_URL}/pedido/{order['order_id']}"
+    )
+    wa_link = f"https://wa.me/{wa_phone}?text={wa_text}" if wa_phone else "#"
+
     return HTMLResponse(f"""
     <html>
     <body style="margin:0;background:#000;color:#fff;font-family:Arial,sans-serif;padding:24px;">
-        <div style="max-width:900px;margin:0 auto;">
+        <div style="max-width:960px;margin:0 auto;">
             <h1>Resumen ETERNA</h1>
+
             <p><strong>Pedido:</strong> {order["order_id"]}</p>
             <p><strong>Estado:</strong> {order["status"]}</p>
             <p><strong>Pagado:</strong> {"Sí" if order["paid"] else "No"}</p>
@@ -534,6 +561,13 @@ def resumen_pedido(order_id: str):
 
             <hr style="border-color:rgba(255,255,255,0.15);margin:24px 0;">
 
+            <p><strong>ETERNA:</strong> {euros(order["eterna_base_price"])}</p>
+            <p><strong>Regalo:</strong> {euros(order["gift_amount"])}</p>
+            <p><strong>Comisión regalo:</strong> {euros(order["gift_commission"])}</p>
+            <p><strong>Total pagado:</strong> {euros(order["total_paid"])}</p>
+
+            <hr style="border-color:rgba(255,255,255,0.15);margin:24px 0;">
+
             <p><strong>Enlace receptor:</strong><br>{PUBLIC_BASE_URL}/pedido/{order["order_id"]}</p>
 
             <p><strong>Vídeo enviado por el regalante:</strong>
@@ -547,11 +581,100 @@ def resumen_pedido(order_id: str):
             <p><strong>Vídeo final de retorno al regalante:</strong>
                 {"<a style='color:#fff;' href='" + final_link + "' target='_blank'>Ver vídeo final</a>" if final_link else "Aún no generado"}
             </p>
+
+            <div style="margin-top:28px;display:flex;gap:12px;flex-wrap:wrap;">
+                <a href="/retorno/{order["order_id"]}" style="display:inline-block;padding:14px 24px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">
+                    VER TU ETERNA
+                </a>
+
+                <a href="{wa_link}" target="_blank" style="display:inline-block;padding:14px 24px;border-radius:999px;background:#25D366;color:white;text-decoration:none;font-weight:bold;">
+                    ENVIAR POR WHATSAPP
+                </a>
+            </div>
         </div>
     </body>
     </html>
     """)
 
+# =========================
+# RETORNO REGALANTE
+# =========================
+
+@app.get("/retorno/{order_id}", response_class=HTMLResponse)
+def retorno(order_id: str):
+    order = get_order(order_id)
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+
+    if not order.get("paid"):
+        return HTMLResponse("""
+        <html>
+        <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div>
+                <h1>No disponible</h1>
+                <p>Esta ETERNA aún no está pagada.</p>
+            </div>
+        </body>
+        </html>
+        """, status_code=403)
+
+    if not order.get("reaction_video_filename"):
+        return HTMLResponse("""
+        <html>
+        <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div>
+                <h1>Aún no hay reacción</h1>
+                <p>La persona todavía no ha vivido la experiencia completa.</p>
+            </div>
+        </body>
+        </html>
+        """)
+
+    if order.get("gift_video_filename"):
+        gift_video = f"""
+        <video controls playsinline style="width:90%;max-width:420px;margin-top:20px;border-radius:18px;background:#000;">
+            <source src="/gift_uploads/{order['gift_video_filename']}">
+        </video>
+        """
+    else:
+        gift_video = f"""
+        <div style="max-width:520px;margin:20px auto 0;opacity:0.88;line-height:1.8;">
+            <p>{order["phrase_1"]}</p>
+            <p>{order["phrase_2"]}</p>
+            <p>{order["phrase_3"]}</p>
+        </div>
+        """
+
+    reaction_video = f"""
+    <video controls playsinline style="width:90%;max-width:420px;margin-top:20px;border-radius:18px;background:#000;">
+        <source src="/reacciones/{order['reaction_video_filename']}">
+    </video>
+    """
+
+    return HTMLResponse(f"""
+    <html>
+    <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;text-align:center;padding:40px;">
+        <div style="max-width:900px;margin:0 auto;">
+            <h1 style="font-weight:500;">Tu ETERNA</h1>
+
+            <p style="opacity:0.82;font-size:20px;margin-top:30px;">
+                Esto es lo que enviaste
+            </p>
+
+            {gift_video}
+
+            <hr style="margin:40px 0;opacity:0.2;">
+
+            <p style="opacity:0.82;font-size:20px;">
+                Esto es lo que provocaste
+            </p>
+
+            {reaction_video}
+        </div>
+    </body>
+    </html>
+    """)
 
 # =========================
 # EXPERIENCIA RECEPTOR
@@ -600,7 +723,6 @@ def ver_eterna(order_id: str):
         <title>ETERNA</title>
         <style>
             * {{ box-sizing: border-box; }}
-
             html, body {{
                 margin: 0;
                 padding: 0;
@@ -611,7 +733,6 @@ def ver_eterna(order_id: str):
                 font-family: Arial, sans-serif;
                 overflow: hidden;
             }}
-
             .pantalla {{
                 position: fixed;
                 inset: 0;
@@ -625,9 +746,7 @@ def ver_eterna(order_id: str):
                     linear-gradient(180deg, #0a0a0a 0%, #000 100%);
                 padding: 24px;
             }}
-
             .pantalla.activa {{ display: flex; }}
-
             .fondo {{
                 position: absolute;
                 inset: 0;
@@ -638,28 +757,23 @@ def ver_eterna(order_id: str):
                 transition: opacity 0.8s ease;
                 filter: brightness(0.45);
             }}
-
             .fondo.visible {{ opacity: 1; }}
-
             .overlay {{
                 position: absolute;
                 inset: 0;
                 background: linear-gradient(180deg, rgba(0,0,0,0.35) 0%, rgba(0,0,0,0.55) 45%, rgba(0,0,0,0.80) 100%);
             }}
-
             .contenido {{
                 position: relative;
                 z-index: 2;
                 max-width: 760px;
                 width: 100%;
             }}
-
             h1 {{
                 margin: 0 0 16px;
                 font-size: clamp(34px, 6vw, 56px);
                 font-weight: 500;
             }}
-
             p {{
                 margin: 0 auto;
                 max-width: 560px;
@@ -667,13 +781,11 @@ def ver_eterna(order_id: str):
                 line-height: 1.6;
                 color: rgba(255,255,255,0.92);
             }}
-
             .micro {{
                 margin-top: 18px;
                 font-size: 13px;
                 color: rgba(255,255,255,0.62);
             }}
-
             button {{
                 margin-top: 28px;
                 padding: 15px 26px;
@@ -685,7 +797,6 @@ def ver_eterna(order_id: str):
                 cursor: pointer;
                 min-width: 190px;
             }}
-
             .fila-botones {{
                 display: flex;
                 gap: 14px;
@@ -693,13 +804,11 @@ def ver_eterna(order_id: str):
                 flex-wrap: wrap;
                 margin-top: 28px;
             }}
-
             .btn-secundario {{
                 background: rgba(255,255,255,0.14);
                 color: #fff;
                 border: 1px solid rgba(255,255,255,0.18);
             }}
-
             #preview {{
                 position: fixed;
                 right: 14px;
@@ -715,7 +824,6 @@ def ver_eterna(order_id: str):
                 pointer-events: none;
                 transition: opacity 0.5s ease;
             }}
-
             #preview.visible {{ opacity: 0.82; }}
         </style>
     </head>
@@ -765,6 +873,7 @@ def ver_eterna(order_id: str):
             let videoBlob = null;
             let currentStream = null;
             const orderId = "{order_id}";
+            const giftAmount = {order["gift_amount"]};
 
             function activarSiExiste(imgId) {{
                 const img = document.getElementById(imgId);
@@ -810,7 +919,7 @@ def ver_eterna(order_id: str):
                         videoBlob = new Blob(chunks, {{ type: "video/webm" }});
                         await subirVideo();
                         cerrarCamara();
-                        mostrarPantalla("final");
+                        mostrarVideoFinal();
                     }};
 
                     mediaRecorder.start();
@@ -830,50 +939,99 @@ def ver_eterna(order_id: str):
             }}
 
             function iniciarContenido() {{
+                const experiencia = document.getElementById("experiencia");
                 const giftVideo = document.getElementById("giftVideo");
 
                 if (giftVideo) {{
-                    giftVideo.play().catch(() => {{ }});
+                    giftVideo.play().catch(() => {{}});
 
-                    const stopLater = () => {{
+                    giftVideo.onended = () => {{
+                        experiencia.innerHTML = `
+                            <div class="contenido">
+                                <h1>Esto no es solo un momento</h1>
+                                <p>Es algo real.</p>
+                            </div>
+                        `;
+
+                        setTimeout(() => {{
+                            experiencia.innerHTML = `
+                                <div class="contenido">
+                                    <h1>💸 Has recibido ${'{'}giftAmount.toFixed(2).replace('.', ','){'}'}€</h1>
+                                    <p>Este momento también tiene forma real.</p>
+                                </div>
+                            `;
+
+                            setTimeout(() => {{
+                                if (mediaRecorder && mediaRecorder.state !== "inactive") {{
+                                    mediaRecorder.stop();
+                                }}
+                            }}, 10000);
+                        }}, 2500);
+                    }};
+                }} else {{
+                    experiencia.innerHTML = `
+                        <div class="contenido">
+                            <h1>Esto no es solo un momento</h1>
+                            <p>Es algo real.</p>
+                        </div>
+                    `;
+
+                    setTimeout(() => {{
+                        experiencia.innerHTML = `
+                            <div class="contenido">
+                                <h1>💸 Has recibido ${'{'}giftAmount.toFixed(2).replace('.', ','){'}'}€</h1>
+                                <p>Este momento también tiene forma real.</p>
+                            </div>
+                        `;
+
                         setTimeout(() => {{
                             if (mediaRecorder && mediaRecorder.state !== "inactive") {{
                                 mediaRecorder.stop();
                             }}
                         }}, 10000);
-                    }};
-
-                    giftVideo.onended = stopLater;
-
-                    setTimeout(() => {{
-                        if (!giftVideo.ended) {{
-                            stopLater();
-                        }}
-                    }}, 12000);
-                }} else {{
-                    setTimeout(() => {{
-                        if (mediaRecorder && mediaRecorder.state !== "inactive") {{
-                            mediaRecorder.stop();
-                        }}
-                    }}, 10000);
+                    }}, 2500);
                 }}
             }}
 
             async function subirVideo() {{
-                if (!videoBlob) return;
+                if (!videoBlob) return false;
 
                 const formData = new FormData();
                 formData.append("video", videoBlob, `reaccion_${{orderId}}.webm`);
                 formData.append("order_id", orderId);
 
                 try {{
-                    await fetch("/subir-reaccion", {{
+                    const res = await fetch("/subir-reaccion", {{
                         method: "POST",
                         body: formData
                     }});
+                    return res.ok;
                 }} catch (error) {{
                     console.error("Error subiendo reacción:", error);
+                    return false;
                 }}
+            }}
+
+            function mostrarVideoFinal() {{
+                mostrarPantalla("final");
+
+                const contenedor = document.querySelector("#final .contenido");
+                const anterior = document.getElementById("videoFinalGrabado");
+                if (anterior) anterior.remove();
+                if (!videoBlob) return;
+
+                const url = URL.createObjectURL(videoBlob);
+                const video = document.createElement("video");
+                video.id = "videoFinalGrabado";
+                video.controls = true;
+                video.playsInline = true;
+                video.style.width = "min(92vw, 420px)";
+                video.style.marginTop = "24px";
+                video.style.borderRadius = "18px";
+                video.style.background = "#000";
+                video.src = url;
+
+                contenedor.appendChild(video);
             }}
 
             function guardarVideo() {{
@@ -931,7 +1089,6 @@ def ver_eterna(order_id: str):
     </html>
     """)
 
-
 # =========================
 # MARCAR ABIERTA
 # =========================
@@ -946,7 +1103,6 @@ def marcar_abierta(order_id: str):
         update_order(order_id, opened_at=now_iso(), status="opened")
 
     return {"ok": True}
-
 
 # =========================
 # SUBIR REACCIÓN
@@ -980,7 +1136,6 @@ async def subir_reaccion(
         "filename": filename,
     }
 
-
 # =========================
 # ADMIN
 # =========================
@@ -995,15 +1150,14 @@ def admin(token: str | None = None):
     for order in orders:
         rows += f"""
         <tr>
-            <td>{order["order_id"]}</td>
-            <td>{order["customer_name"]}</td>
-            <td>{order["recipient_name"]}</td>
-            <td>{"Sí" if order["paid"] else "No"}</td>
-            <td>{order["status"]}</td>
-            <td>{"Sí" if order.get("gift_video_filename") else "No"}</td>
-            <td>{"Sí" if order.get("reaction_video_filename") else "No"}</td>
-            <td>{"Sí" if order.get("final_return_video_filename") else "No"}</td>
-            <td><a href="/resumen/{order["order_id"]}" style="color:white;">Abrir</a></td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{order["order_id"]}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{order["customer_name"]}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{order["recipient_name"]}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{"Sí" if order["paid"] else "No"}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{order["status"]}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{euros(order.get("gift_amount", 0))}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);">{euros(order.get("total_paid", 0))}</td>
+            <td style="padding:12px;border-bottom:1px solid rgba(255,255,255,0.12);"><a href="/resumen/{order["order_id"]}" style="color:white;">Abrir</a></td>
         </tr>
         """
 
@@ -1020,14 +1174,13 @@ def admin(token: str | None = None):
                         <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Receptor</th>
                         <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Pagado</th>
                         <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Estado</th>
-                        <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Vídeo enviado</th>
-                        <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Reacción</th>
-                        <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Final</th>
+                        <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Regalo</th>
+                        <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Total</th>
                         <th style="text-align:left;padding:12px;border-bottom:1px solid rgba(255,255,255,0.15);">Resumen</th>
                     </tr>
                 </thead>
                 <tbody>
-                    {rows if rows else "<tr><td colspan='9' style='padding:20px;'>No hay pedidos todavía.</td></tr>"}
+                    {rows if rows else "<tr><td colspan='8' style='padding:20px;'>No hay pedidos todavía.</td></tr>"}
                 </tbody>
             </table>
         </div>
