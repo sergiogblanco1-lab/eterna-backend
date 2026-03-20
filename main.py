@@ -75,17 +75,17 @@ async def crear_eterna(
     phrase_1: str = Form(...),
     phrase_2: str = Form(...),
     phrase_3: str = Form(...),
-    amount: int = Form(...),  # 💰 NUEVO
+    amount: int = Form(...),
     photos: Optional[List[UploadFile]] = File(None),
 ):
 
     order_id = str(uuid.uuid4())
 
-    # 💰 COMISIÓN
+    # 💰 comisión 10%
     commission = int(amount * 0.10)
     total = amount + commission
 
-    # Guardamos pedido
+    # guardar datos
     ORDERS[order_id] = {
         "paid": False,
         "recipient_phone": recipient_phone,
@@ -98,7 +98,7 @@ async def crear_eterna(
         "total": total
     }
 
-    # STRIPE DINÁMICO
+    # STRIPE
     session = stripe.checkout.Session.create(
         mode="payment",
         payment_method_types=["card"],
@@ -106,7 +106,7 @@ async def crear_eterna(
             "price_data": {
                 "currency": "eur",
                 "product_data": {"name": "ETERNA"},
-                "unit_amount": total * 100,  # 💥 DINÁMICO
+                "unit_amount": total * 100,
             },
             "quantity": 1,
         }],
