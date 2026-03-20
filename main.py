@@ -1,6 +1,84 @@
+import uuid
+import urllib.parse
+from fastapi import FastAPI, Form
+from fastapi.responses import HTMLResponse, RedirectResponse
+
+# =========================
+# APP
+# =========================
+
+app = FastAPI(title="ETERNA")
+
+# =========================
+# BASE SIMPLE (MEMORIA)
+# =========================
+
+ORDERS = {}
+
+# =========================
+# HOME
+# =========================
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <html>
+    <body style="background:black;color:white;text-align:center;padding-top:80px;font-family:Arial;">
+        <h1>ETERNA</h1>
+        <p>Crear experiencia</p>
+
+        <form action="/crear-eterna" method="post">
+            <input name="phrase_1" placeholder="Frase 1"><br><br>
+            <input name="phrase_2" placeholder="Frase 2"><br><br>
+            <input name="phrase_3" placeholder="Frase 3"><br><br>
+            <input name="amount" placeholder="Dinero (€)"><br><br>
+
+            <button type="submit">Crear</button>
+        </form>
+    </body>
+    </html>
+    """
+
+# =========================
+# CREAR ETERNA
+# =========================
+
+@app.post("/crear-eterna")
+def crear_eterna(
+    phrase_1: str = Form(...),
+    phrase_2: str = Form(...),
+    phrase_3: str = Form(...),
+    amount: float = Form(...)
+):
+    order_id = str(uuid.uuid4())
+
+    # 💰 CONFIGURACIÓN
+    PRECIO_VIDEO = 5
+    COMISION = 0.05
+
+    # cálculo correcto
+    comision = amount * COMISION
+    total = amount + comision + PRECIO_VIDEO
+
+    ORDERS[order_id] = {
+        "phrase_1": phrase_1,
+        "phrase_2": phrase_2,
+        "phrase_3": phrase_3,
+        "amount": amount,
+        "comision": round(comision, 2),
+        "precio_video": PRECIO_VIDEO,
+        "total": round(total, 2),
+        "paid": True  # simulamos pago
+    }
+
+    return RedirectResponse(url=f"/ver/{order_id}", status_code=303)
+
+# =========================
+# VER ETERNA
+# =========================
+
 @app.get("/ver/{order_id}", response_class=HTMLResponse)
 def ver_eterna(order_id: str):
-
     order = ORDERS.get(order_id)
 
     if not order:
@@ -8,89 +86,46 @@ def ver_eterna(order_id: str):
 
     return HTMLResponse(f"""
     <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    </head>
+    <body style="background:black;color:white;text-align:center;font-family:Arial;padding-top:80px;">
 
-    <body style="background:black;color:white;text-align:center;font-family:Arial;display:flex;justify-content:center;align-items:center;height:100vh;">
+        <h1>ETERNA</h1>
 
-        <div id="start">
+        <p>Esto se está viviendo contigo ❤️</p>
 
-            <h1 style="font-size:28px;">ETERNA</h1>
-
-            <p style="margin-top:20px;">
-                Este momento será guardado para quien lo creó ❤️
-            </p>
-
-            <button onclick="startExperience()" style="
-                margin-top:40px;
-                padding:15px 25px;
-                font-size:16px;
-                background:white;
-                color:black;
-                border:none;
-                border-radius:10px;
-            ">
-                Aceptar y continuar
-            </button>
-
+        <div style="margin-top:40px;font-size:24px;">
+            <p>{order["phrase_1"]}</p>
+            <p>{order["phrase_2"]}</p>
+            <p>{order["phrase_3"]}</p>
         </div>
 
-        <div id="countdown" style="display:none;font-size:60px;">
-            3
-        </div>
+        <h2 style="margin-top:60px;color:#00ff88;">
+            Has recibido {order["amount"]}€
+        </h2>
 
-        <div id="experience" style="display:none;">
+        <p style="margin-top:20px;">
+            Comisión: {order["comision"]}€
+        </p>
 
-            <h1>ETERNA</h1>
+        <p>
+            Vídeo ETERNA: {order["precio_video"]}€
+        </p>
 
-            <p style="margin-top:20px;">
-                Esto se está viviendo contigo ❤️
-            </p>
+        <h3 style="margin-top:20px;">
+            Total pagado: {order["total"]}€
+        </h3>
 
-            <div style="margin-top:40px;font-size:24px;">
-                <p>{order["phrase_1"]}</p>
-                <p>{order["phrase_2"]}</p>
-                <p>{order["phrase_3"]}</p>
-            </div>
-
-            <h2 style="margin-top:60px;color:#00ff88;">
-                Has recibido {order["amount"]}€
-            </h2>
-
-            <p style="margin-top:40px;">
-                Tu momento ha sido vivido ❤️
-            </p>
-
-        </div>
-
-        <script>
-
-        function startExperience() {{
-
-            document.getElementById("start").style.display = "none";
-            document.getElementById("countdown").style.display = "block";
-
-            let count = 3;
-
-            let interval = setInterval(() => {{
-
-                count--;
-
-                if (count > 0) {{
-                    document.getElementById("countdown").innerText = count;
-                }} else {{
-                    clearInterval(interval);
-
-                    document.getElementById("countdown").style.display = "none";
-                    document.getElementById("experience").style.display = "block";
-                }}
-
-            }}, 1000);
-        }}
-
-        </script>
+        <p style="margin-top:40px;">
+            Tu momento ha sido vivido ❤️
+        </p>
 
     </body>
     </html>
     """)
+
+# =========================
+# TEST
+# =========================
+
+@app.get("/test")
+def test():
+    return {"status": "ok"}
