@@ -21,10 +21,6 @@ stripe.api_key = STRIPE_SECRET_KEY
 
 app = FastAPI(title="ETERNA")
 
-# =========================
-# STORAGE
-# =========================
-
 BASE_DIR = Path("storage")
 MEDIA_DIR = BASE_DIR / "media"
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
@@ -47,24 +43,20 @@ def clean_phone(phone):
 
 def whatsapp_link(phone, url):
     phone = clean_phone(phone)
-    msg = f"""Hola ❤️
-
-Alguien ha creado una ETERNA para ti.
-
-Vívelo.
-
-👉 {url}
-"""
-    return f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+    msg = "Alguien ha creado una ETERNA para ti ❤️\n\nVívelo."
+    return f"https://wa.me/{phone}?text={urllib.parse.quote(msg + ' ' + url)}"
 
 # =========================
-# ROUTES
+# HOME
 # =========================
 
 @app.get("/")
 def home():
     return {"status": "ETERNA funcionando"}
 
+# =========================
+# CREAR ETERNA
+# =========================
 
 @app.post("/crear-eterna")
 async def crear_eterna(
@@ -75,38 +67,48 @@ async def crear_eterna(
     phrase_1: str = Form(...),
     phrase_2: str = Form(...),
     phrase_3: str = Form(...),
-    amount: int = Form(...),
+    amount: int = Form(...),  # 👈 NUEVO
     photos: Optional[List[UploadFile]] = File(None),
 ):
 
     order_id = str(uuid.uuid4())
 
-    # 💰 comisión 10%
-    commission = int(amount * 0.10)
-    total = amount + commission
+    # =========================
+    # CALCULO DINERO
+    # =========================
 
-    # guardar datos
+    comision = int(amount * 0.10)  # 10%
+    precio_eterna = 2900  # 29€
+
+    total = (amount * 100) + (comision * 100) + precio_eterna
+
+    # =========================
+    # GUARDAR PEDIDO
+    # =========================
+
     ORDERS[order_id] = {
         "paid": False,
         "recipient_phone": recipient_phone,
-        "recipient_name": recipient_name,
         "phrase_1": phrase_1,
         "phrase_2": phrase_2,
         "phrase_3": phrase_3,
-        "amount": amount,
-        "commission": commission,
-        "total": total
+        "amount": amount
     }
 
+    # =========================
     # STRIPE
+    # =========================
+
     session = stripe.checkout.Session.create(
         mode="payment",
         payment_method_types=["card"],
         line_items=[{
             "price_data": {
                 "currency": "eur",
-                "product_data": {"name": "ETERNA"},
-                "unit_amount": total * 100,
+                "product_data": {
+                    "name": "ETERNA + Regalo"
+                },
+                "unit_amount": total,
             },
             "quantity": 1,
         }],
@@ -118,6 +120,9 @@ async def crear_eterna(
 
     return RedirectResponse(session.url, status_code=303)
 
+# =========================
+# WEBHOOK
+# =========================
 
 @app.post("/webhook")
 async def webhook(request: Request):
@@ -138,6 +143,9 @@ async def webhook(request: Request):
 
     return {"ok": True}
 
+# =========================
+# PÁGINA FINAL
+# =========================
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
 def pedido(order_id: str):
@@ -157,20 +165,29 @@ def pedido(order_id: str):
 
     return HTMLResponse(f"""
     <html>
-    <body style="background:black;color:white;text-align:center;padding-top:100px;">
+    <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
+
         <h1>ETERNA lista</h1>
 
-        <p>Regalo preparado para {order["recipient_name"]}</p>
+        <p>Frase 1: {order["phrase_1"]}</p>
+        <p>Frase 2: {order["phrase_2"]}</p>
+        <p>Frase 3: {order["phrase_3"]}</p>
+
+        <h2 style="color:#00ff88;">Has regalado {order["amount"]}€</h2>
 
         <a href="{link}">
-            <button style="padding:20px;background:green;color:white;">
+            <button style="padding:20px;background:green;color:white;margin-top:30px;">
                 Enviar por WhatsApp
             </button>
         </a>
+
     </body>
     </html>
     """)
 
+# =========================
+# EXPERIENCIA RECEPTOR
+# =========================
 
 @app.get("/ver/{order_id}", response_class=HTMLResponse)
 def ver_eterna(order_id: str):
@@ -180,23 +197,13 @@ def ver_eterna(order_id: str):
     if not order:
         return HTMLResponse("<h1>No existe</h1>")
 
-    if not order["paid"]:
-        return HTMLResponse("<h1>Aún no disponible</h1>")
-
     return HTMLResponse(f"""
     <html>
-    <body style="
-        background:black;
-        color:white;
-        text-align:center;
-        font-family:Arial;
-        padding-top:80px;
-    ">
+    <body style="background:black;color:white;text-align:center;padding-top:80px;font-family:Arial;">
+
         <h1>ETERNA</h1>
 
-        <p style="margin-top:20px;">
-            Esto se está viviendo contigo ❤️
-        </p>
+        <p>Esto se está viviendo contigo ❤️</p>
 
         <div style="margin-top:40px;font-size:24px;">
             <p>{order["phrase_1"]}</p>
@@ -211,6 +218,7 @@ def ver_eterna(order_id: str):
         <p style="margin-top:40px;">
             Tu momento ha sido vivido ❤️
         </p>
+
     </body>
     </html>
     """)
