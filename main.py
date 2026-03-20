@@ -1,8 +1,26 @@
+import json
+import os
+import uuid
 from pathlib import Path
 
-from fastapi import FastAPI, UploadFile, File, Form
-from fastapi.responses import HTMLResponse
+import stripe
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import HTMLResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+
+# =========================
+# CONFIG
+# =========================
+
+STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
+PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000")
+
+# Precio en céntimos. Ej: 4900 = 49,00 €
+ETERNA_PRICE_CENTS = int(os.getenv("ETERNA_PRICE_CENTS", "4900"))
+ETERNA_CURRENCY = os.getenv("ETERNA_CURRENCY", "eur")
+
+stripe.api_key = STRIPE_SECRET_KEY
 
 app = FastAPI(title="ETERNA")
 
@@ -13,11 +31,64 @@ app = FastAPI(title="ETERNA")
 BASE_DIR = Path(__file__).resolve().parent
 STATIC_DIR = BASE_DIR / "static"
 REACTIONS_DIR = BASE_DIR / "reacciones"
+DATA_DIR = BASE_DIR / "data"
+ORDERS_FILE = DATA_DIR / "orders.json"
 
 STATIC_DIR.mkdir(exist_ok=True)
 REACTIONS_DIR.mkdir(exist_ok=True)
+DATA_DIR.mkdir(exist_ok=True)
+
+if not ORDERS_FILE.exists():
+    ORDERS_FILE.write_text("{}", encoding="utf-8")
 
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+
+
+# =========================
+# UTILIDADES PEDIDOS
+# =========================
+
+def load_orders() -> dict:
+    try:
+        return json.loads(ORDERS_FILE.read_text(encoding="utf-8"))
+    except Exception:
+        return {}
+
+
+def save_orders(orders: dict) -> None:
+    ORDERS_FILE.write_text(
+        json.dumps(orders, ensure_ascii=False, indent=2),
+        encoding="utf-8"
+    )
+
+
+def create_order(customer_name: str) -> str:
+    orders = load_orders()
+    order_id = str(uuid.uuid4())[:12]
+    orders[order_id] = {
+        "order_id": order_id,
+        "customer_name": customer_name,
+        "paid": False,
+        "stripe_session_id": None,
+        "reaction_filename": None,
+    }
+    save_orders(orders)
+    return order_id
+
+
+def get_order(order_id: str) -> dict | None:
+    return load_orders().get(order_id)
+
+
+def update_order(order_id: str, **fields) -> dict | None:
+    orders = load_orders()
+    order = orders.get(order_id)
+    if not order:
+        return None
+    order.update(fields)
+    orders[order_id] = order
+    save_orders(orders)
+    return order
 
 
 # =========================
@@ -125,7 +196,7 @@ def home():
             </form>
 
             <div class="mini">
-                Prueba local de la experiencia.
+                Primero pago. Después experiencia.
             </div>
         </div>
     </body>
@@ -134,74 +205,140 @@ def home():
 
 
 # =========================
-# CREAR ETERNA
+# CREAR ETERNA -> STRIPE
 # =========================
 
-@app.post("/crear-eterna", response_class=HTMLResponse)
+@app.post("/crear-eterna")
 async def crear_eterna(customer_name: str = Form(...)):
-    order_id = "test123"
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(
+            status_code=500,
+            detail="Falta STRIPE_SECRET_KEY en variables de entorno."
+        )
 
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA creada</title>
-        <style>
-            body {{
-                margin: 0;
-                min-height: 100vh;
-                background: black;
-                color: white;
-                font-family: Arial, sans-serif;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                text-align: center;
-                padding: 24px;
-            }}
+    order_id = create_order(customer_name=customer_name)
 
-            .box {{
-                max-width: 560px;
-            }}
+    session = stripe.checkout.Session.create(
+        mode="payment",
+        client_reference_id=order_id,
+        metadata={
+            "order_id": order_id,
+            "customer_name": customer_name,
+        },
+        line_items=[
+            {
+                "price_data": {
+                    "currency": ETERNA_CURRENCY,
+                    "product_data": {
+                        "name": "ETERNA",
+                        "description": "Experiencia emocional ETERNA",
+                    },
+                    "unit_amount": ETERNA_PRICE_CENTS,
+                },
+                "quantity": 1,
+            }
+        ],
+        success_url=f"{PUBLIC_BASE_URL}/post-pago?session_id={{CHECKOUT_SESSION_ID}}",
+        cancel_url=f"{PUBLIC_BASE_URL}/cancelado?order_id={order_id}",
+    )
 
-            h1 {{
-                font-size: 42px;
-                font-weight: 500;
-                margin-bottom: 10px;
-            }}
+    update_order(order_id, stripe_session_id=session.id)
 
-            p {{
-                color: rgba(255,255,255,0.82);
-                line-height: 1.6;
-            }}
+    return RedirectResponse(url=session.url, status_code=303)
 
-            a {{
-                display: inline-block;
-                margin-top: 24px;
-                padding: 15px 24px;
-                border-radius: 999px;
-                background: white;
-                color: black;
-                text-decoration: none;
-                font-weight: bold;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="box">
-            <h1>ETERNA creada</h1>
-            <p>
-                {customer_name}, tu prueba está lista.
-                <br>
-                Ahora entra en la experiencia.
-            </p>
-            <a href="/pedido/{order_id}">ABRIR ETERNA</a>
-        </div>
-    </body>
-    </html>
-    """
+
+# =========================
+# POST PAGO
+# =========================
+
+@app.get("/post-pago", response_class=HTMLResponse)
+def post_pago(session_id: str):
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY.")
+
+    session = stripe.checkout.Session.retrieve(session_id)
+    order_id = session.client_reference_id
+
+    if not order_id:
+        raise HTTPException(status_code=400, detail="No se encontró el pedido.")
+
+    order = get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+
+    if order.get("paid"):
+        return RedirectResponse(url=f"/pedido/{order_id}", status_code=303)
+
+    return HTMLResponse(
+        """
+        <html>
+        <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div>
+                <h1>Estamos confirmando tu pago…</h1>
+                <p>Recarga en unos segundos si aún no entra.</p>
+            </div>
+        </body>
+        </html>
+        """
+    )
+
+
+@app.get("/cancelado", response_class=HTMLResponse)
+def cancelado(order_id: str | None = None):
+    txt = f"Pedido {order_id} cancelado." if order_id else "Pago cancelado."
+    return HTMLResponse(
+        f"""
+        <html>
+        <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div>
+                <h1>Pago cancelado</h1>
+                <p>{txt}</p>
+                <a href="/" style="display:inline-block;margin-top:24px;padding:14px 22px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">Volver</a>
+            </div>
+        </body>
+        </html>
+        """
+    )
+
+
+# =========================
+# WEBHOOK STRIPE
+# =========================
+
+@app.post("/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(
+            status_code=500,
+            detail="Falta STRIPE_WEBHOOK_SECRET en variables de entorno."
+        )
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Payload inválido.")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Firma webhook inválida.")
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        order_id = session.get("client_reference_id") or session.get("metadata", {}).get("order_id")
+
+        if order_id:
+            update_order(
+                order_id,
+                paid=True,
+                stripe_session_id=session.get("id"),
+            )
+
+    return {"ok": True}
 
 
 # =========================
@@ -210,6 +347,25 @@ async def crear_eterna(customer_name: str = Form(...)):
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
 def ver_eterna(order_id: str):
+    order = get_order(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+
+    if not order.get("paid"):
+        return HTMLResponse(
+            """
+            <html>
+            <body style="margin:0;background:black;color:white;font-family:Arial,sans-serif;display:flex;min-height:100vh;align-items:center;justify-content:center;text-align:center;padding:24px;">
+                <div>
+                    <h1>Esta ETERNA aún no está activada</h1>
+                    <p>El pago todavía no figura como confirmado.</p>
+                </div>
+            </body>
+            </html>
+            """,
+            status_code=403,
+        )
+
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -219,9 +375,7 @@ def ver_eterna(order_id: str):
         <title>ETERNA</title>
 
         <style>
-            * {{
-                box-sizing: border-box;
-            }}
+            * {{ box-sizing: border-box; }}
 
             html, body {{
                 margin: 0;
@@ -247,9 +401,7 @@ def ver_eterna(order_id: str):
                     linear-gradient(180deg, #0a0a0a 0%, #000 100%);
             }}
 
-            .pantalla.activa {{
-                display: flex;
-            }}
+            .pantalla.activa {{ display: flex; }}
 
             .fondo {{
                 position: absolute;
@@ -262,9 +414,7 @@ def ver_eterna(order_id: str):
                 filter: brightness(0.45);
             }}
 
-            .fondo.visible {{
-                opacity: 1;
-            }}
+            .fondo.visible {{ opacity: 1; }}
 
             .overlay {{
                 position: absolute;
@@ -288,7 +438,6 @@ def ver_eterna(order_id: str):
                 margin: 0 0 16px;
                 font-size: clamp(34px, 6vw, 56px);
                 font-weight: 500;
-                letter-spacing: 0.5px;
             }}
 
             p {{
@@ -347,9 +496,7 @@ def ver_eterna(order_id: str):
                 transition: opacity 0.5s ease;
             }}
 
-            #preview.visible {{
-                opacity: 0.82;
-            }}
+            #preview.visible {{ opacity: 0.82; }}
 
             #experiencia {{
                 position: fixed;
@@ -365,9 +512,7 @@ def ver_eterna(order_id: str):
                 padding: 30px;
             }}
 
-            #experiencia.activa {{
-                display: flex;
-            }}
+            #experiencia.activa {{ display: flex; }}
 
             .regalo {{
                 animation: aparecer 1.2s ease forwards;
@@ -386,14 +531,8 @@ def ver_eterna(order_id: str):
             }}
 
             @keyframes aparecer {{
-                from {{
-                    opacity: 0;
-                    transform: translateY(8px);
-                }}
-                to {{
-                    opacity: 1;
-                    transform: translateY(0);
-                }}
+                from {{ opacity: 0; transform: translateY(8px); }}
+                to {{ opacity: 1; transform: translateY(0); }}
             }}
         </style>
     </head>
@@ -450,12 +589,8 @@ def ver_eterna(order_id: str):
 
             function activarSiExiste(imgId) {{
                 const img = document.getElementById(imgId);
-                img.addEventListener("load", () => {{
-                    img.classList.add("visible");
-                }});
-                img.addEventListener("error", () => {{
-                    img.style.display = "none";
-                }});
+                img.addEventListener("load", () => img.classList.add("visible"));
+                img.addEventListener("error", () => img.style.display = "none");
             }}
 
             activarSiExiste("imgInicio");
@@ -465,7 +600,6 @@ def ver_eterna(order_id: str):
                 document.getElementById("inicio").classList.remove("activa");
                 document.getElementById("final").classList.remove("activa");
                 document.getElementById("experiencia").classList.remove("activa");
-
                 const el = document.getElementById(id);
                 if (el) el.classList.add("activa");
             }}
@@ -488,9 +622,7 @@ def ver_eterna(order_id: str):
                     mediaRecorder = new MediaRecorder(stream);
 
                     mediaRecorder.ondataavailable = (e) => {{
-                        if (e.data && e.data.size > 0) {{
-                            chunks.push(e.data);
-                        }}
+                        if (e.data && e.data.size > 0) chunks.push(e.data);
                     }};
 
                     mediaRecorder.onstop = async () => {{
@@ -558,7 +690,6 @@ def ver_eterna(order_id: str):
                 document.body.appendChild(a);
                 a.click();
                 a.remove();
-
                 setTimeout(() => URL.revokeObjectURL(url), 1000);
             }}
 
@@ -612,11 +743,17 @@ async def subir_reaccion(
     video: UploadFile = File(...),
     order_id: str = Form(None)
 ):
-    filename = video.filename or "reaccion.webm"
+    order = get_order(order_id) if order_id else None
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado.")
+
+    filename = video.filename or f"reaccion_{order_id}.webm"
     file_path = REACTIONS_DIR / filename
 
     with open(file_path, "wb") as f:
         f.write(await video.read())
+
+    update_order(order_id, reaction_filename=filename)
 
     return {
         "ok": True,
