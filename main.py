@@ -1,10 +1,12 @@
 import os
+import json
 import uuid
 import urllib.parse
+from pathlib import Path
 
 import stripe
 from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
 # =========================
 # CONFIG
@@ -19,17 +21,21 @@ stripe.api_key = STRIPE_SECRET_KEY
 app = FastAPI(title="ETERNA")
 
 # =========================
-# MEMORIA TEMPORAL
+# STORAGE
 # =========================
 
-ORDERS = {}
+BASE_DIR = Path("storage")
+ORDERS_DIR = BASE_DIR / "orders"
+
+BASE_DIR.mkdir(parents=True, exist_ok=True)
+ORDERS_DIR.mkdir(parents=True, exist_ok=True)
 
 # =========================
 # HELPERS
 # =========================
 
 def clean_phone(phone: str) -> str:
-    phone = "".join(filter(str.isdigit, phone))
+    phone = "".join(filter(str.isdigit, phone or ""))
     if phone.startswith("00"):
         phone = phone[2:]
     if phone.startswith("0"):
@@ -47,6 +53,20 @@ Vívelo.
 👉 {url}
 """
     return f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
+
+def order_path(order_id: str) -> Path:
+    return ORDERS_DIR / f"{order_id}.json"
+
+def save_order(order_id: str, data: dict) -> None:
+    with open(order_path(order_id), "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def load_order(order_id: str):
+    path = order_path(order_id)
+    if not path.exists():
+        return None
+    with open(path, "r", encoding="utf-8") as f:
+        return json.load(f)
 
 # =========================
 # HOME
@@ -68,7 +88,7 @@ def home():
             <input name="phrase_1" placeholder="Frase 1"><br><br>
             <input name="phrase_2" placeholder="Frase 2"><br><br>
             <input name="phrase_3" placeholder="Frase 3"><br><br>
-            <input name="amount" type="number" placeholder="Cantidad regalo (€)"><br><br>
+            <input name="amount" type="number" step="0.01" placeholder="Cantidad regalo (€)"><br><br>
 
             <button type="submit">Crear ETERNA</button>
         </form>
@@ -93,14 +113,14 @@ def crear_eterna(
 ):
     order_id = str(uuid.uuid4())
 
-    # Configuración económica
     precio_video = 5.0
     comision_pct = 0.05
 
     comision = round(amount * comision_pct, 2)
     total = round(amount + comision + precio_video, 2)
 
-    ORDERS[order_id] = {
+    order_data = {
+        "order_id": order_id,
         "customer_name": customer_name,
         "customer_email": customer_email,
         "recipient_name": recipient_name,
@@ -112,8 +132,10 @@ def crear_eterna(
         "comision": comision,
         "precio_video": precio_video,
         "total": total,
-        "paid": False,
+        "paid": False
     }
+
+    save_order(order_id, order_data)
 
     session = stripe.checkout.Session.create(
         mode="payment",
@@ -156,14 +178,16 @@ async def webhook(request: Request):
             STRIPE_WEBHOOK_SECRET
         )
     except Exception:
-        return {"error": "webhook"}
+        return JSONResponse({"error": "webhook"}, status_code=400)
 
     if event["type"] == "checkout.session.completed":
         session = event["data"]["object"]
         order_id = session["metadata"]["order_id"]
 
-        if order_id in ORDERS:
-            ORDERS[order_id]["paid"] = True
+        order = load_order(order_id)
+        if order:
+            order["paid"] = True
+            save_order(order_id, order)
 
     return {"ok": True}
 
@@ -173,7 +197,7 @@ async def webhook(request: Request):
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
 def pedido(order_id: str):
-    order = ORDERS.get(order_id)
+    order = load_order(order_id)
 
     if not order:
         return HTMLResponse("<h1>No existe</h1>")
@@ -227,7 +251,7 @@ def pedido(order_id: str):
 
 @app.get("/ver/{order_id}", response_class=HTMLResponse)
 def ver_eterna(order_id: str):
-    order = ORDERS.get(order_id)
+    order = load_order(order_id)
 
     if not order:
         return HTMLResponse("<h1>No existe</h1>")
