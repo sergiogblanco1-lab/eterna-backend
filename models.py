@@ -1,4 +1,4 @@
-from sqlalchemy import Boolean, Column, DateTime, String, Text
+from sqlalchemy import Boolean, Column, DateTime, Integer, String, Text
 from sqlalchemy.sql import func
 
 from database import Base
@@ -19,6 +19,9 @@ class EternaOrder(Base):
     phrase_1 = Column(Text, nullable=True)
     phrase_2 = Column(Text, nullable=True)
     phrase_3 = Column(Text, nullable=True)
+
+    photo_count = Column(Integer, default=0, nullable=False)
+    photos_json = Column(Text, nullable=True)
 
     stripe_session_id = Column(String, nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now(), nullable=False)
