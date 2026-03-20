@@ -1,342 +1,233 @@
 import os
-import json
-import uuid
-import urllib.parse
 from pathlib import Path
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import HTMLResponse
+from fastapi.staticfiles import StaticFiles
 
-import stripe
-from fastapi import FastAPI, Form, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+app = FastAPI()
 
-# =========================
-# CONFIG
-# =========================
+# carpeta para guardar reacciones
+Path("reacciones").mkdir(exist_ok=True)
 
-STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "")
-STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "")
-PUBLIC_URL = os.getenv("PUBLIC_BASE_URL", "http://localhost:10000")
+# carpeta static (pon aquí tus imágenes)
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
-stripe.api_key = STRIPE_SECRET_KEY
-
-app = FastAPI(title="ETERNA")
 
 # =========================
-# STORAGE
-# =========================
-
-BASE_DIR = Path("storage")
-ORDERS_DIR = BASE_DIR / "orders"
-
-BASE_DIR.mkdir(parents=True, exist_ok=True)
-ORDERS_DIR.mkdir(parents=True, exist_ok=True)
-
-# =========================
-# HELPERS
-# =========================
-
-def clean_phone(phone: str) -> str:
-    phone = "".join(filter(str.isdigit, phone or ""))
-    if phone.startswith("00"):
-        phone = phone[2:]
-    if phone.startswith("0"):
-        phone = phone[1:]
-    return phone
-
-def whatsapp_link(phone: str, url: str) -> str:
-    phone = clean_phone(phone)
-    msg = f"""Hola ❤️
-
-Alguien ha creado una ETERNA para ti.
-
-Vívelo.
-
-👉 {url}
-"""
-    return f"https://wa.me/{phone}?text={urllib.parse.quote(msg)}"
-
-def order_path(order_id: str) -> Path:
-    return ORDERS_DIR / f"{order_id}.json"
-
-def save_order(order_id: str, data: dict) -> None:
-    with open(order_path(order_id), "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-def load_order(order_id: str):
-    path = order_path(order_id)
-    if not path.exists():
-        return None
-    with open(path, "r", encoding="utf-8") as f:
-        return json.load(f)
-
-# =========================
-# HOME
-# =========================
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    return """
-    <html>
-    <body style="background:black;color:white;text-align:center;padding-top:80px;font-family:Arial;">
-        <h1>ETERNA</h1>
-        <p>Crea una ETERNA</p>
-
-        <form action="/crear-eterna" method="post">
-            <input name="customer_name" placeholder="Tu nombre"><br><br>
-            <input name="customer_email" placeholder="Tu email"><br><br>
-            <input name="recipient_name" placeholder="Nombre destinatario"><br><br>
-            <input name="recipient_phone" placeholder="Teléfono destinatario"><br><br>
-            <input name="phrase_1" placeholder="Frase 1"><br><br>
-            <input name="phrase_2" placeholder="Frase 2"><br><br>
-            <input name="phrase_3" placeholder="Frase 3"><br><br>
-            <input name="amount" type="number" step="0.01" placeholder="Cantidad regalo (€)"><br><br>
-
-            <button type="submit">Crear ETERNA</button>
-        </form>
-    </body>
-    </html>
-    """
-
-# =========================
-# CREAR ETERNA
-# =========================
-
-@app.post("/crear-eterna")
-def crear_eterna(
-    customer_name: str = Form(...),
-    customer_email: str = Form(...),
-    recipient_name: str = Form(...),
-    recipient_phone: str = Form(...),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
-    amount: float = Form(...)
-):
-    order_id = str(uuid.uuid4())
-
-    precio_video = 5.0
-    comision_pct = 0.05
-
-    comision = round(amount * comision_pct, 2)
-    total = round(amount + comision + precio_video, 2)
-
-    order_data = {
-        "order_id": order_id,
-        "customer_name": customer_name,
-        "customer_email": customer_email,
-        "recipient_name": recipient_name,
-        "recipient_phone": recipient_phone,
-        "phrase_1": phrase_1,
-        "phrase_2": phrase_2,
-        "phrase_3": phrase_3,
-        "amount": round(amount, 2),
-        "comision": comision,
-        "precio_video": precio_video,
-        "total": total,
-        "paid": False
-    }
-
-    save_order(order_id, order_data)
-
-    session = stripe.checkout.Session.create(
-        mode="payment",
-        payment_method_types=["card"],
-        line_items=[
-            {
-                "price_data": {
-                    "currency": "eur",
-                    "product_data": {
-                        "name": "ETERNA"
-                    },
-                    "unit_amount": int(total * 100),
-                },
-                "quantity": 1,
-            }
-        ],
-        customer_email=customer_email,
-        metadata={
-            "order_id": order_id
-        },
-        success_url=f"{PUBLIC_URL}/pedido/{order_id}",
-        cancel_url=f"{PUBLIC_URL}/",
-    )
-
-    return RedirectResponse(session.url, status_code=303)
-
-# =========================
-# WEBHOOK STRIPE
-# =========================
-
-@app.post("/webhook")
-async def webhook(request: Request):
-    payload = await request.body()
-    sig_header = request.headers.get("stripe-signature")
-
-    try:
-        event = stripe.Webhook.construct_event(
-            payload,
-            sig_header,
-            STRIPE_WEBHOOK_SECRET
-        )
-    except Exception:
-        return JSONResponse({"error": "webhook"}, status_code=400)
-
-    if event["type"] == "checkout.session.completed":
-        session = event["data"]["object"]
-        order_id = session["metadata"]["order_id"]
-
-        order = load_order(order_id)
-        if order:
-            order["paid"] = True
-            save_order(order_id, order)
-
-    return {"ok": True}
-
-# =========================
-# PÁGINA TRAS PAGO
+# PANTALLA ETERNA
 # =========================
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
-def pedido(order_id: str):
-    order = load_order(order_id)
-
-    if not order:
-        return HTMLResponse("<h1>No existe</h1>")
-
-    if not order["paid"]:
-        return HTMLResponse("""
-        <html>
-        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
-            <h1>Pago pendiente...</h1>
-            <p>Si acabas de pagar, espera unos segundos y recarga.</p>
-        </body>
-        </html>
-        """)
-
-    link_experiencia = f"{PUBLIC_URL}/ver/{order_id}"
-    wa_link = whatsapp_link(order["recipient_phone"], link_experiencia)
-
-    return HTMLResponse(f"""
-    <html>
-    <body style="background:black;color:white;text-align:center;padding-top:80px;font-family:Arial;">
-
-        <h1>ETERNA lista</h1>
-
-        <p>Destinatario: {order["recipient_name"]}</p>
-        <p>Frase 1: {order["phrase_1"]}</p>
-        <p>Frase 2: {order["phrase_2"]}</p>
-        <p>Frase 3: {order["phrase_3"]}</p>
-
-        <h2 style="color:#00ff88;">Has regalado {order["amount"]}€</h2>
-
-        <p>Comisión: {order["comision"]}€</p>
-        <p>Vídeo ETERNA: {order["precio_video"]}€</p>
-        <h3>Total pagado: {order["total"]}€</h3>
-
-        <p style="margin-top:30px;">Enlace directo:</p>
-        <p>{link_experiencia}</p>
-
-        <a href="{wa_link}">
-            <button style="padding:20px;background:green;color:white;border:none;border-radius:8px;margin-top:20px;">
-                Enviar por WhatsApp
-            </button>
-        </a>
-
-    </body>
-    </html>
-    """)
-
-# =========================
-# EXPERIENCIA RECEPTOR
-# =========================
-
-@app.get("/ver/{order_id}", response_class=HTMLResponse)
 def ver_eterna(order_id: str):
-    order = load_order(order_id)
+    return f"""
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>ETERNA</title>
 
-    if not order:
-        return HTMLResponse("<h1>No existe</h1>")
+<style>
+body {{
+    margin:0;
+    background:black;
+    font-family: Arial;
+}}
 
-    if not order["paid"]:
-        return HTMLResponse("<h1>Aún no disponible</h1>")
+.pantalla {{
+    position: fixed;
+    width:100%;
+    height:100%;
+    overflow:hidden;
+}}
 
-    return HTMLResponse(f"""
-    <html>
-    <head>
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    </head>
-    <body style="background:black;color:white;text-align:center;font-family:Arial;display:flex;justify-content:center;align-items:center;height:100vh;">
+.fondo {{
+    position:absolute;
+    width:100%;
+    height:100%;
+    object-fit:cover;
+    filter: brightness(0.4);
+}}
 
-        <div id="start">
-            <h1 style="font-size:28px;">ETERNA</h1>
-            <p style="margin-top:20px;">Este momento será guardado para quien lo creó ❤️</p>
-            <button onclick="startExperience()" style="
-                margin-top:40px;
-                padding:15px 25px;
-                font-size:16px;
-                background:white;
-                color:black;
-                border:none;
-                border-radius:10px;
-            ">
-                Aceptar y continuar
-            </button>
-        </div>
+.contenido {{
+    position:relative;
+    z-index:2;
+    text-align:center;
+    top:50%;
+    transform:translateY(-50%);
+    color:white;
+    padding:20px;
+}}
 
-        <div id="countdown" style="display:none;font-size:60px;">
-            3
-        </div>
+button {{
+    margin-top:20px;
+    padding:15px 25px;
+    font-size:16px;
+    background:white;
+    color:black;
+    border:none;
+}}
 
-        <div id="experience" style="display:none;">
-            <h1>ETERNA</h1>
+video {{
+    position:fixed;
+    bottom:10px;
+    right:10px;
+    width:120px;
+    border-radius:10px;
+    opacity:0.7;
+}}
+</style>
+</head>
 
-            <p style="margin-top:20px;">
-                Esto se está viviendo contigo ❤️
-            </p>
+<body>
 
-            <div style="margin-top:40px;font-size:24px;">
-                <p>{order["phrase_1"]}</p>
-                <p>{order["phrase_2"]}</p>
-                <p>{order["phrase_3"]}</p>
-            </div>
+<!-- INICIO -->
+<div id="inicio" class="pantalla">
 
-            <h2 style="margin-top:60px;color:#00ff88;">
-                Has recibido {order["amount"]}€
-            </h2>
+    <img src="/static/eterna_inicio.jpg" class="fondo">
 
-            <p style="margin-top:20px;">
-                Tu momento ha sido vivido ❤️
-            </p>
-        </div>
+    <div class="contenido">
+        <h1>Tu ETERNA está aquí</h1>
 
-        <script>
-        function startExperience() {{
-            document.getElementById("start").style.display = "none";
-            document.getElementById("countdown").style.display = "block";
+        <p>
+        Al continuar, aceptas vivirla tal y como fue creada.<br>
+        Solo ocurre una vez.
+        </p>
 
-            let count = 3;
+        <button onclick="iniciarExperiencia()">Aceptar ETERNA</button>
+    </div>
 
-            let interval = setInterval(() => {{
-                count--;
+</div>
 
-                if (count > 0) {{
-                    document.getElementById("countdown").innerText = count;
-                }} else {{
-                    clearInterval(interval);
-                    document.getElementById("countdown").style.display = "none";
-                    document.getElementById("experience").style.display = "block";
-                }}
-            }}, 1000);
-        }}
-        </script>
 
-    </body>
-    </html>
-    """)
+<!-- FINAL -->
+<div id="final" class="pantalla" style="display:none;">
+
+    <img src="/static/eterna_final.jpg" class="fondo">
+
+    <div class="contenido">
+        <h1>Este momento ya es tuyo</h1>
+
+        <p>
+        Puedes guardarlo o compartirlo.
+        </p>
+
+        <button onclick="guardarVideo()">Guardar momento</button>
+        <button onclick="compartirVideo()">Compartir momento</button>
+    </div>
+
+</div>
+
+
+<video id="preview" autoplay muted></video>
+
+<script>
+
+let mediaRecorder;
+let chunks = [];
+let videoBlob;
+
+async function iniciarExperiencia() {{
+    try {{
+        const stream = await navigator.mediaDevices.getUserMedia({{
+            video: true,
+            audio: true
+        }});
+
+        document.getElementById("preview").srcObject = stream;
+
+        mediaRecorder = new MediaRecorder(stream);
+
+        mediaRecorder.ondataavailable = e => chunks.push(e.data);
+
+        mediaRecorder.onstop = () => {{
+            videoBlob = new Blob(chunks, {{ type: "video/webm" }});
+            subirVideo();
+            mostrarFinal();
+        }};
+
+        mediaRecorder.start();
+
+        // 2s antes del regalo
+        setTimeout(() => {{
+            mostrarRegalo();
+        }}, 2000);
+
+    }} catch(e) {{
+        alert("No puedes ver ETERNA sin aceptar la experiencia completa");
+    }}
+}}
+
+function mostrarRegalo() {{
+    const div = document.createElement("div");
+    div.style.position = "fixed";
+    div.style.top = "50%";
+    div.style.left = "50%";
+    div.style.transform = "translate(-50%, -50%)";
+    div.style.color = "white";
+    div.innerHTML = "<h1>💸 Has recibido un regalo</h1>";
+
+    document.body.appendChild(div);
+
+    // cortar 10s después
+    setTimeout(() => {{
+        mediaRecorder.stop();
+    }}, 10000);
+}}
+
+function subirVideo() {{
+    const formData = new FormData();
+    formData.append("video", videoBlob, "reaccion.webm");
+
+    fetch("/subir-reaccion", {{
+        method: "POST",
+        body: formData
+    }});
+}}
+
+function mostrarFinal() {{
+    document.getElementById("inicio").style.display = "none";
+    document.getElementById("final").style.display = "block";
+}}
+
+function guardarVideo() {{
+    const url = URL.createObjectURL(videoBlob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "eterna.webm";
+    a.click();
+}}
+
+async function compartirVideo() {{
+    if (navigator.share) {{
+        const file = new File([videoBlob], "eterna.webm", {{ type: "video/webm" }});
+
+        await navigator.share({{
+            title: "Mi ETERNA",
+            text: "Mira este momento ❤️",
+            files: [file]
+        }});
+    }} else {{
+        alert("Compartir no disponible en este dispositivo");
+    }}
+}}
+
+</script>
+
+</body>
+</html>
+"""
+
 
 # =========================
-# TEST
+# SUBIR REACCIÓN
 # =========================
 
-@app.get("/test")
-def test():
-    return {"status": "ok"}
+@app.post("/subir-reaccion")
+async def subir_reaccion(video: UploadFile = File(...)):
+    file_path = Path("reacciones") / video.filename
+
+    with open(file_path, "wb") as f:
+        f.write(await video.read())
+
+    return {"ok": True}
