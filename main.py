@@ -95,8 +95,8 @@ def home():
 # CREAR ETERNA
 # =========================
 
-from typing import List, Optional
 from fastapi import Form, UploadFile, File
+from typing import List, Optional
 
 @app.post("/crear-eterna")
 async def crear_eterna(
@@ -113,46 +113,29 @@ async def crear_eterna(
 
     gift_amount: int = Form(...),
 
-    # 🔥 FIX IMPORTANTE
+    # 🔥 FIX ANÓNIMO
     anonimo: Optional[str] = Form(None),
 
     photos: List[UploadFile] = File(...)
 ):
-    # 🔥 LÓGICA CORRECTA
+    # 🔥 AQUÍ VA LA LÓGICA
     is_anonimo = anonimo is not None
 
     print("Anonimo:", is_anonimo)
+    print("Regalo:", gift_amount)
 
-    # Aquí sigue TODO tu código tal cual lo tienes
+    # 👉 EJEMPLO (tu lógica sigue igual debajo)
+    # Aquí sigue TODO tu código actual:
+    # - guardar datos
+    # - crear order_id
+    # - stripe checkout
+    # - redirect
 
-# =========================
-# POST PAGO
-# =========================
-
-@app.get("/post-pago")
-def post_pago(session_id: str | None = None, order_id: str | None = None):
-    print("DEBUG post-pago session_id:", session_id)
-    print("DEBUG post-pago order_id:", order_id)
-
-    # Primero intenta con order_id directo
-    if order_id and order_id in orders:
-        orders[order_id]["paid"] = True
-        return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
-
-    # Si no, intenta recuperar desde Stripe
-    if session_id and STRIPE_SECRET_KEY:
-        try:
-            session = stripe.checkout.Session.retrieve(session_id)
-            recovered_order_id = session.client_reference_id or session.metadata.get("order_id")
-            print("DEBUG recovered_order_id:", recovered_order_id)
-
-            if recovered_order_id and recovered_order_id in orders:
-                orders[recovered_order_id]["paid"] = True
-                return RedirectResponse(url=f"/resumen/{recovered_order_id}", status_code=303)
-        except Exception as e:
-            print("DEBUG error recuperando session:", repr(e))
-
-    raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    return {
+        "status": "ok",
+        "anonimo": is_anonimo,
+        "gift_amount": gift_amount
+    }
 
 # =========================
 # WEBHOOK
