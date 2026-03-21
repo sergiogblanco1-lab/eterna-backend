@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V6")
+app = FastAPI(title="ETERNA V7")
 
 # =========================
 # CONFIG
@@ -44,8 +44,13 @@ def normalize_phone(p: str) -> str:
     return "".join(ch for ch in str(p or "") if ch.isdigit())
 
 
-def reaction_video_url(order_id: str) -> str:
-    return f"/video/{order_id}"
+def reaction_video_path(order_id: str) -> str:
+    return os.path.join(VIDEO_FOLDER, f"{order_id}.webm")
+
+
+def reaction_exists(order: dict) -> bool:
+    filepath = order.get("reaction_video")
+    return bool(filepath) and os.path.exists(filepath)
 
 
 # =========================
@@ -62,7 +67,9 @@ def home():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            * {{ box-sizing: border-box; }}
+            * {{
+                box-sizing: border-box;
+            }}
 
             body {{
                 margin: 0;
@@ -158,10 +165,10 @@ def home():
     <body>
         <div class="card">
             <h1>ETERNA</h1>
+
             <div class="subtitle">
                 Convierte emoción en un regalo inolvidable.<br>
-                Hoy usamos 3 frases como experiencia MVP.<br>
-                Mañana será un vídeo emocional real.
+                MVP actual: 3 frases + dinero + reacción grabada.
             </div>
 
             <form action="/crear-eterna" method="post">
@@ -198,8 +205,8 @@ def home():
             </form>
 
             <div class="footer-note">
-                MVP actual: frases + reacción grabada.<br>
-                Futuro: vídeo emocional real + estética más bucólica, romántica y preciosa.
+                Futuro: sustituiremos las frases por un vídeo emocional real.<br>
+                El core ya es la reacción grabada.
             </div>
         </div>
     </body>
@@ -313,21 +320,36 @@ def resumen(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    mensaje = urllib.parse.quote(
+    mensaje_experiencia = urllib.parse.quote(
         f"Hola ❤️\n\n"
         f"{order['customer_name']} te ha enviado algo especial.\n\n"
         f"Ábrelo aquí:\n"
         f"{PUBLIC_BASE_URL}/pedido/{order_id}"
     )
 
-    phone = normalize_phone(order["recipient_phone"])
-    whatsapp_url = f"https://wa.me/{phone}?text={mensaje}"
+    recipient_phone = normalize_phone(order["recipient_phone"])
+    whatsapp_experiencia_url = f"https://wa.me/{recipient_phone}?text={mensaje_experiencia}"
 
     reaction_block = ""
-    if order.get("reaction_video") and os.path.exists(order["reaction_video"]):
+    if reaction_exists(order):
+        reaction_link = f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
+
+        mensaje_reaccion = urllib.parse.quote(
+            f"Hola ❤️\n\n"
+            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
+            f"Ver reacción:\n{reaction_link}"
+        )
+
+        customer_phone = normalize_phone(order["customer_phone"])
+        whatsapp_reaccion_url = f"https://wa.me/{customer_phone}?text={mensaje_reaccion}"
+
         reaction_block = f"""
             <a href="/reaccion/{order_id}" target="_blank">
                 <button class="light">Ver reacción grabada ❤️</button>
+            </a>
+
+            <a href="{whatsapp_reaccion_url}" target="_blank">
+                <button class="whatsapp">Mandar reacción por WhatsApp</button>
             </a>
         """
         video_status = "Vídeo guardado"
@@ -343,7 +365,9 @@ def resumen(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Resumen ETERNA</title>
         <style>
-            * {{ box-sizing: border-box; }}
+            * {{
+                box-sizing: border-box;
+            }}
 
             body {{
                 margin: 0;
@@ -445,6 +469,7 @@ def resumen(order_id: str):
     <body>
         <div class="card">
             <h1>Tu ETERNA está lista ❤️</h1>
+
             <p>
                 Ya puedes enviarla a {safe_text(order["recipient_name"])} por WhatsApp.
                 <br>
@@ -467,8 +492,8 @@ def resumen(order_id: str):
             </div>
 
             <div class="buttons">
-                <a href="{whatsapp_url}" target="_blank">
-                    <button class="whatsapp">Enviar por WhatsApp</button>
+                <a href="{whatsapp_experiencia_url}" target="_blank">
+                    <button class="whatsapp">Enviar experiencia por WhatsApp</button>
                 </a>
 
                 <a href="/pedido/{order_id}" target="_blank">
@@ -505,11 +530,14 @@ async def upload_video(
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    filename = f"{order_id}.webm"
-    filepath = os.path.join(VIDEO_FOLDER, filename)
+    filepath = reaction_video_path(order_id)
+
+    content = await video.read()
+    if not content:
+        raise HTTPException(status_code=400, detail="Vídeo vacío")
 
     with open(filepath, "wb") as f:
-        f.write(await video.read())
+        f.write(content)
 
     order["reaction_video"] = filepath
     order["reaction_uploaded"] = True
@@ -517,7 +545,8 @@ async def upload_video(
     return JSONResponse({
         "status": "ok",
         "file": filepath,
-        "reaction_url": f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
+        "reaction_url": f"{PUBLIC_BASE_URL}/reaccion/{order_id}",
+        "thanks_url": f"{PUBLIC_BASE_URL}/gracias/{order_id}"
     })
 
 
@@ -550,9 +579,8 @@ def reaccion(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    filepath = order.get("reaction_video")
-    if not filepath or not os.path.exists(filepath):
-        return HTMLResponse("""
+    if not reaction_exists(order):
+        return HTMLResponse(f"""
         <!DOCTYPE html>
         <html lang="es">
         <head>
@@ -561,7 +589,7 @@ def reaccion(order_id: str):
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
             <title>Reacción pendiente</title>
             <style>
-                body {
+                body {{
                     margin: 0;
                     min-height: 100vh;
                     background: black;
@@ -572,20 +600,24 @@ def reaccion(order_id: str):
                     justify-content: center;
                     padding: 24px;
                     text-align: center;
-                }
-                .card {
+                }}
+                .card {{
                     max-width: 680px;
-                }
-                p {
+                }}
+                p {{
                     color: rgba(255,255,255,0.72);
                     line-height: 1.6;
-                }
+                }}
+                a {{
+                    color: white;
+                }}
             </style>
         </head>
         <body>
             <div class="card">
                 <h1>La reacción aún no ha llegado</h1>
                 <p>Esta página se actualizará sola en unos segundos.</p>
+                <p><a href="/resumen/{order_id}">Volver al resumen</a></p>
             </div>
         </body>
         </html>
@@ -673,7 +705,7 @@ def reaccion(order_id: str):
             </p>
 
             <video controls autoplay playsinline>
-                <source src="{reaction_video_url(order_id)}" type="video/webm">
+                <source src="/video/{order_id}" type="video/webm">
                 Tu navegador no puede reproducir este vídeo.
             </video>
 
@@ -681,6 +713,129 @@ def reaccion(order_id: str):
                 <a href="/resumen/{order_id}">
                     <button>Volver al resumen</button>
                 </a>
+                <a href="/">
+                    <button>Crear otra ETERNA ❤️</button>
+                </a>
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+# =========================
+# GRACIAS FINAL
+# =========================
+
+@app.get("/gracias/{order_id}", response_class=HTMLResponse)
+def gracias(order_id: str):
+    order = orders.get(order_id)
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+
+    ready = reaction_exists(order)
+
+    reaction_html = ""
+    if ready:
+        reaction_html = f"""
+            <video controls autoplay playsinline style="width:min(92vw,420px);max-height:68vh;border-radius:18px;background:#111;margin-top:18px;">
+                <source src="/video/{order_id}" type="video/webm">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+        """
+    else:
+        reaction_html = """
+            <p style="margin-top:18px;color:rgba(255,255,255,0.55);">
+                La reacción se está guardando...
+            </p>
+        """
+
+    refresh_tag = '<meta http-equiv="refresh" content="5">' if not ready else ""
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        {refresh_tag}
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+            }}
+
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 34px 28px;
+                text-align: center;
+            }}
+
+            h1 {{
+                margin-top: 0;
+                font-size: 40px;
+            }}
+
+            p {{
+                color: rgba(255,255,255,0.72);
+                line-height: 1.7;
+                font-size: 17px;
+            }}
+
+            .actions {{
+                margin-top: 24px;
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+            }}
+
+            a {{
+                text-decoration: none;
+            }}
+
+            button {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Este momento ya es ETERNA ❤️</h1>
+            <p>
+                Lo más bonito no es solo lo que recibiste.<br>
+                Es cómo lo sentiste.
+            </p>
+
+            {reaction_html}
+
+            <div class="actions">
+                <a href="/reaccion/{order_id}">
+                    <button>Ver reacción completa</button>
+                </a>
+
                 <a href="/">
                     <button>Crear otra ETERNA ❤️</button>
                 </a>
@@ -750,7 +905,6 @@ def pedido(order_id: str):
                 align-items: center;
                 flex-direction: column;
                 padding: 24px;
-                transition: opacity 0.8s ease;
             }}
 
             .hidden {{
@@ -838,38 +992,10 @@ def pedido(order_id: str):
                 font-size: 17px;
             }}
 
-            .final-card {{
-                max-width: 720px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 34px 28px;
-            }}
-
-            .final-card h1 {{
-                font-size: 42px;
-                margin-bottom: 12px;
-            }}
-
-            .final-card p {{
-                color: rgba(255,255,255,0.74);
-                line-height: 1.7;
-                font-size: 17px;
-            }}
-
-            .final-actions {{
-                margin-top: 22px;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }}
-
-            .reaction-player {{
-                width: min(92vw, 420px);
-                max-height: 68vh;
-                border-radius: 18px;
-                background: #111;
+            .loader {{
                 margin-top: 18px;
+                color: rgba(255,255,255,0.55);
+                font-size: 14px;
             }}
         </style>
     </head>
@@ -893,22 +1019,14 @@ def pedido(order_id: str):
             <div id="content"></div>
         </div>
 
-        <div id="reactionScreen" class="screen hidden"></div>
-
         <script>
             let recorder = null;
             let chunks = [];
             let currentStream = null;
-            let uploadedReactionUrl = "";
             let mediaMimeType = "video/webm";
 
             function show(htmlContent) {{
                 document.getElementById("content").innerHTML = htmlContent;
-            }}
-
-            function hideAllExperienceScreens() {{
-                document.getElementById("experience").classList.add("hidden");
-                document.getElementById("reactionScreen").classList.add("hidden");
             }}
 
             function wait(ms) {{
@@ -923,11 +1041,16 @@ def pedido(order_id: str):
                     }}
 
                     const blob = new Blob(chunks, {{ type: mediaMimeType }});
+                    if (!blob || blob.size === 0) {{
+                        console.log("Blob vacío");
+                        return null;
+                    }}
+
                     const formData = new FormData();
                     formData.append("order_id", "{order_id}");
                     formData.append("video", blob, "{order_id}.webm");
 
-                    const response = await fetch("{PUBLIC_BASE_URL}/upload-video", {{
+                    const response = await fetch("/upload-video", {{
                         method: "POST",
                         body: formData
                     }});
@@ -938,7 +1061,6 @@ def pedido(order_id: str):
                     }}
 
                     const data = await response.json();
-                    uploadedReactionUrl = data.reaction_url || "";
                     return data;
                 }} catch (err) {{
                     console.log("Error subiendo vídeo:", err);
@@ -949,7 +1071,19 @@ def pedido(order_id: str):
             async function stopRecordingAndUpload() {{
                 if (recorder && recorder.state !== "inactive") {{
                     await new Promise((resolve) => {{
-                        recorder.onstop = () => resolve();
+                        const oldOnStop = recorder.onstop;
+
+                        recorder.onstop = (event) => {{
+                            if (oldOnStop) {{
+                                try {{
+                                    oldOnStop(event);
+                                }} catch (e) {{
+                                    console.log(e);
+                                }}
+                            }}
+                            resolve();
+                        }};
+
                         try {{
                             recorder.stop();
                         }} catch (e) {{
@@ -961,52 +1095,14 @@ def pedido(order_id: str):
 
                 if (currentStream) {{
                     currentStream.getTracks().forEach(track => track.stop());
+                    currentStream = null;
                 }}
 
                 document.getElementById("cameraBox").style.display = "none";
 
                 await wait(700);
-                await sendVideo();
-            }}
-
-            function showReactionReplay() {{
-                const box = document.getElementById("reactionScreen");
-                box.classList.remove("hidden");
-
-                let reactionHtml = `
-                    <div class="final-card">
-                        <h1>Este momento ya es ETERNA ❤️</h1>
-                        <p>
-                            Lo más bonito no es solo lo que recibió.<br>
-                            Es cómo lo sintió.
-                        </p>
-                `;
-
-                if (uploadedReactionUrl) {{
-                    reactionHtml += `
-                        <video class="reaction-player" controls autoplay playsinline>
-                            <source src="/video/{order_id}" type="video/webm">
-                            Tu navegador no puede reproducir este vídeo.
-                        </video>
-                    `;
-                }} else {{
-                    reactionHtml += `
-                        <p style="margin-top:18px;color:rgba(255,255,255,0.55);">
-                            La reacción se está guardando.
-                        </p>
-                    `;
-                }}
-
-                reactionHtml += `
-                        <div class="final-actions">
-                            <a href="/" style="text-decoration:none;">
-                                <button>Crear otra ETERNA ❤️</button>
-                            </a>
-                        </div>
-                    </div>
-                `;
-
-                box.innerHTML = reactionHtml;
+                const uploadResult = await sendVideo();
+                return uploadResult;
             }}
 
             async function startExperience() {{
@@ -1020,6 +1116,7 @@ def pedido(order_id: str):
                     chunks = [];
 
                     document.getElementById("start").classList.add("hidden");
+                    document.getElementById("experience").classList.remove("hidden");
 
                     const video = document.getElementById("video");
                     video.srcObject = stream;
@@ -1028,10 +1125,10 @@ def pedido(order_id: str):
                     try {{
                         let options = {{}};
 
-                        if (MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {{
+                        if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {{
                             options.mimeType = "video/webm;codecs=vp9,opus";
                             mediaMimeType = "video/webm";
-                        }} else if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
+                        }} else if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
                             options.mimeType = "video/webm;codecs=vp8,opus";
                             mediaMimeType = "video/webm";
                         }} else {{
@@ -1046,21 +1143,24 @@ def pedido(order_id: str):
                             }}
                         }};
 
+                        recorder.onstop = () => {{
+                            console.log("Recorder stopped");
+                        }};
+
                         recorder.start(300);
                     }} catch (err) {{
                         console.log("No se pudo iniciar la grabación:", err);
                         recorder = null;
                     }}
 
-                    runExperience();
+                    await runExperience();
                 }} catch (e) {{
+                    console.log(e);
                     alert("Necesitamos acceso a la cámara para continuar con la experiencia.");
                 }}
             }}
 
             async function runExperience() {{
-                document.getElementById("experience").classList.remove("hidden");
-
                 await wait(1200);
                 show("<h2>Para {recipient_name}</h2>");
                 await wait(2000);
@@ -1080,10 +1180,16 @@ def pedido(order_id: str):
                 show("<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte del regalo.</p>");
                 await wait(4000);
 
-                await stopRecordingAndUpload();
+                show("<h2>Guardando este momento...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>");
 
-                hideAllExperienceScreens();
-                showReactionReplay();
+                const uploadResult = await stopRecordingAndUpload();
+
+                if (uploadResult && uploadResult.thanks_url) {{
+                    window.location.href = uploadResult.thanks_url;
+                    return;
+                }}
+
+                window.location.href = "/gracias/{order_id}";
             }}
         </script>
     </body>
@@ -1099,7 +1205,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V6",
+        "app": "ETERNA V7",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
