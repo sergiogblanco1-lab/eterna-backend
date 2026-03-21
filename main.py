@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V7 FIX")
+app = FastAPI(title="ETERNA V8")
 
 # =========================
 # CONFIG
@@ -52,6 +52,10 @@ def reaction_video_path(order_id: str) -> str:
 def reaction_exists(order: dict) -> bool:
     filepath = order.get("reaction_video")
     return bool(filepath) and os.path.exists(filepath)
+
+
+def whatsapp_link(phone: str, message: str) -> str:
+    return f"https://wa.me/{normalize_phone(phone)}?text={urllib.parse.quote(message)}"
 
 
 # =========================
@@ -321,36 +325,37 @@ def resumen(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    mensaje_experiencia = urllib.parse.quote(
+    experiencia_message = (
         f"Hola ❤️\n\n"
         f"{order['customer_name']} te ha enviado algo especial.\n\n"
         f"Ábrelo aquí:\n"
         f"{PUBLIC_BASE_URL}/pedido/{order_id}"
     )
+    whatsapp_experiencia_url = whatsapp_link(order["recipient_phone"], experiencia_message)
 
-    recipient_phone = normalize_phone(order["recipient_phone"])
-    whatsapp_experiencia_url = f"https://wa.me/{recipient_phone}?text={mensaje_experiencia}"
+    experience_to_receiver_message = (
+        f"Hola ❤️\n\n"
+        f"Aquí tienes tu ETERNA.\n\n"
+        f"{PUBLIC_BASE_URL}/pedido/{order_id}"
+    )
+    reaction_to_gifter_message = (
+        f"Hola ❤️\n\n"
+        f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
+        f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
+    )
+
+    whatsapp_eterna_to_receiver = whatsapp_link(order["recipient_phone"], experience_to_receiver_message)
+    whatsapp_reaction_to_gifter = whatsapp_link(order["customer_phone"], reaction_to_gifter_message)
 
     reaction_block = ""
     if reaction_exists(order):
-        reaction_link = f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
-
-        mensaje_reaccion = urllib.parse.quote(
-            f"Hola ❤️\n\n"
-            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
-            f"Ver reacción:\n{reaction_link}"
-        )
-
-        customer_phone = normalize_phone(order["customer_phone"])
-        whatsapp_reaccion_url = f"https://wa.me/{customer_phone}?text={mensaje_reaccion}"
-
         reaction_block = f"""
             <a href="/reaccion/{order_id}" target="_blank">
                 <button class="light">Ver reacción grabada ❤️</button>
             </a>
 
-            <a href="{whatsapp_reaccion_url}" target="_blank">
-                <button class="whatsapp">Mandar reacción por WhatsApp</button>
+            <a href="{whatsapp_reaction_to_gifter}" target="_blank">
+                <button class="whatsapp">Enviar reacción al regalante</button>
             </a>
         """
         video_status = "Vídeo guardado"
@@ -386,7 +391,7 @@ def resumen(order_id: str):
 
             .card {{
                 width: 100%;
-                max-width: 720px;
+                max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 24px;
@@ -460,6 +465,12 @@ def resumen(order_id: str):
                 color: black;
             }}
 
+            .dark {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.12);
+            }}
+
             .soft {{
                 color: rgba(255,255,255,0.45);
                 font-size: 13px;
@@ -495,6 +506,10 @@ def resumen(order_id: str):
             <div class="buttons">
                 <a href="{whatsapp_experiencia_url}" target="_blank">
                     <button class="whatsapp">Enviar experiencia por WhatsApp</button>
+                </a>
+
+                <a href="{whatsapp_eterna_to_receiver}" target="_blank">
+                    <button class="dark">Enviar ETERNA al regalado</button>
                 </a>
 
                 <a href="/pedido/{order_id}" target="_blank">
@@ -737,7 +752,22 @@ def gracias(order_id: str):
 
     ready = reaction_exists(order)
 
-    reaction_html = ""
+    eterna_message = (
+        f"Hola ❤️\n\n"
+        f"Tienes una ETERNA esperándote.\n\n"
+        f"Ábrela aquí:\n"
+        f"{PUBLIC_BASE_URL}/pedido/{order_id}"
+    )
+    reaction_message = (
+        f"Hola ❤️\n\n"
+        f"Ya han visto tu ETERNA.\n\n"
+        f"Aquí tienes su reacción:\n"
+        f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
+    )
+
+    whatsapp_to_recipient = whatsapp_link(order["recipient_phone"], eterna_message)
+    whatsapp_to_gifter = whatsapp_link(order["customer_phone"], reaction_message)
+
     if ready:
         reaction_html = f"""
             <video controls autoplay playsinline style="width:min(92vw,420px);max-height:68vh;border-radius:18px;background:#111;margin-top:18px;">
@@ -820,6 +850,17 @@ def gracias(order_id: str):
                 font-size: 15px;
                 cursor: pointer;
             }}
+
+            .whatsapp {{
+                background: #25D366;
+                color: white;
+            }}
+
+            .dark {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.12);
+            }}
         </style>
     </head>
     <body>
@@ -833,8 +874,20 @@ def gracias(order_id: str):
             {reaction_html}
 
             <div class="actions">
+                <a href="{whatsapp_to_recipient}" target="_blank">
+                    <button class="whatsapp">Enviar ETERNA al regalado</button>
+                </a>
+
+                <a href="{whatsapp_to_gifter}" target="_blank">
+                    <button class="dark">Enviar reacción al regalante</button>
+                </a>
+
                 <a href="/reaccion/{order_id}">
                     <button>Ver reacción completa</button>
+                </a>
+
+                <a href="/resumen/{order_id}">
+                    <button>Volver al resumen</button>
                 </a>
 
                 <a href="/">
@@ -856,7 +909,15 @@ def pedido(order_id: str):
     order = orders.get(order_id)
 
     if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
+            <h1>Pedido no encontrado</h1>
+            <p>Esta ETERNA ya no está disponible en memoria.</p>
+        </body>
+        </html>
+        """)
 
     if not order.get("paid"):
         return HTMLResponse("""
@@ -975,8 +1036,16 @@ def pedido(order_id: str):
             }}
 
             #content {{
-                max-width: 880px;
+                max-width: 900px;
                 padding: 24px;
+                opacity: 0;
+                transform: translateY(10px);
+                transition: opacity 0.8s ease, transform 0.8s ease;
+            }}
+
+            #content.visible {{
+                opacity: 1;
+                transform: translateY(0);
             }}
 
             #content h2 {{
@@ -984,6 +1053,7 @@ def pedido(order_id: str):
                 line-height: 1.3;
                 margin: 0;
                 font-weight: 600;
+                white-space: pre-line;
             }}
 
             #content p {{
@@ -1026,12 +1096,45 @@ def pedido(order_id: str):
             let currentStream = null;
             let mediaMimeType = "video/webm";
 
-            function show(htmlContent) {{
-                document.getElementById("content").innerHTML = htmlContent;
-            }}
+            const scenes = [
+                {{
+                    html: "<h2>Para {recipient_name}</h2>",
+                    duration: 2200
+                }},
+                {{
+                    html: "<h2>{phrase_1}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>{phrase_2}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>{phrase_3}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>...</h2>",
+                    duration: 1400
+                }},
+                {{
+                    html: "<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte del regalo.</p>",
+                    duration: 4000
+                }}
+            ];
 
             function wait(ms) {{
                 return new Promise(resolve => setTimeout(resolve, ms));
+            }}
+
+            async function showScene(htmlContent, duration) {{
+                const content = document.getElementById("content");
+                content.classList.remove("visible");
+                await wait(250);
+                content.innerHTML = htmlContent;
+                await wait(50);
+                content.classList.add("visible");
+                await wait(duration);
             }}
 
             async function sendVideo() {{
@@ -1042,6 +1145,7 @@ def pedido(order_id: str):
                     }}
 
                     const blob = new Blob(chunks, {{ type: mediaMimeType }});
+
                     if (!blob || blob.size === 0) {{
                         console.log("Blob vacío");
                         return null;
@@ -1102,8 +1206,7 @@ def pedido(order_id: str):
                 document.getElementById("cameraBox").style.display = "none";
 
                 await wait(700);
-                const uploadResult = await sendVideo();
-                return uploadResult;
+                return await sendVideo();
             }}
 
             async function startExperience() {{
@@ -1162,26 +1265,18 @@ def pedido(order_id: str):
             }}
 
             async function runExperience() {{
-                await wait(1200);
-                show("<h2>Para {recipient_name}</h2>");
-                await wait(2000);
+                await wait(700);
 
-                show("<h2>{phrase_1}</h2>");
-                await wait(2600);
+                for (const scene of scenes) {{
+                    await showScene(scene.html, scene.duration);
+                }}
 
-                show("<h2>{phrase_2}</h2>");
-                await wait(2600);
-
-                show("<h2>{phrase_3}</h2>");
-                await wait(2600);
-
-                show("<h2>...</h2>");
-                await wait(1500);
-
-                show("<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte del regalo.</p>");
-                await wait(4000);
-
-                show("<h2>Guardando este momento...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>");
+                const content = document.getElementById("content");
+                content.classList.remove("visible");
+                await wait(250);
+                content.innerHTML = "<h2>Guardando este momento...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>";
+                await wait(50);
+                content.classList.add("visible");
 
                 const uploadResult = await stopRecordingAndUpload();
 
@@ -1206,7 +1301,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V7 FIX",
+        "app": "ETERNA V8",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
