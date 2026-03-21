@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V7")
+app = FastAPI(title="ETERNA V7 FIX")
 
 # =========================
 # CONFIG
@@ -27,6 +27,7 @@ orders: dict[str, dict] = {}
 
 VIDEO_FOLDER = "videos"
 os.makedirs(VIDEO_FOLDER, exist_ok=True)
+
 
 # =========================
 # HELPERS
@@ -1189,7 +1190,7 @@ def pedido(order_id: str):
                     return;
                 }}
 
-                window.location.href = "/gracias/{order_id}";
+                window.location.href = "/gracias/" + "{order_id}";
             }}
         </script>
     </body>
@@ -1205,7 +1206,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V7",
+        "app": "ETERNA V7 FIX",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
