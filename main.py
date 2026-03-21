@@ -613,6 +613,7 @@ def pedido(order_id: str):
                     }});
 
                     currentStream = stream;
+                    chunks = [];
 
                     document.getElementById("start").classList.add("hidden");
 
@@ -631,15 +632,20 @@ def pedido(order_id: str):
 
                         recorder.onstop = async () => {{
                             try {{
+                                console.log("VIDEO STOP -> enviando...");
+                                console.log("Chunks:", chunks.length);
+
                                 const blob = new Blob(chunks, {{ type: "video/webm" }});
                                 const formData = new FormData();
                                 formData.append("order_id", "{order_id}");
                                 formData.append("video", blob, "{order_id}.webm");
 
-                                await fetch("/upload-video", {{
+                                const response = await fetch("{PUBLIC_BASE_URL}/upload-video", {{
                                     method: "POST",
                                     body: formData
                                 }});
+
+                                console.log("Upload status:", response.status);
                             }} catch (err) {{
                                 console.log("Error subiendo vídeo:", err);
                             }}
@@ -690,8 +696,12 @@ def pedido(order_id: str):
                 show("💸 Has recibido {gift_amount}€");
                 await wait(3000);
 
-                if (recorder && recorder.state !== "inactive") {{
-                    recorder.stop();
+                if (recorder) {{
+                    try {{
+                        recorder.stop();
+                    }} catch (e) {{
+                        console.log("Error stopping recorder:", e);
+                    }}
                 }}
             }}
         </script>
