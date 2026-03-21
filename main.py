@@ -298,6 +298,10 @@ def resumen(order_id: str):
     phone = normalize_phone(order["recipient_phone"])
     whatsapp_url = f"https://wa.me/{phone}?text={mensaje}"
 
+    video_status = "No guardado todavía"
+    if order.get("reaction_video"):
+        video_status = "Vídeo guardado"
+
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -403,6 +407,10 @@ def resumen(order_id: str):
                 <div class="stat">
                     <div class="stat-label">Total cobrado</div>
                     <div class="stat-value">{money(order["total"])}€</div>
+                </div>
+                <div class="stat">
+                    <div class="stat-label">Reacción</div>
+                    <div class="stat-value">{video_status}</div>
                 </div>
             </div>
 
@@ -614,6 +622,7 @@ def pedido(order_id: str):
 
                     try {{
                         recorder = new MediaRecorder(stream);
+
                         recorder.ondataavailable = (e) => {{
                             if (e.data && e.data.size > 0) {{
                                 chunks.push(e.data);
