@@ -298,53 +298,22 @@ def ver_eterna(order_id: str):
         <p>{order['phrase_2']}</p>
         <p>{order['phrase_3']}</p>
         <p style="margin-top:30px;">💸 Has recibido {order['gift_amount']:.2f}€</p>
+
         <div style="margin-top:40px;">
-    <a href="/" style="text-decoration:none;">
-        <button style="
-            padding:14px 22px;
-            border-radius:999px;
-            border:0;
-            font-weight:bold;
-            cursor:pointer;
-            background:#ffffff;
-            color:#000;
-        ">
-            Crear tu propia ETERNA ❤️
-        </button>
-    </a>
-</div>
-        <div style="margin-top:40px;">
-
-    <a href="/"> style="text-decoration:none;">
-        <button style="
-            padding: 14px 22px;
-            border-radius: 999px;
-            border: 0;
-            font-weight: bold;
-            cursor: pointer;
-            background: #00ff88;
-            color: black;
-            margin-right: 10px;
-        ">
-            Recibir dinero 💸
-        </button>
-    </a>
-
-    <a href="/" style="text-decoration:none;">
-        <button style="
-            padding: 14px 22px;
-            border-radius: 999px;
-            border: 0;
-            font-weight: bold;
-            cursor: pointer;
-            background: white;
-            color: black;
-        ">
-            Crear tu propia ETERNA ❤️
-        </button>
-    </a>
-
-</div>
+            <a href="/" style="text-decoration:none;">
+                <button style="
+                    padding:14px 22px;
+                    border-radius:999px;
+                    border:0;
+                    font-weight:bold;
+                    cursor:pointer;
+                    background:#ffffff;
+                    color:#000;
+                ">
+                    Crear tu propia ETERNA ❤️
+                </button>
+            </a>
+        </div>
     </body>
     </html>
     """
