@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V8")
+app = FastAPI(title="ETERNA V9")
 
 # =========================
 # CONFIG
@@ -325,27 +325,33 @@ def resumen(order_id: str):
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
-    experiencia_message = (
-        f"Hola ❤️\n\n"
-        f"{order['customer_name']} te ha enviado algo especial.\n\n"
-        f"Ábrelo aquí:\n"
-        f"{PUBLIC_BASE_URL}/pedido/{order_id}"
-    )
-    whatsapp_experiencia_url = whatsapp_link(order["recipient_phone"], experiencia_message)
-
-    experience_to_receiver_message = (
-        f"Hola ❤️\n\n"
-        f"Aquí tienes tu ETERNA.\n\n"
-        f"{PUBLIC_BASE_URL}/pedido/{order_id}"
-    )
-    reaction_to_gifter_message = (
-        f"Hola ❤️\n\n"
-        f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
-        f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
+    whatsapp_experiencia_url = whatsapp_link(
+        order["recipient_phone"],
+        (
+            f"Hola ❤️\n\n"
+            f"{order['customer_name']} te ha enviado algo especial.\n\n"
+            f"Ábrelo aquí:\n"
+            f"{PUBLIC_BASE_URL}/pedido/{order_id}"
+        )
     )
 
-    whatsapp_eterna_to_receiver = whatsapp_link(order["recipient_phone"], experience_to_receiver_message)
-    whatsapp_reaction_to_gifter = whatsapp_link(order["customer_phone"], reaction_to_gifter_message)
+    whatsapp_eterna_to_receiver = whatsapp_link(
+        order["recipient_phone"],
+        (
+            f"Hola ❤️\n\n"
+            f"Aquí tienes tu ETERNA.\n\n"
+            f"{PUBLIC_BASE_URL}/pedido/{order_id}"
+        )
+    )
+
+    whatsapp_reaction_to_gifter = whatsapp_link(
+        order["customer_phone"],
+        (
+            f"Hola ❤️\n\n"
+            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
+            f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
+        )
+    )
 
     reaction_block = ""
     if reaction_exists(order):
@@ -639,6 +645,15 @@ def reaccion(order_id: str):
         </html>
         """)
 
+    whatsapp_reaction_to_gifter = whatsapp_link(
+        order["customer_phone"],
+        (
+            f"Hola ❤️\n\n"
+            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
+            f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
+        )
+    )
+
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -710,30 +725,74 @@ def reaccion(order_id: str):
                 font-size: 15px;
                 cursor: pointer;
             }}
+
+            .whatsapp {{
+                background: #25D366;
+                color: white;
+            }}
+
+            .dark {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.12);
+            }}
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>La reacción ya está aquí ❤️</h1>
+            <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
             <p>
-                Esto es lo más importante de ETERNA:
-                el momento real de quien recibe el regalo.
+                Tu reacción ha quedado guardada.<br>
+                Ahora puedes verla, compartirla o crear una nueva ETERNA.
             </p>
 
-            <video controls autoplay playsinline>
+            <video id="reactionVideo" controls autoplay playsinline>
                 <source src="/video/{order_id}" type="video/webm">
                 Tu navegador no puede reproducir este vídeo.
             </video>
 
             <div class="actions">
+                <button onclick="saveAndShare()">Guardar y compartir</button>
+
+                <a href="{whatsapp_reaction_to_gifter}" target="_blank">
+                    <button class="whatsapp">Enviar reacción al regalante</button>
+                </a>
+
+                <a href="/">
+                    <button class="dark">Crear una ETERNA ❤️</button>
+                </a>
+
                 <a href="/resumen/{order_id}">
                     <button>Volver al resumen</button>
                 </a>
-                <a href="/">
-                    <button>Crear otra ETERNA ❤️</button>
-                </a>
             </div>
         </div>
+
+        <script>
+            async function saveAndShare() {{
+                const shareData = {{
+                    title: "Mi momento ETERNA",
+                    text: "Mira mi vídeo y mi reacción en ETERNA ❤️",
+                    url: window.location.href
+                }};
+
+                if (navigator.share) {{
+                    try {{
+                        await navigator.share(shareData);
+                        return;
+                    }} catch (e) {{
+                        console.log("Compartir cancelado o no disponible", e);
+                    }}
+                }}
+
+                try {{
+                    await navigator.clipboard.writeText(window.location.href);
+                    alert("Enlace copiado. Ya puedes compartirlo donde quieras.");
+                }} catch (e) {{
+                    alert("No se pudo copiar automáticamente el enlace.");
+                }}
+            }}
+        </script>
     </body>
     </html>
     """
@@ -752,33 +811,16 @@ def gracias(order_id: str):
 
     ready = reaction_exists(order)
 
-    eterna_message = (
-        f"Hola ❤️\n\n"
-        f"Tienes una ETERNA esperándote.\n\n"
-        f"Ábrela aquí:\n"
-        f"{PUBLIC_BASE_URL}/pedido/{order_id}"
-    )
-    reaction_message = (
-        f"Hola ❤️\n\n"
-        f"Ya han visto tu ETERNA.\n\n"
-        f"Aquí tienes su reacción:\n"
-        f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
-    )
-
-    whatsapp_to_recipient = whatsapp_link(order["recipient_phone"], eterna_message)
-    whatsapp_to_gifter = whatsapp_link(order["customer_phone"], reaction_message)
-
     if ready:
-        reaction_html = f"""
-            <video controls autoplay playsinline style="width:min(92vw,420px);max-height:68vh;border-radius:18px;background:#111;margin-top:18px;">
-                <source src="/video/{order_id}" type="video/webm">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
+        reaction_status = """
+            <p style="margin-top:18px;color:rgba(255,255,255,0.72);">
+                Tu reacción ya forma parte de ETERNA.
+            </p>
         """
     else:
-        reaction_html = """
+        reaction_status = """
             <p style="margin-top:18px;color:rgba(255,255,255,0.55);">
-                La reacción se está guardando...
+                Guardando tu reacción...
             </p>
         """
 
@@ -828,6 +870,27 @@ def gracias(order_id: str):
                 font-size: 17px;
             }}
 
+            .money-box {{
+                margin-top: 18px;
+                padding: 18px;
+                border-radius: 18px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.06);
+            }}
+
+            .money-label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+                color: rgba(255,255,255,0.50);
+                margin-bottom: 6px;
+            }}
+
+            .money-value {{
+                font-size: 34px;
+                font-weight: bold;
+            }}
+
             .actions {{
                 margin-top: 24px;
                 display: flex;
@@ -841,25 +904,14 @@ def gracias(order_id: str):
 
             button {{
                 width: 100%;
-                padding: 16px 22px;
+                padding: 18px 22px;
                 border-radius: 999px;
                 border: 0;
                 background: white;
                 color: black;
                 font-weight: bold;
-                font-size: 15px;
+                font-size: 16px;
                 cursor: pointer;
-            }}
-
-            .whatsapp {{
-                background: #25D366;
-                color: white;
-            }}
-
-            .dark {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.12);
             }}
         </style>
     </head>
@@ -867,31 +919,20 @@ def gracias(order_id: str):
         <div class="card">
             <h1>Este momento ya es ETERNA ❤️</h1>
             <p>
-                Lo más bonito no es solo lo que recibiste.<br>
-                Es cómo lo sentiste.
+                Has recibido tu regalo.<br>
+                Tu reacción ha quedado guardada.
             </p>
 
-            {reaction_html}
+            <div class="money-box">
+                <div class="money-label">Importe recibido</div>
+                <div class="money-value">{money(order["gift_amount"])}€</div>
+            </div>
+
+            {reaction_status}
 
             <div class="actions">
-                <a href="{whatsapp_to_recipient}" target="_blank">
-                    <button class="whatsapp">Enviar ETERNA al regalado</button>
-                </a>
-
-                <a href="{whatsapp_to_gifter}" target="_blank">
-                    <button class="dark">Enviar reacción al regalante</button>
-                </a>
-
                 <a href="/reaccion/{order_id}">
-                    <button>Ver reacción completa</button>
-                </a>
-
-                <a href="/resumen/{order_id}">
-                    <button>Volver al resumen</button>
-                </a>
-
-                <a href="/">
-                    <button>Crear otra ETERNA ❤️</button>
+                    <button>Quiero ver tu vídeo ❤️</button>
                 </a>
             </div>
         </div>
@@ -1010,31 +1051,6 @@ def pedido(order_id: str):
                 font-size: 15px;
             }}
 
-            .video-preview {{
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                width: 120px;
-                height: 160px;
-                border-radius: 12px;
-                overflow: hidden;
-                border: 2px solid rgba(255,255,255,0.2);
-                display: none;
-                background: #111;
-                z-index: 20;
-            }}
-
-            .video-preview video {{
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                transform: scaleX(-1);
-            }}
-
-            #experience {{
-                z-index: 5;
-            }}
-
             #content {{
                 max-width: 900px;
                 padding: 24px;
@@ -1080,10 +1096,6 @@ def pedido(order_id: str):
                 <div class="small">La experiencia empieza justo después de aceptar.</div>
                 <button onclick="startExperience()">Aceptar y continuar</button>
             </div>
-        </div>
-
-        <div id="cameraBox" class="video-preview">
-            <video id="video" autoplay muted playsinline></video>
         </div>
 
         <div id="experience" class="screen hidden">
@@ -1165,8 +1177,7 @@ def pedido(order_id: str):
                         return null;
                     }}
 
-                    const data = await response.json();
-                    return data;
+                    return await response.json();
                 }} catch (err) {{
                     console.log("Error subiendo vídeo:", err);
                     return null;
@@ -1203,8 +1214,6 @@ def pedido(order_id: str):
                     currentStream = null;
                 }}
 
-                document.getElementById("cameraBox").style.display = "none";
-
                 await wait(700);
                 return await sendVideo();
             }}
@@ -1221,10 +1230,6 @@ def pedido(order_id: str):
 
                     document.getElementById("start").classList.add("hidden");
                     document.getElementById("experience").classList.remove("hidden");
-
-                    const video = document.getElementById("video");
-                    video.srcObject = stream;
-                    document.getElementById("cameraBox").style.display = "block";
 
                     try {{
                         let options = {{}};
@@ -1245,10 +1250,6 @@ def pedido(order_id: str):
                             if (e.data && e.data.size > 0) {{
                                 chunks.push(e.data);
                             }}
-                        }};
-
-                        recorder.onstop = () => {{
-                            console.log("Recorder stopped");
                         }};
 
                         recorder.start(300);
@@ -1301,7 +1302,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V8",
+        "app": "ETERNA V9",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
