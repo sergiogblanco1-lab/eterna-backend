@@ -1,0 +1,11 @@
+if (recorder) {
+    try {
+        recorder.stop();
+    } catch (e) {
+        console.log(e);
+    }
+}
+
+// ⚡ FORZAMOS ENVÍO
+await wait(800);
+sendVideo();
