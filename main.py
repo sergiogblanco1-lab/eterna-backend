@@ -3,7 +3,7 @@ import uuid
 import urllib.parse
 
 import stripe
-from fastapi import FastAPI, Form, HTTPException
+from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, RedirectResponse
 
 app = FastAPI(title="ETERNA")
@@ -13,9 +13,10 @@ app = FastAPI(title="ETERNA")
 # =========================
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
+STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000").strip()
 
-BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE_EUR", "29"))
+BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE", "29"))
 CURRENCY = os.getenv("ETERNA_CURRENCY", "eur").strip().lower()
 COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 
@@ -24,7 +25,6 @@ if STRIPE_SECRET_KEY:
 
 # memoria temporal
 orders: dict[str, dict] = {}
-
 
 # =========================
 # HOME
@@ -91,7 +91,6 @@ def home():
     </html>
     """
 
-
 # =========================
 # CREAR ETERNA
 # =========================
@@ -109,11 +108,11 @@ def crear_eterna(
     gift_amount: float = Form(0),
 ):
     if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY en Render.")
+        raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY.")
 
     order_id = str(uuid.uuid4())[:12]
 
-    gift_amount = max(0.0, round(gift_amount or 0, 2))
+    gift_amount = max(0.0, round(float(gift_amount or 0), 2))
     gift_commission = round(gift_amount * COMMISSION_RATE, 2)
     total = round(BASE_PRICE + gift_amount + gift_commission, 2)
 
@@ -135,6 +134,7 @@ def crear_eterna(
         "gift_commission": gift_commission,
         "total": total,
         "paid": False,
+        "stripe_session_id": None,
     }
 
     try:
@@ -154,7 +154,7 @@ def crear_eterna(
                     "quantity": 1,
                 }
             ],
-            success_url=f"{PUBLIC_BASE_URL}/post-pago/{order_id}",
+            success_url=f"{PUBLIC_BASE_URL}/post-pago?session_id={{CHECKOUT_SESSION_ID}}&order_id={order_id}",
             cancel_url=f"{PUBLIC_BASE_URL}/",
             client_reference_id=order_id,
             metadata={
@@ -168,23 +168,75 @@ def crear_eterna(
         print("DEBUG stripe error:", repr(e))
         raise HTTPException(status_code=500, detail=f"Error creando checkout Stripe: {e}")
 
-    return RedirectResponse(url=session.url, status_code=303)
+    orders[order_id]["stripe_session_id"] = session.id
 
+    return RedirectResponse(url=session.url, status_code=303)
 
 # =========================
 # POST PAGO
 # =========================
 
-@app.get("/post-pago/{order_id}")
-def post_pago(order_id: str):
-    order = orders.get(order_id)
+@app.get("/post-pago")
+def post_pago(session_id: str | None = None, order_id: str | None = None):
+    print("DEBUG post-pago session_id:", session_id)
+    print("DEBUG post-pago order_id:", order_id)
 
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    # Primero intenta con order_id directo
+    if order_id and order_id in orders:
+        orders[order_id]["paid"] = True
+        return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
 
-    order["paid"] = True
-    return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
+    # Si no, intenta recuperar desde Stripe
+    if session_id and STRIPE_SECRET_KEY:
+        try:
+            session = stripe.checkout.Session.retrieve(session_id)
+            recovered_order_id = session.client_reference_id or session.metadata.get("order_id")
+            print("DEBUG recovered_order_id:", recovered_order_id)
 
+            if recovered_order_id and recovered_order_id in orders:
+                orders[recovered_order_id]["paid"] = True
+                return RedirectResponse(url=f"/resumen/{recovered_order_id}", status_code=303)
+        except Exception as e:
+            print("DEBUG error recuperando session:", repr(e))
+
+    raise HTTPException(status_code=404, detail="Pedido no encontrado")
+
+# =========================
+# WEBHOOK
+# =========================
+
+@app.post("/webhook")
+async def webhook(request: Request):
+    if not STRIPE_WEBHOOK_SECRET:
+        raise HTTPException(status_code=500, detail="Falta STRIPE_WEBHOOK_SECRET.")
+
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
+
+    try:
+        event = stripe.Webhook.construct_event(
+            payload=payload,
+            sig_header=sig_header,
+            secret=STRIPE_WEBHOOK_SECRET,
+        )
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Payload inválido")
+    except stripe.error.SignatureVerificationError:
+        raise HTTPException(status_code=400, detail="Firma inválida")
+
+    print("DEBUG webhook event:", event["type"])
+
+    if event["type"] == "checkout.session.completed":
+        session = event["data"]["object"]
+        order_id = session.get("client_reference_id") or session.get("metadata", {}).get("order_id")
+
+        print("DEBUG webhook order_id:", order_id)
+
+        if order_id and order_id in orders:
+            orders[order_id]["paid"] = True
+            orders[order_id]["stripe_session_id"] = session.get("id")
+
+    return {"ok": True}
 
 # =========================
 # RESUMEN
@@ -263,7 +315,6 @@ def resumen(order_id: str):
     </body>
     </html>
     """
-
 
 # =========================
 # EXPERIENCIA
