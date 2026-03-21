@@ -4,10 +4,10 @@ import urllib.parse
 import uuid
 
 import stripe
-from fastapi import FastAPI, Form, HTTPException
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi import FastAPI, Form, HTTPException, UploadFile, File
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
-app = FastAPI(title="ETERNA V2")
+app = FastAPI(title="ETERNA V4")
 
 # =========================
 # CONFIG
@@ -23,25 +23,23 @@ COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
-# Memoria temporal
 orders: dict[str, dict] = {}
 
+VIDEO_FOLDER = "videos"
+os.makedirs(VIDEO_FOLDER, exist_ok=True)
 
 # =========================
 # HELPERS
 # =========================
 
-def safe_text(value: str) -> str:
-    return html.escape(str(value or "").strip())
+def safe_text(v: str) -> str:
+    return html.escape(str(v or "").strip())
 
+def money(v: float) -> str:
+    return f"{float(v):.2f}"
 
-def money(value: float) -> str:
-    return f"{float(value):.2f}"
-
-
-def normalize_phone(phone: str) -> str:
-    return "".join(ch for ch in str(phone or "") if ch.isdigit())
-
+def normalize_phone(p: str) -> str:
+    return "".join(ch for ch in str(p or "") if ch.isdigit())
 
 # =========================
 # HOME
@@ -57,9 +55,7 @@ def home():
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            * {
-                box-sizing: border-box;
-            }
+            * { box-sizing: border-box; }
 
             body {
                 margin: 0;
@@ -82,7 +78,6 @@ def home():
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 24px;
                 padding: 28px;
-                backdrop-filter: blur(8px);
                 box-shadow: 0 20px 60px rgba(0,0,0,0.35);
             }
 
@@ -124,11 +119,6 @@ def home():
                 color: rgba(255,255,255,0.45);
             }
 
-            input:focus {
-                border-color: rgba(255,255,255,0.25);
-                background: rgba(255,255,255,0.08);
-            }
-
             .hint {
                 margin-top: 8px;
                 font-size: 13px;
@@ -147,19 +137,6 @@ def home():
                 font-weight: bold;
                 font-size: 15px;
                 cursor: pointer;
-                transition: transform 0.15s ease, opacity 0.15s ease;
-            }
-
-            button:hover {
-                transform: translateY(-1px);
-                opacity: 0.95;
-            }
-
-            .footer-note {
-                text-align: center;
-                margin-top: 16px;
-                font-size: 12px;
-                color: rgba(255,255,255,0.45);
             }
         </style>
     </head>
@@ -203,15 +180,10 @@ def home():
 
                 <button type="submit">CREAR MI ETERNA</button>
             </form>
-
-            <div class="footer-note">
-                ETERNA V2 · flujo en vivo
-            </div>
         </div>
     </body>
     </html>
     """
-
 
 # =========================
 # CREAR ETERNA
@@ -252,6 +224,7 @@ def crear_eterna(
         "gift_commission": gift_commission,
         "total": total,
         "paid": False,
+        "reaction_video": None,
     }
 
     try:
@@ -290,7 +263,6 @@ def crear_eterna(
 
     return RedirectResponse(url=session.url, status_code=303)
 
-
 # =========================
 # POST PAGO
 # =========================
@@ -304,7 +276,6 @@ def post_pago(order_id: str):
 
     order["paid"] = True
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
-
 
 # =========================
 # RESUMEN
@@ -324,8 +295,8 @@ def resumen(order_id: str):
         f"{PUBLIC_BASE_URL}/pedido/{order_id}"
     )
 
-    telefono = normalize_phone(order["recipient_phone"])
-    whatsapp_url = f"https://wa.me/{telefono}?text={mensaje}"
+    phone = normalize_phone(order["recipient_phone"])
+    whatsapp_url = f"https://wa.me/{phone}?text={mensaje}"
 
     return f"""
     <!DOCTYPE html>
@@ -335,9 +306,7 @@ def resumen(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Resumen ETERNA</title>
         <style>
-            * {{
-                box-sizing: border-box;
-            }}
+            * {{ box-sizing: border-box; }}
 
             body {{
                 margin: 0;
@@ -361,16 +330,6 @@ def resumen(order_id: str):
                 border-radius: 24px;
                 padding: 34px 28px;
                 text-align: center;
-            }}
-
-            h1 {{
-                margin-top: 0;
-                font-size: 34px;
-            }}
-
-            .soft {{
-                color: rgba(255,255,255,0.72);
-                line-height: 1.6;
             }}
 
             .stats {{
@@ -434,10 +393,7 @@ def resumen(order_id: str):
     <body>
         <div class="card">
             <h1>Tu ETERNA está lista ❤️</h1>
-
-            <div class="soft">
-                Ya puedes enviarla a {safe_text(order["recipient_name"])} por WhatsApp.
-            </div>
+            <p>Ya puedes enviarla a {safe_text(order["recipient_name"])} por WhatsApp.</p>
 
             <div class="stats">
                 <div class="stat">
@@ -468,67 +424,56 @@ def resumen(order_id: str):
     </html>
     """
 
+# =========================
+# SUBIR VIDEO
+# =========================
+
+@app.post("/upload-video")
+async def upload_video(
+    order_id: str = Form(...),
+    video: UploadFile = File(...)
+):
+    order = orders.get(order_id)
+
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+
+    filename = f"{order_id}.webm"
+    filepath = os.path.join(VIDEO_FOLDER, filename)
+
+    with open(filepath, "wb") as f:
+        f.write(await video.read())
+
+    order["reaction_video"] = filepath
+
+    return JSONResponse({"status": "ok", "file": filepath})
 
 # =========================
 # EXPERIENCIA
 # =========================
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
-def ver_eterna(order_id: str):
+def pedido(order_id: str):
     order = orders.get(order_id)
 
     if not order:
         raise HTTPException(status_code=404, detail="Pedido no encontrado")
 
     if not order.get("paid"):
-        return HTMLResponse(
-            """
-            <!DOCTYPE html>
-            <html lang="es">
-            <head>
-                <meta charset="UTF-8">
-                <meta name="viewport" content="width=device-width, initial-scale=1.0">
-                <title>ETERNA bloqueada</title>
-                <style>
-                    body {
-                        margin: 0;
-                        min-height: 100vh;
-                        background: black;
-                        color: white;
-                        font-family: Arial, sans-serif;
-                        display: flex;
-                        justify-content: center;
-                        align-items: center;
-                        text-align: center;
-                        padding: 24px;
-                    }
-                    .box {
-                        max-width: 560px;
-                    }
-                    h1 {
-                        font-size: 34px;
-                        margin-bottom: 12px;
-                    }
-                    p {
-                        color: rgba(255,255,255,0.72);
-                        line-height: 1.6;
-                    }
-                </style>
-            </head>
-            <body>
-                <div class="box">
-                    <h1>Esta ETERNA aún no está disponible</h1>
-                    <p>El pago todavía no se ha completado.</p>
-                </div>
-            </body>
-            </html>
-            """
-        )
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
+            <h1>Esta ETERNA aún no está disponible</h1>
+            <p>El pago todavía no se ha completado.</p>
+        </body>
+        </html>
+        """)
 
+    recipient_name = safe_text(order["recipient_name"])
     phrase_1 = safe_text(order["phrase_1"])
     phrase_2 = safe_text(order["phrase_2"])
     phrase_3 = safe_text(order["phrase_3"])
-    recipient_name = safe_text(order["recipient_name"])
     gift_amount = money(order["gift_amount"])
 
     return f"""
@@ -539,72 +484,42 @@ def ver_eterna(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            * {{
-                box-sizing: border-box;
-            }}
-
             body {{
                 margin: 0;
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at center top, rgba(255,255,255,0.10), transparent 30%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                background: black;
                 color: white;
+                overflow: hidden;
                 font-family: Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                padding: 24px;
                 text-align: center;
             }}
 
-            .experience {{
-                width: 100%;
-                max-width: 760px;
-                padding: 40px 24px;
+            .screen {{
+                position: absolute;
+                inset: 0;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                flex-direction: column;
+                padding: 24px;
             }}
 
-            .eyebrow {{
-                font-size: 12px;
-                letter-spacing: 2px;
-                text-transform: uppercase;
-                color: rgba(255,255,255,0.45);
-                margin-bottom: 18px;
+            .hidden {{
+                display: none;
             }}
 
-            h1 {{
-                margin: 0 0 18px 0;
-                font-size: 42px;
-                line-height: 1.15;
+            .gate-card {{
+                max-width: 560px;
             }}
 
-            .recipient {{
-                color: rgba(255,255,255,0.62);
-                margin-bottom: 34px;
+            .gate-card h1 {{
+                font-size: 40px;
+                margin-bottom: 14px;
             }}
 
-            .phrase {{
-                font-size: 28px;
-                line-height: 1.4;
-                margin: 22px 0;
-            }}
-
-            .gift {{
-                margin-top: 34px;
-                font-size: 22px;
-                padding: 18px 20px;
-                display: inline-block;
-                border-radius: 18px;
-                background: rgba(255,255,255,0.06);
-                border: 1px solid rgba(255,255,255,0.08);
-            }}
-
-            .buttons {{
-                margin-top: 38px;
-            }}
-
-            a {{
-                text-decoration: none;
+            .gate-card p {{
+                color: rgba(255,255,255,0.72);
+                line-height: 1.6;
+                margin-bottom: 12px;
             }}
 
             button {{
@@ -614,29 +529,163 @@ def ver_eterna(order_id: str):
                 background: white;
                 color: black;
                 font-weight: bold;
-                font-size: 15px;
                 cursor: pointer;
+                margin-top: 20px;
+                font-size: 15px;
+            }}
+
+            .video-preview {{
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                width: 120px;
+                height: 160px;
+                border-radius: 12px;
+                overflow: hidden;
+                border: 2px solid rgba(255,255,255,0.2);
+                display: none;
+                background: #111;
+            }}
+
+            .video-preview video {{
+                width: 100%;
+                height: 100%;
+                object-fit: cover;
+                transform: scaleX(-1);
+            }}
+
+            #content {{
+                max-width: 800px;
+                padding: 24px;
+            }}
+
+            #content h2 {{
+                font-size: 40px;
+                line-height: 1.3;
+                margin: 0;
+            }}
+
+            .small {{
+                font-size: 13px;
+                color: rgba(255,255,255,0.45);
+                margin-top: 10px;
             }}
         </style>
     </head>
     <body>
-        <div class="experience">
-            <div class="eyebrow">ETERNA</div>
-            <h1>Hay algo para ti</h1>
-            <div class="recipient">Para {recipient_name}</div>
 
-            <div class="phrase">{phrase_1}</div>
-            <div class="phrase">{phrase_2}</div>
-            <div class="phrase">{phrase_3}</div>
-
-            <div class="gift">💸 Has recibido {gift_amount}€</div>
-
-            <div class="buttons">
-                <a href="/">
-                    <button>Crear tu propia ETERNA ❤️</button>
-                </a>
+        <div id="start" class="screen">
+            <div class="gate-card">
+                <h1>Hay algo para ti</h1>
+                <p>Para vivir esta experiencia completa, necesitamos encender tu cámara.</p>
+                <p>Al continuar, aceptas que este momento forme parte de la experiencia.</p>
+                <div class="small">La experiencia empieza justo después de aceptar.</div>
+                <button onclick="startExperience()">Aceptar y continuar</button>
             </div>
         </div>
+
+        <div id="cameraBox" class="video-preview">
+            <video id="video" autoplay muted playsinline></video>
+        </div>
+
+        <div id="experience" class="screen hidden">
+            <div id="content"></div>
+        </div>
+
+        <script>
+            let recorder = null;
+            let chunks = [];
+            let currentStream = null;
+
+            async function startExperience() {{
+                try {{
+                    const stream = await navigator.mediaDevices.getUserMedia({{
+                        video: true,
+                        audio: true
+                    }});
+
+                    currentStream = stream;
+
+                    document.getElementById("start").classList.add("hidden");
+
+                    const video = document.getElementById("video");
+                    video.srcObject = stream;
+                    document.getElementById("cameraBox").style.display = "block";
+
+                    try {{
+                        recorder = new MediaRecorder(stream);
+                        recorder.ondataavailable = (e) => {{
+                            if (e.data && e.data.size > 0) {{
+                                chunks.push(e.data);
+                            }}
+                        }};
+
+                        recorder.onstop = async () => {{
+                            try {{
+                                const blob = new Blob(chunks, {{ type: "video/webm" }});
+                                const formData = new FormData();
+                                formData.append("order_id", "{order_id}");
+                                formData.append("video", blob, "{order_id}.webm");
+
+                                await fetch("/upload-video", {{
+                                    method: "POST",
+                                    body: formData
+                                }});
+                            }} catch (err) {{
+                                console.log("Error subiendo vídeo:", err);
+                            }}
+
+                            if (currentStream) {{
+                                currentStream.getTracks().forEach(track => track.stop());
+                            }}
+                        }};
+
+                        recorder.start();
+                    }} catch (err) {{
+                        console.log("No se pudo iniciar la grabación:", err);
+                    }}
+
+                    runExperience();
+                }} catch (e) {{
+                    alert("Necesitamos acceso a la cámara para continuar con la experiencia.");
+                }}
+            }}
+
+            function show(text) {{
+                document.getElementById("content").innerHTML = "<h2>" + text + "</h2>";
+            }}
+
+            async function wait(ms) {{
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }}
+
+            async function runExperience() {{
+                document.getElementById("experience").classList.remove("hidden");
+
+                await wait(1200);
+                show("Para {recipient_name}");
+                await wait(1800);
+
+                show("{phrase_1}");
+                await wait(2400);
+
+                show("{phrase_2}");
+                await wait(2400);
+
+                show("{phrase_3}");
+                await wait(2400);
+
+                show("...");
+                await wait(1400);
+
+                show("💸 Has recibido {gift_amount}€");
+                await wait(3000);
+
+                if (recorder && recorder.state !== "inactive") {{
+                    recorder.stop();
+                }}
+            }}
+        </script>
     </body>
     </html>
     """
