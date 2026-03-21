@@ -35,11 +35,14 @@ os.makedirs(VIDEO_FOLDER, exist_ok=True)
 def safe_text(v: str) -> str:
     return html.escape(str(v or "").strip())
 
+
 def money(v: float) -> str:
     return f"{float(v):.2f}"
 
+
 def normalize_phone(p: str) -> str:
     return "".join(ch for ch in str(p or "") if ch.isdigit())
+
 
 # =========================
 # HOME
@@ -185,6 +188,7 @@ def home():
     </html>
     """
 
+
 # =========================
 # CREAR ETERNA
 # =========================
@@ -263,6 +267,7 @@ def crear_eterna(
 
     return RedirectResponse(url=session.url, status_code=303)
 
+
 # =========================
 # POST PAGO
 # =========================
@@ -276,6 +281,7 @@ def post_pago(order_id: str):
 
     order["paid"] = True
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
+
 
 # =========================
 # RESUMEN
@@ -432,6 +438,7 @@ def resumen(order_id: str):
     </html>
     """
 
+
 # =========================
 # SUBIR VIDEO
 # =========================
@@ -455,6 +462,7 @@ async def upload_video(
     order["reaction_video"] = filepath
 
     return JSONResponse({"status": "ok", "file": filepath})
+
 
 # =========================
 # EXPERIENCIA
@@ -605,6 +613,27 @@ def pedido(order_id: str):
             let chunks = [];
             let currentStream = null;
 
+            async function sendVideo() {{
+                try {{
+                    console.log("ENVIANDO VIDEO...");
+                    console.log("Chunks:", chunks.length);
+
+                    const blob = new Blob(chunks, {{ type: "video/webm" }});
+                    const formData = new FormData();
+                    formData.append("order_id", "{order_id}");
+                    formData.append("video", blob, "{order_id}.webm");
+
+                    const response = await fetch("{PUBLIC_BASE_URL}/upload-video", {{
+                        method: "POST",
+                        body: formData
+                    }});
+
+                    console.log("Upload status:", response.status);
+                }} catch (err) {{
+                    console.log("Error subiendo vídeo:", err);
+                }}
+            }}
+
             async function startExperience() {{
                 try {{
                     const stream = await navigator.mediaDevices.getUserMedia({{
@@ -630,29 +659,8 @@ def pedido(order_id: str):
                             }}
                         }};
 
-                        recorder.onstop = async () => {{
-                            try {{
-                                console.log("VIDEO STOP -> enviando...");
-                                console.log("Chunks:", chunks.length);
-
-                                const blob = new Blob(chunks, {{ type: "video/webm" }});
-                                const formData = new FormData();
-                                formData.append("order_id", "{order_id}");
-                                formData.append("video", blob, "{order_id}.webm");
-
-                                const response = await fetch("{PUBLIC_BASE_URL}/upload-video", {{
-                                    method: "POST",
-                                    body: formData
-                                }});
-
-                                console.log("Upload status:", response.status);
-                            }} catch (err) {{
-                                console.log("Error subiendo vídeo:", err);
-                            }}
-
-                            if (currentStream) {{
-                                currentStream.getTracks().forEach(track => track.stop());
-                            }}
+                        recorder.onstop = () => {{
+                            console.log("Recorder stopped");
                         }};
 
                         recorder.start();
@@ -702,6 +710,13 @@ def pedido(order_id: str):
                     }} catch (e) {{
                         console.log("Error stopping recorder:", e);
                     }}
+                }}
+
+                await wait(800);
+                await sendVideo();
+
+                if (currentStream) {{
+                    currentStream.getTracks().forEach(track => track.stop());
                 }}
             }}
         </script>
