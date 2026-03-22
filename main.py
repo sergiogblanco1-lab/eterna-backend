@@ -894,10 +894,7 @@ def cobrar(order_id: str):
 
 @app.get("/iniciar-cobro/{order_id}")
 def iniciar_cobro(order_id: str):
-    order = get_order_or_404(order_id)
-
-    # En este MVP hacemos bypass limpio.
-    # Si luego montas Stripe Connect, aquí iría el onboarding real.
+    _order = get_order_or_404(order_id)
     return RedirectResponse(url=f"/cobro-completado/{order_id}", status_code=303)
 
 
@@ -948,9 +945,8 @@ def pedido(order_id: str):
             html, body {{
                 margin: 0;
                 width: 100%;
-                height: 100%;
+                min-height: 100%;
                 background: #000;
-                overflow: hidden;
             }}
 
             body {{
@@ -958,11 +954,12 @@ def pedido(order_id: str):
                 color: white;
                 font-family: Arial, sans-serif;
                 text-align: center;
+                overflow-y: auto;
+                -webkit-overflow-scrolling: touch;
             }}
 
             .screen {{
-                position: fixed;
-                inset: 0;
+                min-height: 100vh;
                 display: flex;
                 justify-content: center;
                 align-items: center;
@@ -1020,14 +1017,17 @@ def pedido(order_id: str):
                 color: rgba(255,255,255,0.82);
                 font-size: 14px;
                 line-height: 1.6;
+                cursor: pointer;
+                user-select: none;
             }}
 
             .consent-row input {{
-                width: 18px;
-                height: 18px;
+                width: 22px;
+                height: 22px;
                 margin-top: 2px;
                 accent-color: white;
                 flex: 0 0 auto;
+                cursor: pointer;
             }}
 
             #startBtn {{
@@ -1041,6 +1041,8 @@ def pedido(order_id: str):
                 cursor: pointer;
                 margin-top: 20px;
                 font-size: 15px;
+                -webkit-appearance: none;
+                appearance: none;
             }}
 
             #startBtn:disabled {{
@@ -1086,6 +1088,24 @@ def pedido(order_id: str):
                 color: rgba(255,255,255,0.55);
                 font-size: 14px;
             }}
+
+            @media (max-width: 640px) {{
+                .gate-card h1 {{
+                    font-size: 32px;
+                }}
+
+                .lead {{
+                    font-size: 16px;
+                }}
+
+                #content h2 {{
+                    font-size: 34px;
+                }}
+
+                #content p {{
+                    font-size: 16px;
+                }}
+            }}
         </style>
     </head>
     <body>
@@ -1106,12 +1126,12 @@ def pedido(order_id: str):
                     </div>
                 </div>
 
-                <label class="consent-row">
+                <label class="consent-row" for="consentCheck">
                     <input type="checkbox" id="consentCheck">
                     <span>He entendido y quiero continuar</span>
                 </label>
 
-                <button id="startBtn" onclick="startExperience()" disabled>
+                <button id="startBtn" type="button" onclick="startExperience()" disabled>
                     Vivir mi ETERNA ❤️
                 </button>
             </div>
