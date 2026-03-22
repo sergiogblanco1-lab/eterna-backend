@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V10")
+app = FastAPI(title="ETERNA CLEAN START")
 
 # =========================
 # CONFIG
@@ -58,6 +58,13 @@ def whatsapp_link(phone: str, message: str) -> str:
     return f"https://wa.me/{normalize_phone(phone)}?text={urllib.parse.quote(message)}"
 
 
+def get_order_or_404(order_id: str) -> dict:
+    order = orders.get(order_id)
+    if not order:
+        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    return order
+
+
 # =========================
 # HOME
 # =========================
@@ -76,8 +83,13 @@ def home():
                 box-sizing: border-box;
             }}
 
-            body {{
+            html, body {{
                 margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+
+            body {{
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
@@ -305,11 +317,7 @@ def crear_eterna(
 
 @app.get("/post-pago/{order_id}")
 def post_pago(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
-
+    order = get_order_or_404(order_id)
     order["paid"] = True
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
 
@@ -320,10 +328,7 @@ def post_pago(order_id: str):
 
 @app.get("/resumen/{order_id}", response_class=HTMLResponse)
 def resumen(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    order = get_order_or_404(order_id)
 
     whatsapp_experiencia_url = whatsapp_link(
         order["recipient_phone"],
@@ -335,37 +340,26 @@ def resumen(order_id: str):
         )
     )
 
-    whatsapp_reaction_to_gifter = whatsapp_link(
-        order["customer_phone"],
-        (
-            f"Hola ❤️\n\n"
-            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
-            f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
-        )
-    )
+    has_reaction = reaction_exists(order)
 
-    main_button = f"""
-        <a href="{whatsapp_experiencia_url}" target="_blank">
-            <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
-        </a>
-    """
-
-    reaction_block = ""
-    if reaction_exists(order):
-        reaction_block = f"""
+    if has_reaction:
+        main_cta = f"""
             <a href="/reaccion/{order_id}" target="_blank">
-                <button class="light">Ver reacción ❤️</button>
-            </a>
-
-            <a href="{whatsapp_reaction_to_gifter}" target="_blank">
-                <button class="dark">Enviar reacción al regalante</button>
+                <button class="light main-btn">Ver reacción ❤️</button>
             </a>
         """
+        subtitle = "Tu emoción ya está aquí."
         video_status = "Vídeo guardado"
-        subtitle = "La reacción ya está lista."
+        soft_text = "La reacción ya está lista."
     else:
-        video_status = "Pendiente de recibir"
+        main_cta = f"""
+            <a href="{whatsapp_experiencia_url}" target="_blank">
+                <button class="whatsapp main-btn">Enviar ETERNA por WhatsApp</button>
+            </a>
+        """
         subtitle = "Ahora empieza lo importante: su reacción."
+        video_status = "Pendiente de recibir"
+        soft_text = "Esta página se actualiza sola cada pocos segundos para detectar la reacción."
 
     return f"""
     <!DOCTYPE html>
@@ -380,8 +374,13 @@ def resumen(order_id: str):
                 box-sizing: border-box;
             }}
 
-            body {{
+            html, body {{
                 margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+
+            body {{
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
@@ -460,6 +459,11 @@ def resumen(order_id: str):
                 cursor: pointer;
             }}
 
+            .main-btn {{
+                padding: 18px 22px;
+                font-size: 16px;
+            }}
+
             .whatsapp {{
                 background: #25D366;
                 color: white;
@@ -468,12 +472,6 @@ def resumen(order_id: str):
             .light {{
                 background: white;
                 color: black;
-            }}
-
-            .dark {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.12);
             }}
 
             .soft {{
@@ -505,12 +503,11 @@ def resumen(order_id: str):
             </div>
 
             <div class="buttons">
-                {main_button}
-                {reaction_block}
+                {main_cta}
             </div>
 
             <div class="soft">
-                Esta página se actualiza sola cada pocos segundos para detectar la reacción.
+                {safe_text(soft_text)}
             </div>
         </div>
     </body>
@@ -527,10 +524,7 @@ async def upload_video(
     order_id: str = Form(...),
     video: UploadFile = File(...)
 ):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    order = get_order_or_404(order_id)
 
     filepath = reaction_video_path(order_id)
 
@@ -558,10 +552,7 @@ async def upload_video(
 
 @app.get("/video/{order_id}")
 def get_video(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    order = get_order_or_404(order_id)
 
     filepath = order.get("reaction_video")
     if not filepath or not os.path.exists(filepath):
@@ -576,10 +567,7 @@ def get_video(order_id: str):
 
 @app.get("/reaccion/{order_id}", response_class=HTMLResponse)
 def reaccion(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    order = get_order_or_404(order_id)
 
     if not reaction_exists(order):
         return HTMLResponse(f"""
@@ -594,7 +582,7 @@ def reaccion(order_id: str):
                 body {{
                     margin: 0;
                     min-height: 100vh;
-                    background: black;
+                    background: #000;
                     color: white;
                     font-family: Arial, sans-serif;
                     display: flex;
@@ -610,29 +598,16 @@ def reaccion(order_id: str):
                     color: rgba(255,255,255,0.72);
                     line-height: 1.6;
                 }}
-                a {{
-                    color: white;
-                }}
             </style>
         </head>
         <body>
             <div class="card">
                 <h1>La reacción aún no ha llegado</h1>
                 <p>Esta página se actualizará sola en unos segundos.</p>
-                <p><a href="/resumen/{order_id}">Volver al resumen</a></p>
             </div>
         </body>
         </html>
         """)
-
-    whatsapp_reaction_to_gifter = whatsapp_link(
-        order["customer_phone"],
-        (
-            f"Hola ❤️\n\n"
-            f"Aquí tienes la reacción grabada de {order['recipient_name']}.\n\n"
-            f"Ver reacción:\n{PUBLIC_BASE_URL}/reaccion/{order_id}"
-        )
-    )
 
     return f"""
     <!DOCTYPE html>
@@ -642,11 +617,16 @@ def reaccion(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Reacción ETERNA</title>
         <style>
-            body {{
+            html, body {{
                 margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+
+            body {{
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
@@ -658,7 +638,7 @@ def reaccion(order_id: str):
 
             .card {{
                 width: 100%;
-                max-width: 780px;
+                max-width: 820px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 24px;
@@ -667,20 +647,21 @@ def reaccion(order_id: str):
             }}
 
             h1 {{
-                margin-top: 0;
+                margin: 0 0 10px 0;
             }}
 
             p {{
                 color: rgba(255,255,255,0.72);
                 line-height: 1.6;
+                margin-bottom: 18px;
             }}
 
             video {{
                 width: 100%;
-                max-height: 70vh;
+                max-height: 72vh;
                 border-radius: 20px;
                 background: #111;
-                margin-top: 18px;
+                display: block;
             }}
 
             .actions {{
@@ -688,10 +669,6 @@ def reaccion(order_id: str):
                 display: flex;
                 flex-direction: column;
                 gap: 12px;
-            }}
-
-            a {{
-                text-decoration: none;
             }}
 
             button {{
@@ -706,11 +683,6 @@ def reaccion(order_id: str):
                 cursor: pointer;
             }}
 
-            .whatsapp {{
-                background: #25D366;
-                color: white;
-            }}
-
             .dark {{
                 background: rgba(255,255,255,0.10);
                 color: white;
@@ -721,10 +693,7 @@ def reaccion(order_id: str):
     <body>
         <div class="card">
             <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-            <p>
-                Tu reacción ha quedado guardada.<br>
-                Ahora puedes verla, compartirla o crear una nueva ETERNA.
-            </p>
+            <p>Tu reacción ha quedado guardada.</p>
 
             <video id="reactionVideo" controls autoplay playsinline>
                 <source src="/video/{order_id}" type="video/webm">
@@ -734,16 +703,8 @@ def reaccion(order_id: str):
             <div class="actions">
                 <button onclick="saveAndShare()">Guardar y compartir</button>
 
-                <a href="{whatsapp_reaction_to_gifter}" target="_blank">
-                    <button class="whatsapp">Enviar reacción al regalante</button>
-                </a>
-
-                <a href="/">
+                <a href="/" style="text-decoration:none;">
                     <button class="dark">Crear una ETERNA ❤️</button>
-                </a>
-
-                <a href="/resumen/{order_id}">
-                    <button>Volver al resumen</button>
                 </a>
             </div>
         </div>
@@ -784,12 +745,10 @@ def reaccion(order_id: str):
 
 @app.get("/gracias/{order_id}", response_class=HTMLResponse)
 def gracias(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        raise HTTPException(status_code=404, detail="Pedido no encontrado")
+    order = get_order_or_404(order_id)
 
     ready = reaction_exists(order)
+    refresh_tag = '<meta http-equiv="refresh" content="5">' if not ready else ""
 
     if ready:
         reaction_status = """
@@ -804,8 +763,6 @@ def gracias(order_id: str):
             </p>
         """
 
-    refresh_tag = '<meta http-equiv="refresh" content="5">' if not ready else ""
-
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -815,8 +772,13 @@ def gracias(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            body {{
+            html, body {{
                 margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+
+            body {{
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
@@ -927,24 +889,13 @@ def gracias(order_id: str):
 
 @app.get("/pedido/{order_id}", response_class=HTMLResponse)
 def pedido(order_id: str):
-    order = orders.get(order_id)
-
-    if not order:
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
-            <h1>Pedido no encontrado</h1>
-            <p>Esta ETERNA ya no está disponible en memoria.</p>
-        </body>
-        </html>
-        """)
+    order = get_order_or_404(order_id)
 
     if not order.get("paid"):
         return HTMLResponse("""
         <!DOCTYPE html>
         <html lang="es">
-        <body style="background:black;color:white;text-align:center;padding-top:100px;font-family:Arial;">
+        <body style="background:#000;color:white;text-align:center;padding-top:100px;font-family:Arial;">
             <h1>Esta ETERNA aún no está disponible</h1>
             <p>El pago todavía no se ha completado.</p>
         </body>
@@ -969,25 +920,30 @@ def pedido(order_id: str):
                 box-sizing: border-box;
             }}
 
-            body {{
+            html, body {{
                 margin: 0;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
-                    linear-gradient(180deg, #030303 0%, #000000 100%);
-                color: white;
+                width: 100%;
+                height: 100%;
+                background: #000;
                 overflow: hidden;
+            }}
+
+            body {{
+                background: #000;
+                color: white;
                 font-family: Arial, sans-serif;
                 text-align: center;
             }}
 
             .screen {{
-                position: absolute;
+                position: fixed;
                 inset: 0;
                 display: flex;
                 justify-content: center;
                 align-items: center;
                 flex-direction: column;
                 padding: 24px;
+                background: #000;
             }}
 
             .hidden {{
@@ -995,6 +951,7 @@ def pedido(order_id: str):
             }}
 
             .gate-card {{
+                width: 100%;
                 max-width: 620px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
@@ -1045,9 +1002,11 @@ def pedido(order_id: str):
                 height: 18px;
                 margin-top: 2px;
                 accent-color: white;
+                flex: 0 0 auto;
             }}
 
-            button {{
+            #startBtn {{
+                width: 100%;
                 padding: 16px 24px;
                 border-radius: 999px;
                 border: 0;
@@ -1064,12 +1023,16 @@ def pedido(order_id: str):
                 cursor: not-allowed;
             }}
 
+            #experience {{
+                background: #000;
+            }}
+
             #content {{
-                max-width: 900px;
+                max-width: 920px;
                 padding: 24px;
                 opacity: 0;
                 transform: translateY(10px);
-                transition: opacity 0.8s ease, transform 0.8s ease;
+                transition: opacity 0.6s ease, transform 0.6s ease;
             }}
 
             #content.visible {{
@@ -1078,18 +1041,19 @@ def pedido(order_id: str):
             }}
 
             #content h2 {{
-                font-size: 42px;
+                font-size: 44px;
                 line-height: 1.3;
                 margin: 0;
                 font-weight: 600;
+                color: white;
                 white-space: pre-line;
             }}
 
             #content p {{
-                color: rgba(255,255,255,0.72);
-                margin-top: 14px;
+                color: rgba(255,255,255,0.78);
+                margin-top: 16px;
                 line-height: 1.6;
-                font-size: 17px;
+                font-size: 18px;
             }}
 
             .loader {{
@@ -1187,9 +1151,9 @@ def pedido(order_id: str):
             async function showScene(htmlContent, duration) {{
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
-                await wait(250);
+                await wait(120);
                 content.innerHTML = htmlContent;
-                await wait(50);
+                await wait(30);
                 content.classList.add("visible");
                 await wait(duration);
             }}
@@ -1200,13 +1164,11 @@ def pedido(order_id: str):
 
                 for (let step of steps) {{
                     content.classList.remove("visible");
-                    await wait(150);
+                    await wait(100);
                     content.innerHTML = "<h2>" + step + "</h2>";
-                    await wait(50);
+                    await wait(30);
                     content.classList.add("visible");
-                    await wait(800);
-                    content.classList.remove("visible");
-                    await wait(200);
+                    await wait(700);
                 }}
             }}
 
@@ -1275,7 +1237,7 @@ def pedido(order_id: str):
                     currentStream = null;
                 }}
 
-                await wait(700);
+                await wait(500);
                 return await sendVideo();
             }}
 
@@ -1328,20 +1290,19 @@ def pedido(order_id: str):
 
             async function runExperience() {{
                 await runCountdown();
-                await wait(300);
+                await wait(250);
 
                 for (const scene of scenes) {{
                     await showScene(scene.html, scene.duration);
                 }}
 
-                // 5 segundos extra de grabación para capturar la reacción final real
                 await wait(5000);
 
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
-                await wait(250);
+                await wait(120);
                 content.innerHTML = "<h2>Guardando este momento...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>";
-                await wait(50);
+                await wait(30);
                 content.classList.add("visible");
 
                 const uploadResult = await stopRecordingAndUpload();
@@ -1367,7 +1328,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V10",
+        "app": "ETERNA CLEAN START",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
