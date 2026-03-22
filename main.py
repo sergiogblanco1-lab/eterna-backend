@@ -1394,7 +1394,7 @@ def pedido(order_id: str):
 
 @app.get("/health")
 def health():
-    return {{
+    return {
         "status": "ok",
         "app": "ETERNA V11 R2 FULL",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
