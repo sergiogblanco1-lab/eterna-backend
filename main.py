@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V9")
+app = FastAPI(title="ETERNA V10")
 
 # =========================
 # CONFIG
@@ -335,15 +335,6 @@ def resumen(order_id: str):
         )
     )
 
-    whatsapp_eterna_to_receiver = whatsapp_link(
-        order["recipient_phone"],
-        (
-            f"Hola ❤️\n\n"
-            f"Aquí tienes tu ETERNA.\n\n"
-            f"{PUBLIC_BASE_URL}/pedido/{order_id}"
-        )
-    )
-
     whatsapp_reaction_to_gifter = whatsapp_link(
         order["customer_phone"],
         (
@@ -353,20 +344,28 @@ def resumen(order_id: str):
         )
     )
 
+    main_button = f"""
+        <a href="{whatsapp_experiencia_url}" target="_blank">
+            <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
+        </a>
+    """
+
     reaction_block = ""
     if reaction_exists(order):
         reaction_block = f"""
             <a href="/reaccion/{order_id}" target="_blank">
-                <button class="light">Ver reacción grabada ❤️</button>
+                <button class="light">Ver reacción ❤️</button>
             </a>
 
             <a href="{whatsapp_reaction_to_gifter}" target="_blank">
-                <button class="whatsapp">Enviar reacción al regalante</button>
+                <button class="dark">Enviar reacción al regalante</button>
             </a>
         """
         video_status = "Vídeo guardado"
+        subtitle = "La reacción ya está lista."
     else:
         video_status = "Pendiente de recibir"
+        subtitle = "Ahora empieza lo importante: su reacción."
 
     return f"""
     <!DOCTYPE html>
@@ -397,7 +396,7 @@ def resumen(order_id: str):
 
             .card {{
                 width: 100%;
-                max-width: 760px;
+                max-width: 720px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 24px;
@@ -406,7 +405,7 @@ def resumen(order_id: str):
             }}
 
             h1 {{
-                margin-top: 0;
+                margin: 0 0 12px 0;
             }}
 
             p {{
@@ -415,7 +414,7 @@ def resumen(order_id: str):
             }}
 
             .stats {{
-                margin-top: 26px;
+                margin-top: 24px;
                 display: grid;
                 gap: 12px;
             }}
@@ -441,7 +440,7 @@ def resumen(order_id: str):
             }}
 
             .buttons {{
-                margin-top: 34px;
+                margin-top: 30px;
                 display: flex;
                 flex-direction: column;
                 gap: 14px;
@@ -488,11 +487,7 @@ def resumen(order_id: str):
         <div class="card">
             <h1>Tu ETERNA está lista ❤️</h1>
 
-            <p>
-                Ya puedes enviarla a {safe_text(order["recipient_name"])} por WhatsApp.
-                <br>
-                Cuando vea la experiencia, aquí aparecerá su reacción grabada.
-            </p>
+            <p>{safe_text(subtitle)}</p>
 
             <div class="stats">
                 <div class="stat">
@@ -510,23 +505,8 @@ def resumen(order_id: str):
             </div>
 
             <div class="buttons">
-                <a href="{whatsapp_experiencia_url}" target="_blank">
-                    <button class="whatsapp">Enviar experiencia por WhatsApp</button>
-                </a>
-
-                <a href="{whatsapp_eterna_to_receiver}" target="_blank">
-                    <button class="dark">Enviar ETERNA al regalado</button>
-                </a>
-
-                <a href="/pedido/{order_id}" target="_blank">
-                    <button class="light">Ver experiencia ETERNA</button>
-                </a>
-
+                {main_button}
                 {reaction_block}
-
-                <a href="/">
-                    <button class="light">Crear otra ETERNA ❤️</button>
-                </a>
             </div>
 
             <div class="soft">
@@ -1015,28 +995,56 @@ def pedido(order_id: str):
             }}
 
             .gate-card {{
-                max-width: 580px;
+                max-width: 620px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
-                padding: 34px 28px;
+                border-radius: 28px;
+                padding: 38px 30px;
+                text-align: center;
             }}
 
             .gate-card h1 {{
-                font-size: 40px;
-                margin-bottom: 14px;
+                font-size: 42px;
+                margin-bottom: 18px;
             }}
 
-            .gate-card p {{
-                color: rgba(255,255,255,0.72);
+            .lead {{
+                color: rgba(255,255,255,0.86);
+                font-size: 18px;
+                line-height: 1.7;
+                margin-bottom: 18px;
+            }}
+
+            .ritual-box {{
+                margin-top: 12px;
+                padding: 18px;
+                border-radius: 20px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.08);
+            }}
+
+            .ritual-text {{
+                color: rgba(255,255,255,0.68);
+                font-size: 15px;
+                line-height: 1.8;
+            }}
+
+            .consent-row {{
+                margin-top: 22px;
+                display: flex;
+                align-items: flex-start;
+                gap: 10px;
+                text-align: left;
+                color: rgba(255,255,255,0.82);
+                font-size: 14px;
                 line-height: 1.6;
-                margin-bottom: 12px;
             }}
 
-            .small {{
-                font-size: 13px;
-                color: rgba(255,255,255,0.45);
-                margin-top: 10px;
+            .consent-row input {{
+                width: 18px;
+                height: 18px;
+                margin-top: 2px;
+                accent-color: white;
             }}
 
             button {{
@@ -1049,6 +1057,11 @@ def pedido(order_id: str):
                 cursor: pointer;
                 margin-top: 20px;
                 font-size: 15px;
+            }}
+
+            #startBtn:disabled {{
+                opacity: 0.45;
+                cursor: not-allowed;
             }}
 
             #content {{
@@ -1091,10 +1104,27 @@ def pedido(order_id: str):
         <div id="start" class="screen">
             <div class="gate-card">
                 <h1>Hay algo para ti</h1>
-                <p>Para vivir esta experiencia completa, necesitamos encender tu cámara.</p>
-                <p>Solo grabaremos este momento como parte del regalo, con tu permiso.</p>
-                <div class="small">La experiencia empieza justo después de aceptar.</div>
-                <button onclick="startExperience()">Aceptar y continuar</button>
+
+                <p class="lead">
+                    Antes de empezar, busca un momento tranquilo solo para ti.
+                </p>
+
+                <div class="ritual-box">
+                    <div class="ritual-text">
+                        Tu experiencia será vivida y compartida con la persona que te hizo este regalo.
+                        <br><br>
+                        Al continuar, aceptas vivirla en un entorno adecuado y que este momento forme parte de ETERNA.
+                    </div>
+                </div>
+
+                <label class="consent-row">
+                    <input type="checkbox" id="consentCheck">
+                    <span>He entendido y quiero continuar</span>
+                </label>
+
+                <button id="startBtn" onclick="startExperience()" disabled>
+                    Vivir mi ETERNA ❤️
+                </button>
             </div>
         </div>
 
@@ -1130,14 +1160,29 @@ def pedido(order_id: str):
                     duration: 1400
                 }},
                 {{
-                    html: "<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte del regalo.</p>",
+                    html: "<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte de ETERNA.</p>",
                     duration: 4000
+                }},
+                {{
+                    html: "<h2>Este momento ya es ETERNA ❤️</h2>",
+                    duration: 3000
                 }}
             ];
 
             function wait(ms) {{
                 return new Promise(resolve => setTimeout(resolve, ms));
             }}
+
+            document.addEventListener("DOMContentLoaded", () => {{
+                const consentCheck = document.getElementById("consentCheck");
+                const startBtn = document.getElementById("startBtn");
+
+                if (consentCheck && startBtn) {{
+                    consentCheck.addEventListener("change", () => {{
+                        startBtn.disabled = !consentCheck.checked;
+                    }});
+                }}
+            }});
 
             async function showScene(htmlContent, duration) {{
                 const content = document.getElementById("content");
@@ -1147,6 +1192,22 @@ def pedido(order_id: str):
                 await wait(50);
                 content.classList.add("visible");
                 await wait(duration);
+            }}
+
+            async function runCountdown() {{
+                const content = document.getElementById("content");
+                const steps = ["3", "2", "1"];
+
+                for (let step of steps) {{
+                    content.classList.remove("visible");
+                    await wait(150);
+                    content.innerHTML = "<h2>" + step + "</h2>";
+                    await wait(50);
+                    content.classList.add("visible");
+                    await wait(800);
+                    content.classList.remove("visible");
+                    await wait(200);
+                }}
             }}
 
             async function sendVideo() {{
@@ -1261,16 +1322,20 @@ def pedido(order_id: str):
                     await runExperience();
                 }} catch (e) {{
                     console.log(e);
-                    alert("Necesitamos acceso a la cámara para continuar con la experiencia.");
+                    alert("Necesitamos acceso para continuar con la experiencia.");
                 }}
             }}
 
             async function runExperience() {{
-                await wait(700);
+                await runCountdown();
+                await wait(300);
 
                 for (const scene of scenes) {{
                     await showScene(scene.html, scene.duration);
                 }}
+
+                // 5 segundos extra de grabación para capturar la reacción final real
+                await wait(5000);
 
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
@@ -1302,7 +1367,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V9",
+        "app": "ETERNA V10",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
