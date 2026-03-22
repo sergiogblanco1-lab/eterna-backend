@@ -33,6 +33,8 @@ R2_BUCKET = os.getenv("R2_BUCKET", "").strip()
 R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 
+DEFAULT_GIFT_VIDEO_URL = os.getenv("DEFAULT_GIFT_VIDEO_URL", "").strip()
+
 MAX_VIDEO_SIZE = 30 * 1024 * 1024  # 30 MB
 ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4"}
 
@@ -328,6 +330,8 @@ def crear_eterna(
         "reaction_uploaded": False,
         "cashout_completed": False,
         "reaction_public_url": None,
+        "gift_video_url": DEFAULT_GIFT_VIDEO_URL or None,
+        "sender_pack_url": f"{PUBLIC_BASE_URL}/sender/{order_id}",
     }
 
     if not STRIPE_SECRET_KEY:
@@ -402,27 +406,24 @@ def resumen(order_id: str):
     has_reaction = reaction_exists(order)
 
     if has_reaction:
-        reaction_share_target = f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
+        sender_pack_target = order.get("sender_pack_url") or f"{PUBLIC_BASE_URL}/sender/{order_id}"
 
         regalante_whatsapp_url = whatsapp_link(
             order["customer_phone"],
-            (
-                f"No sé cómo explicarlo... pero este momento ya forma parte de ETERNA ❤️\n\n"
-                f"Mira la reacción aquí:\n{reaction_share_target}"
-            ),
+            sender_pack_target,
         )
 
         main_cta = f"""
             <a href="{regalante_whatsapp_url}" target="_blank">
-                <button class="light main-btn">Enviar reacción al regalante ❤️</button>
+                <button class="light main-btn">Enviar pack al regalante ❤️</button>
             </a>
-            <a href="/reaccion/{order_id}" target="_blank">
-                <button class="ghost main-btn">Ver emoción final</button>
+            <a href="/sender/{order_id}" target="_blank">
+                <button class="ghost main-btn">Ver sender pack</button>
             </a>
         """
         subtitle = "La emoción ya ha quedado guardada."
         video_status = "Vídeo guardado"
-        soft_text = "Ya puedes enviarla al regalante o abrirla ahora."
+        soft_text = "Ya puedes enviarlo al regalante o abrirlo ahora."
     else:
         main_cta = f"""
             <a href="{whatsapp_experiencia_url}" target="_blank">
@@ -629,6 +630,7 @@ async def upload_video(
                 "reaction_url": f"{PUBLIC_BASE_URL}/reaccion/{order_id}",
                 "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{order_id}",
                 "public_video_url": public_video_url,
+                "sender_pack_url": order.get("sender_pack_url"),
             }
         )
     finally:
@@ -694,8 +696,8 @@ def reaccion(order_id: str):
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{order_id}", status_code=303)
 
-    share_url = f"{PUBLIC_BASE_URL}/reaccion/{order_id}"
-    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote('No sé cómo explicarlo... pero este momento ya forma parte de ETERNA ❤️ ' + share_url)}"
+    share_url = order.get("sender_pack_url") or f"{PUBLIC_BASE_URL}/sender/{order_id}"
+    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote(share_url)}"
 
     video_source = order.get("reaction_public_url") or f"/video/{order_id}"
 
@@ -792,7 +794,7 @@ def reaccion(order_id: str):
             <div class="actions">
                 <button onclick="replayVideo()">Volver a verlo ❤️</button>
                 <a class="btn btn-dark" href="{video_source}" target="_blank">Abrir vídeo</a>
-                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir por WhatsApp</a>
+                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir sender pack</a>
                 <button class="btn-dark" onclick="copyLink()">Copiar enlace</button>
             </div>
 
@@ -824,6 +826,165 @@ def reaccion(order_id: str):
                 video.play().catch(() => {{}});
             }});
         </script>
+    </body>
+    </html>
+    """
+
+
+# =========================
+# SENDER PACK
+# =========================
+
+@app.get("/sender/{order_id}", response_class=HTMLResponse)
+def sender_pack(order_id: str):
+    order = get_order_or_404(order_id)
+
+    gift_video_url = order.get("gift_video_url")
+    reaction_video_url = order.get("reaction_public_url") or f"/video/{order_id}"
+
+    has_gift_video = bool(gift_video_url)
+    has_reaction_video = reaction_exists(order)
+
+    if not has_gift_video and not has_reaction_video:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="5">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Pack ETERNA pendiente</title>
+            <style>
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    background: #000;
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <div>
+                <h1>El pack aún no está listo</h1>
+                <p>Esta página se actualizará sola en unos segundos.</p>
+            </div>
+        </body>
+        </html>
+        """)
+
+    gift_block = ""
+    if has_gift_video:
+        gift_block = f"""
+        <div class="block">
+            <h2>Vídeo regalo</h2>
+            <video controls playsinline>
+                <source src="{gift_video_url}" type="video/mp4">
+                <source src="{gift_video_url}" type="video/webm">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+        </div>
+        """
+
+    reaction_block = ""
+    if has_reaction_video:
+        reaction_block = f"""
+        <div class="block">
+            <h2>Emoción grabada</h2>
+            <video controls autoplay playsinline>
+                <source src="{reaction_video_url}" type="video/webm">
+                <source src="{reaction_video_url}" type="video/mp4">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+        </div>
+        """
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Sender Pack ETERNA</title>
+        <style>
+            * {{
+                box-sizing: border-box;
+            }}
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 920px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 28px;
+            }}
+            h1 {{
+                margin: 0 0 22px 0;
+                text-align: center;
+                font-size: 34px;
+            }}
+            .stack {{
+                display: grid;
+                gap: 22px;
+            }}
+            .block {{
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 20px;
+                padding: 18px;
+            }}
+            h2 {{
+                margin: 0 0 14px 0;
+                font-size: 20px;
+            }}
+            video {{
+                width: 100%;
+                max-height: 72vh;
+                border-radius: 16px;
+                background: #111;
+                display: block;
+            }}
+            .soft {{
+                margin-top: 16px;
+                text-align: center;
+                color: rgba(255,255,255,0.42);
+                font-size: 13px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>ETERNA</h1>
+            <div class="stack">
+                {gift_block}
+                {reaction_block}
+            </div>
+            <div class="soft">
+                Sender pack
+            </div>
+        </div>
     </body>
     </html>
     """
