@@ -7,14 +7,18 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V7")
+app = FastAPI(title="ETERNA V8")
 
 # =========================
 # CONFIG
 # =========================
 
 STRIPE_SECRET_KEY = os.getenv("STRIPE_SECRET_KEY", "").strip()
-PUBLIC_BASE_URL = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000").strip()
+
+PUBLIC_BASE_URL = os.getenv(
+    "PUBLIC_BASE_URL",
+    "https://eterna-v2-lab.onrender.com"
+).strip().rstrip("/")
 
 BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE_EUR", "29"))
 CURRENCY = os.getenv("ETERNA_CURRENCY", "eur").strip().lower()
@@ -247,9 +251,6 @@ def crear_eterna(
     phrase_3: str = Form(...),
     gift_amount: float = Form(0),
 ):
-    if not STRIPE_SECRET_KEY:
-        raise HTTPException(status_code=500, detail="Falta STRIPE_SECRET_KEY en Render.")
-
     order_id = str(uuid.uuid4())[:12]
 
     gift_amount = max(0.0, round(float(gift_amount or 0), 2))
@@ -272,7 +273,12 @@ def crear_eterna(
         "paid": False,
         "reaction_video": None,
         "reaction_uploaded": False,
+        "cashout_completed": False,
     }
+
+    # Si no hay Stripe, hacemos bypass limpio para pruebas
+    if not STRIPE_SECRET_KEY:
+        return RedirectResponse(url=f"{PUBLIC_BASE_URL}/post-pago/{order_id}", status_code=303)
 
     try:
         session = stripe.checkout.Session.create(
@@ -522,7 +528,7 @@ def resumen(order_id: str):
 @app.post("/upload-video")
 async def upload_video(
     order_id: str = Form(...),
-    video: UploadFile = File(...)
+    video: UploadFile = File(...),
 ):
     order = get_order_or_404(order_id)
 
@@ -542,7 +548,7 @@ async def upload_video(
         "status": "ok",
         "file": filepath,
         "reaction_url": f"{PUBLIC_BASE_URL}/reaccion/{order_id}",
-        "thanks_url": f"{PUBLIC_BASE_URL}/gracias/{order_id}"
+        "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{order_id}"
     })
 
 
@@ -562,52 +568,15 @@ def get_video(order_id: str):
 
 
 # =========================
-# REACCION
+# COBRAR
 # =========================
 
-@app.get("/reaccion/{order_id}", response_class=HTMLResponse)
-def reaccion(order_id: str):
+@app.get("/cobrar/{order_id}", response_class=HTMLResponse)
+def cobrar(order_id: str):
     order = get_order_or_404(order_id)
 
     if not reaction_exists(order):
-        return HTMLResponse(f"""
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="5">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Reacción pendiente</title>
-            <style>
-                body {{
-                    margin: 0;
-                    min-height: 100vh;
-                    background: #000;
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 24px;
-                    text-align: center;
-                }}
-                .card {{
-                    max-width: 680px;
-                }}
-                p {{
-                    color: rgba(255,255,255,0.72);
-                    line-height: 1.6;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>La reacción aún no ha llegado</h1>
-                <p>Esta página se actualizará sola en unos segundos.</p>
-            </div>
-        </body>
-        </html>
-        """)
+        return RedirectResponse(url=f"/pedido/{order_id}", status_code=303)
 
     return f"""
     <!DOCTYPE html>
@@ -615,144 +584,7 @@ def reaccion(order_id: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Reacción ETERNA</title>
-        <style>
-            html, body {{
-                margin: 0;
-                min-height: 100%;
-                background: #000;
-            }}
-
-            body {{
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
-                color: white;
-                font-family: Arial, sans-serif;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                padding: 24px;
-            }}
-
-            .card {{
-                width: 100%;
-                max-width: 820px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
-                padding: 28px;
-                text-align: center;
-            }}
-
-            h1 {{
-                margin: 0 0 10px 0;
-                font-size: 34px;
-            }}
-
-            p {{
-                color: rgba(255,255,255,0.72);
-                line-height: 1.6;
-                margin-bottom: 18px;
-            }}
-
-            video {{
-                width: 100%;
-                max-height: 72vh;
-                border-radius: 20px;
-                background: #111;
-                display: block;
-            }}
-
-            .actions {{
-                margin-top: 18px;
-            }}
-
-            button {{
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-            }}
-
-            .soft {{
-                margin-top: 16px;
-                color: rgba(255,255,255,0.42);
-                font-size: 13px;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-            <p>La reacción ha quedado guardada.</p>
-
-            <video id="reactionVideo" controls autoplay playsinline>
-                <source src="/video/{order_id}" type="video/webm">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
-
-            <div class="actions">
-                <button onclick="replayVideo()">Volver a verlo ❤️</button>
-            </div>
-
-            <div class="soft">
-                Gracias por formar parte de ETERNA.
-            </div>
-        </div>
-
-        <script>
-            function replayVideo() {{
-                const video = document.getElementById("reactionVideo");
-                if (!video) return;
-                video.currentTime = 0;
-                video.play().catch(() => {{}});
-            }}
-
-            window.addEventListener("load", () => {{
-                const video = document.getElementById("reactionVideo");
-                if (!video) return;
-                video.play().catch(() => {{}});
-            }});
-        </script>
-    </body>
-    </html>
-    """
-
-
-# =========================
-# GRACIAS FINAL
-# =========================
-
-@app.get("/gracias/{order_id}", response_class=HTMLResponse)
-def gracias(order_id: str):
-    order = get_order_or_404(order_id)
-
-    ready = reaction_exists(order)
-
-    if ready:
-        meta_refresh = f'<meta http-equiv="refresh" content="4;url=/reaccion/{order_id}">'
-        status_text = "Tu reacción ha quedado guardada."
-        loading_text = "Abriendo tu momento..."
-    else:
-        meta_refresh = '<meta http-equiv="refresh" content="3">'
-        status_text = "Guardando tu reacción..."
-        loading_text = "Un instante, por favor."
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        {meta_refresh}
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
+        <title>Cobrar regalo</title>
         <style>
             html, body {{
                 margin: 0;
@@ -816,6 +648,21 @@ def gracias(order_id: str):
                 font-weight: bold;
             }}
 
+            .btn {{
+                display: inline-block;
+                width: 100%;
+                margin-top: 24px;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+            }}
+
             .soft {{
                 margin-top: 18px;
                 color: rgba(255,255,255,0.46);
@@ -825,11 +672,11 @@ def gracias(order_id: str):
     </head>
     <body>
         <div class="card">
-            <h1>Este momento ya es ETERNA ❤️</h1>
+            <h1>Cobra tu dinero 💸</h1>
 
             <p>
-                Has recibido tu regalo.<br>
-                {status_text}
+                Tu momento ya ha quedado guardado.<br>
+                Ahora puedes completar el proceso para cobrar tu regalo.
             </p>
 
             <div class="money-box">
@@ -837,10 +684,212 @@ def gracias(order_id: str):
                 <div class="money-value">{money(order["gift_amount"])}€</div>
             </div>
 
+            <a class="btn" href="/iniciar-cobro/{order_id}">Continuar</a>
+
             <div class="soft">
-                {loading_text}
+                En el siguiente paso podrás introducir tus datos de cobro.
             </div>
         </div>
+    </body>
+    </html>
+    """
+
+
+@app.get("/iniciar-cobro/{order_id}")
+def iniciar_cobro(order_id: str):
+    order = get_order_or_404(order_id)
+    order["cashout_completed"] = True
+    return RedirectResponse(url=f"/reaccion/{order_id}", status_code=303)
+
+
+# =========================
+# REACCION
+# =========================
+
+@app.get("/reaccion/{order_id}", response_class=HTMLResponse)
+def reaccion(order_id: str):
+    order = get_order_or_404(order_id)
+
+    if not reaction_exists(order):
+        return HTMLResponse(f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="5">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Reacción pendiente</title>
+            <style>
+                body {{
+                    margin: 0;
+                    min-height: 100vh;
+                    background: #000;
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    text-align: center;
+                }}
+                .card {{
+                    max-width: 680px;
+                }}
+                p {{
+                    color: rgba(255,255,255,0.72);
+                    line-height: 1.6;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>La reacción aún no ha llegado</h1>
+                <p>Esta página se actualizará sola en unos segundos.</p>
+            </div>
+        </body>
+        </html>
+        """)
+
+    if not order.get("cashout_completed"):
+        return RedirectResponse(url=f"/cobrar/{order_id}", status_code=303)
+
+    share_url = f"{PUBLIC_BASE_URL}/video/{order_id}"
+    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote('No sé cómo explicarlo... pero este momento ya forma parte de ETERNA ❤️ ' + share_url)}"
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reacción ETERNA</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }}
+
+            .card {{
+                width: 100%;
+                max-width: 820px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 28px;
+                text-align: center;
+            }}
+
+            h1 {{
+                margin: 0 0 10px 0;
+                font-size: 34px;
+            }}
+
+            p {{
+                color: rgba(255,255,255,0.72);
+                line-height: 1.6;
+                margin-bottom: 18px;
+            }}
+
+            video {{
+                width: 100%;
+                max-height: 72vh;
+                border-radius: 20px;
+                background: #111;
+                display: block;
+            }}
+
+            .actions {{
+                margin-top: 18px;
+                display: grid;
+                gap: 12px;
+            }}
+
+            button, a.btn {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+            }}
+
+            .btn-dark {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+
+            .soft {{
+                margin-top: 16px;
+                color: rgba(255,255,255,0.42);
+                font-size: 13px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
+            <p>Ahora puedes volver a verlo, guardarlo o compartirlo.</p>
+
+            <video id="reactionVideo" controls autoplay playsinline>
+                <source src="/video/{order_id}" type="video/webm">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+
+            <div class="actions">
+                <button onclick="replayVideo()">Volver a verlo ❤️</button>
+                <a class="btn btn-dark" href="/video/{order_id}" download>Guardar vídeo</a>
+                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir por WhatsApp</a>
+                <button class="btn-dark" onclick="copyLink()">Copiar enlace</button>
+            </div>
+
+            <div class="soft" id="copyMsg">
+                Gracias por formar parte de ETERNA.
+            </div>
+        </div>
+
+        <script>
+            function replayVideo() {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.currentTime = 0;
+                video.play().catch(() => {{}});
+            }}
+
+            async function copyLink() {{
+                try {{
+                    await navigator.clipboard.writeText("{share_url}");
+                    document.getElementById("copyMsg").textContent = "Enlace copiado.";
+                }} catch (e) {{
+                    document.getElementById("copyMsg").textContent = "No se pudo copiar el enlace.";
+                }}
+            }}
+
+            window.addEventListener("load", () => {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.play().catch(() => {{}});
+            }});
+        </script>
     </body>
     </html>
     """
@@ -1088,11 +1137,7 @@ def pedido(order_id: str):
                 }},
                 {{
                     html: "<h2>💸 Has recibido {gift_amount}€</h2><p>Este momento también forma parte de ETERNA.</p>",
-                    duration: 4000
-                }},
-                {{
-                    html: "<h2>Este momento ya es ETERNA ❤️</h2>",
-                    duration: 3000
+                    duration: 5000
                 }}
             ];
 
@@ -1259,23 +1304,21 @@ def pedido(order_id: str):
                     await showScene(scene.html, scene.duration);
                 }}
 
-                await wait(4000);
-
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
                 await wait(120);
-                content.innerHTML = "<h2>Guardando este momento...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>";
+                content.innerHTML = "<h2>Preparando tu cobro...</h2><p>Un instante, por favor.</p><div class='loader'>Subiendo reacción...</div>";
                 await wait(30);
                 content.classList.add("visible");
 
                 const uploadResult = await stopRecordingAndUpload();
 
-                if (uploadResult && uploadResult.thanks_url) {{
-                    window.location.href = uploadResult.thanks_url;
+                if (uploadResult && uploadResult.cashout_url) {{
+                    window.location.href = uploadResult.cashout_url;
                     return;
                 }}
 
-                window.location.href = "/gracias/" + "{order_id}";
+                window.location.href = "/cobrar/" + "{order_id}";
             }}
         </script>
     </body>
@@ -1291,7 +1334,8 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V7",
+        "app": "ETERNA V8",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
-        "public_base_url": PUBLIC_BASE_URL
+        "public_base_url": PUBLIC_BASE_URL,
+        "orders": len(orders),
     }
