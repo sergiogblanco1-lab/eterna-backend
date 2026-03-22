@@ -1401,4 +1401,4 @@ def health():
         "r2_configured": r2_enabled(),
         "public_base_url": PUBLIC_BASE_URL,
         "orders": len(orders),
-    }}
+    }
