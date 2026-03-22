@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V12 WHATSAPP READY")
+app = FastAPI(title="ETERNA V13 CONSERVADOR")
 
 # =========================================================
 # CONFIG
@@ -342,6 +342,63 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
+
+def build_recipient_scenes_json(order: dict) -> str:
+    recipient_name = safe_text(order["recipient_name"])
+    phrase_1 = safe_text(order["phrase_1"])
+    phrase_2 = safe_text(order["phrase_2"])
+    phrase_3 = safe_text(order["phrase_3"])
+    gift_amount = money(order["gift_amount"])
+    gift_video_url = (order.get("gift_video_url") or "").strip()
+
+    scenes = [
+        {
+            "html": f"<h2>Para {recipient_name}</h2>",
+            "duration": 2200,
+        }
+    ]
+
+    if gift_video_url:
+        safe_gift_video = html.escape(gift_video_url, quote=True)
+        scenes.append({
+            "html": (
+                "<h2>Hay algo para ti ❤️</h2>"
+                "<div style='margin-top:18px;'>"
+                f"<video controls autoplay playsinline style='width:100%;max-width:780px;border-radius:18px;background:#111;'>"
+                f"<source src='{safe_gift_video}' type='video/mp4'>"
+                f"<source src='{safe_gift_video}' type='video/webm'>"
+                "Tu navegador no puede reproducir este vídeo."
+                "</video>"
+                "</div>"
+            ),
+            "duration": 9000,
+        })
+
+    scenes.extend([
+        {
+            "html": f"<h2>{phrase_1}</h2>",
+            "duration": 2600,
+        },
+        {
+            "html": f"<h2>{phrase_2}</h2>",
+            "duration": 2600,
+        },
+        {
+            "html": f"<h2>{phrase_3}</h2>",
+            "duration": 2600,
+        },
+        {
+            "html": "<h2>...</h2>",
+            "duration": 1400,
+        },
+        {
+            "html": f"<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
+            "duration": 5000,
+        },
+    ])
+
+    return json.dumps(scenes, ensure_ascii=False)
+
 # =========================================================
 # HOME
 # =========================================================
@@ -488,7 +545,7 @@ def home():
             </form>
 
             <div class="footer-note">
-                V12 WhatsApp Ready · SQLite real · tokens privados · Stripe preparado · R2 preparado
+                V13 Conservador · SQLite real · tokens privados · Stripe preparado · R2 preparado
             </div>
         </div>
     </body>
@@ -731,30 +788,66 @@ def resumen(order_id: str):
         ),
     )
 
-    sender_whatsapp = whatsapp_link(
-        order["sender_phone"],
-        (
-            f"Tu sender pack de ETERNA estará aquí cuando llegue la emoción ❤️\n\n"
-            f"{sender_pack_url}"
-        ),
-    )
-
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
-        status_line = "La emoción ya ha quedado guardada."
-        main_button = f"""
-            <a href="{sender_whatsapp}" target="_blank"><button class="light">Enviar pack al regalante</button></a>
-            <a href="{sender_pack_url}" target="_blank"><button class="ghost">Ver sender pack</button></a>
+        update_order(order["id"], sender_notified=1)
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="2;url={html.escape(sender_pack_url, quote=True)}">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Pack final listo</title>
+            <style>
+                html, body {{
+                    margin: 0;
+                    min-height: 100%;
+                    background: #000;
+                }}
+                body {{
+                    min-height: 100vh;
+                    background:
+                        radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                        linear-gradient(180deg, #050505 0%, #000000 100%);
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    padding: 24px;
+                    text-align: center;
+                }}
+                .card {{
+                    width: 100%;
+                    max-width: 760px;
+                    background: rgba(255,255,255,0.04);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 24px;
+                    padding: 32px 28px;
+                }}
+                .soft {{
+                    margin-top: 14px;
+                    color: rgba(255,255,255,0.45);
+                    font-size: 13px;
+                }}
+                a {{
+                    color: white;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>La emoción ya ha vuelto a ti ❤️</h1>
+                <p>Estamos abriendo el sender pack.</p>
+                <div class="soft">
+                    Si no se abre solo, <a href="{html.escape(sender_pack_url, quote=True)}">entra aquí</a>.
+                </div>
+            </div>
+        </body>
+        </html>
         """
-        soft_line = "Ya puedes abrir el pack o enviártelo por WhatsApp."
-    else:
-        status_line = "Ahora toca enviarlo al regalado."
-        main_button = f"""
-            <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
-            <a href="{experience_url}" target="_blank"><button class="ghost">Abrir experiencia</button></a>
-        """
-        soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
 
     return f"""
     <!DOCTYPE html>
@@ -828,15 +921,6 @@ def resumen(order_id: str):
                 background: #25D366;
                 color: white;
             }}
-            .light {{
-                background: white;
-                color: black;
-            }}
-            .ghost {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-            }}
             a {{ text-decoration: none; }}
             .soft {{
                 margin-top: 14px;
@@ -848,7 +932,7 @@ def resumen(order_id: str):
     <body>
         <div class="card">
             <h1>Tu ETERNA está lista ❤️</h1>
-            <p>{safe_text(status_line)}</p>
+            <p>Ahora toca enviarla al regalado.</p>
 
             <div class="stats">
                 <div class="stat">
@@ -861,16 +945,16 @@ def resumen(order_id: str):
                 </div>
                 <div class="stat">
                     <div class="label">Estado</div>
-                    <div class="value">{"Emoción recibida" if reaction_ready else "Pendiente de vivir"}</div>
+                    <div class="value">Pendiente de vivir</div>
                 </div>
             </div>
 
             <div class="buttons">
-                {main_button}
+                <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
             </div>
 
             <div class="soft">
-                {safe_text(soft_line)}
+                Cuando viva la experiencia y se grabe, esta pantalla cambiará sola.
             </div>
         </div>
     </body>
@@ -898,31 +982,9 @@ def pedido(recipient_token: str):
 
     update_order(order["id"], delivered_to_recipient=1)
 
-    recipient_name = safe_text(order["recipient_name"])
-    phrase_1 = safe_text(order["phrase_1"])
-    phrase_2 = safe_text(order["phrase_2"])
-    phrase_3 = safe_text(order["phrase_3"])
-    gift_amount = money(order["gift_amount"])
-    gift_video_url = order.get("gift_video_url") or ""
-
-    gift_video_block = ""
-    if gift_video_url:
-        safe_gift_video = html.escape(gift_video_url, quote=True)
-        gift_video_block = f"""
-        {{
-            html: `
-                <h2>Hay algo para ti ❤️</h2>
-                <div style="margin-top:18px;">
-                    <video controls autoplay playsinline style="width:100%;max-width:780px;border-radius:18px;background:#111;">
-                        <source src="{safe_gift_video}" type="video/mp4">
-                        <source src="{safe_gift_video}" type="video/webm">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
-            `,
-            duration: 9000
-        }},
-        """
+    scenes_json = build_recipient_scenes_json(order)
+    recipient_token_js = json.dumps(order["recipient_token"], ensure_ascii=False)
+    order_id_js = json.dumps(order["id"], ensure_ascii=False)
 
     return f"""
     <!DOCTYPE html>
@@ -1117,33 +1179,9 @@ def pedido(recipient_token: str):
             let currentStream = null;
             let mediaMimeType = "video/webm";
 
-            const scenes = [
-                {{
-                    html: "<h2>Para {recipient_name}</h2>",
-                    duration: 2200
-                }},
-                {gift_video_block}
-                {{
-                    html: "<h2>{phrase_1}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>{phrase_2}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>{phrase_3}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>...</h2>",
-                    duration: 1400
-                }},
-                {{
-                    html: "<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
-                    duration: 5000
-                }}
-            ];
+            const scenes = {scenes_json};
+            const recipientToken = {recipient_token_js};
+            const orderId = {order_id_js};
 
             function wait(ms) {{
                 return new Promise(resolve => setTimeout(resolve, ms));
@@ -1196,8 +1234,8 @@ def pedido(recipient_token: str):
                     }}
 
                     const formData = new FormData();
-                    formData.append("recipient_token", "{order['recipient_token']}");
-                    formData.append("video", blob, "{order['id']}.webm");
+                    formData.append("recipient_token", recipientToken);
+                    formData.append("video", blob, orderId + ".webm");
 
                     const response = await fetch("/upload-video", {{
                         method: "POST",
@@ -1313,7 +1351,7 @@ def pedido(recipient_token: str):
                     return;
                 }}
 
-                window.location.href = "/cobrar/{order['recipient_token']}";
+                window.location.href = "/cobrar/" + recipientToken;
             }}
         </script>
     </body>
@@ -1564,8 +1602,6 @@ def reaccion(recipient_token: str):
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    share_url = sender_pack_url_from_order(order)
-    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote(share_url)}"
     video_source = order.get("reaction_video_public_url") or f"/video/{order['id']}"
 
     return f"""
@@ -1614,7 +1650,7 @@ def reaccion(recipient_token: str):
                 display: grid;
                 gap: 12px;
             }}
-            button, a.btn {{
+            a.btn {{
                 width: 100%;
                 padding: 16px 22px;
                 border-radius: 999px;
@@ -1627,11 +1663,6 @@ def reaccion(recipient_token: str):
                 text-decoration: none;
                 display: inline-block;
             }}
-            .btn-dark {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-            }}
             .soft {{
                 margin-top: 16px;
                 color: rgba(255,255,255,0.42);
@@ -1642,43 +1673,24 @@ def reaccion(recipient_token: str):
     <body>
         <div class="card">
             <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-            <p>Ahora puedes volver a verlo. La emoción ya está preparada para volver.</p>
+            <p>Ya ha quedado guardado.</p>
 
             <video id="reactionVideo" controls autoplay playsinline>
-                <source src="{video_source}" type="video/webm">
-                <source src="{video_source}" type="video/mp4">
+                <source src="{html.escape(video_source, quote=True)}" type="video/webm">
+                <source src="{html.escape(video_source, quote=True)}" type="video/mp4">
                 Tu navegador no puede reproducir este vídeo.
             </video>
 
             <div class="actions">
-                <button onclick="replayVideo()">Volver a verlo ❤️</button>
-                <a class="btn btn-dark" href="{video_source}" target="_blank">Abrir vídeo</a>
-                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir sender pack</a>
-                <button class="btn-dark" onclick="copyLink()">Copiar enlace</button>
+                <a class="btn" href="{html.escape(video_source, quote=True)}" target="_blank">Ver mi emoción</a>
             </div>
 
-            <div class="soft" id="copyMsg">
+            <div class="soft">
                 Gracias por formar parte de ETERNA.
             </div>
         </div>
 
         <script>
-            function replayVideo() {{
-                const video = document.getElementById("reactionVideo");
-                if (!video) return;
-                video.currentTime = 0;
-                video.play().catch(() => {{}});
-            }}
-
-            async function copyLink() {{
-                try {{
-                    await navigator.clipboard.writeText("{share_url}");
-                    document.getElementById("copyMsg").textContent = "Enlace copiado.";
-                }} catch (e) {{
-                    document.getElementById("copyMsg").textContent = "No se pudo copiar el enlace.";
-                }}
-            }}
-
             window.addEventListener("load", () => {{
                 const video = document.getElementById("reactionVideo");
                 if (!video) return;
@@ -1873,7 +1885,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V12 WHATSAPP READY",
+        "app": "ETERNA V13 CONSERVADOR",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
