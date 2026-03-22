@@ -7,7 +7,7 @@ import stripe
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA CLEAN START")
+app = FastAPI(title="ETERNA V7")
 
 # =========================
 # CONFIG
@@ -345,10 +345,10 @@ def resumen(order_id: str):
     if has_reaction:
         main_cta = f"""
             <a href="/reaccion/{order_id}" target="_blank">
-                <button class="light main-btn">Ver reacción ❤️</button>
+                <button class="light main-btn">Ver la reacción ❤️</button>
             </a>
         """
-        subtitle = "Tu emoción ya está aquí."
+        subtitle = "Su emoción ya ha vuelto a ti."
         video_status = "Vídeo guardado"
         soft_text = "La reacción ya está lista."
     else:
@@ -648,6 +648,7 @@ def reaccion(order_id: str):
 
             h1 {{
                 margin: 0 0 10px 0;
+                font-size: 34px;
             }}
 
             p {{
@@ -666,9 +667,6 @@ def reaccion(order_id: str):
 
             .actions {{
                 margin-top: 18px;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
             }}
 
             button {{
@@ -683,17 +681,17 @@ def reaccion(order_id: str):
                 cursor: pointer;
             }}
 
-            .dark {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.12);
+            .soft {{
+                margin-top: 16px;
+                color: rgba(255,255,255,0.42);
+                font-size: 13px;
             }}
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-            <p>Tu reacción ha quedado guardada.</p>
+            <p>La reacción ha quedado guardada.</p>
 
             <video id="reactionVideo" controls autoplay playsinline>
                 <source src="/video/{order_id}" type="video/webm">
@@ -701,38 +699,27 @@ def reaccion(order_id: str):
             </video>
 
             <div class="actions">
-                <button onclick="saveAndShare()">Guardar y compartir</button>
+                <button onclick="replayVideo()">Volver a verlo ❤️</button>
+            </div>
 
-                <a href="/" style="text-decoration:none;">
-                    <button class="dark">Crear una ETERNA ❤️</button>
-                </a>
+            <div class="soft">
+                Gracias por formar parte de ETERNA.
             </div>
         </div>
 
         <script>
-            async function saveAndShare() {{
-                const shareData = {{
-                    title: "Mi momento ETERNA",
-                    text: "Mira mi vídeo y mi reacción en ETERNA ❤️",
-                    url: window.location.href
-                }};
-
-                if (navigator.share) {{
-                    try {{
-                        await navigator.share(shareData);
-                        return;
-                    }} catch (e) {{
-                        console.log("Compartir cancelado o no disponible", e);
-                    }}
-                }}
-
-                try {{
-                    await navigator.clipboard.writeText(window.location.href);
-                    alert("Enlace copiado. Ya puedes compartirlo donde quieras.");
-                }} catch (e) {{
-                    alert("No se pudo copiar automáticamente el enlace.");
-                }}
+            function replayVideo() {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.currentTime = 0;
+                video.play().catch(() => {{}});
             }}
+
+            window.addEventListener("load", () => {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.play().catch(() => {{}});
+            }});
         </script>
     </body>
     </html>
@@ -748,27 +735,22 @@ def gracias(order_id: str):
     order = get_order_or_404(order_id)
 
     ready = reaction_exists(order)
-    refresh_tag = '<meta http-equiv="refresh" content="5">' if not ready else ""
 
     if ready:
-        reaction_status = """
-            <p style="margin-top:18px;color:rgba(255,255,255,0.72);">
-                Tu reacción ya forma parte de ETERNA.
-            </p>
-        """
+        meta_refresh = f'<meta http-equiv="refresh" content="4;url=/reaccion/{order_id}">'
+        status_text = "Tu reacción ha quedado guardada."
+        loading_text = "Abriendo tu momento..."
     else:
-        reaction_status = """
-            <p style="margin-top:18px;color:rgba(255,255,255,0.55);">
-                Guardando tu reacción...
-            </p>
-        """
+        meta_refresh = '<meta http-equiv="refresh" content="3">'
+        status_text = "Guardando tu reacción..."
+        loading_text = "Un instante, por favor."
 
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        {refresh_tag}
+        {meta_refresh}
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
@@ -797,13 +779,14 @@ def gracias(order_id: str):
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
-                padding: 34px 28px;
+                padding: 40px 28px;
                 text-align: center;
             }}
 
             h1 {{
                 margin-top: 0;
                 font-size: 40px;
+                line-height: 1.2;
             }}
 
             p {{
@@ -813,8 +796,8 @@ def gracias(order_id: str):
             }}
 
             .money-box {{
-                margin-top: 18px;
-                padding: 18px;
+                margin-top: 22px;
+                padding: 20px;
                 border-radius: 18px;
                 background: rgba(255,255,255,0.05);
                 border: 1px solid rgba(255,255,255,0.06);
@@ -829,40 +812,24 @@ def gracias(order_id: str):
             }}
 
             .money-value {{
-                font-size: 34px;
+                font-size: 36px;
                 font-weight: bold;
             }}
 
-            .actions {{
-                margin-top: 24px;
-                display: flex;
-                flex-direction: column;
-                gap: 12px;
-            }}
-
-            a {{
-                text-decoration: none;
-            }}
-
-            button {{
-                width: 100%;
-                padding: 18px 22px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                font-size: 16px;
-                cursor: pointer;
+            .soft {{
+                margin-top: 18px;
+                color: rgba(255,255,255,0.46);
+                font-size: 14px;
             }}
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Este momento ya es ETERNA ❤️</h1>
+
             <p>
                 Has recibido tu regalo.<br>
-                Tu reacción ha quedado guardada.
+                {status_text}
             </p>
 
             <div class="money-box">
@@ -870,12 +837,8 @@ def gracias(order_id: str):
                 <div class="money-value">{money(order["gift_amount"])}€</div>
             </div>
 
-            {reaction_status}
-
-            <div class="actions">
-                <a href="/reaccion/{order_id}">
-                    <button>Quiero ver tu vídeo ❤️</button>
-                </a>
+            <div class="soft">
+                {loading_text}
             </div>
         </div>
     </body>
@@ -1296,7 +1259,7 @@ def pedido(order_id: str):
                     await showScene(scene.html, scene.duration);
                 }}
 
-                await wait(5000);
+                await wait(4000);
 
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
@@ -1328,7 +1291,7 @@ def pedido(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA CLEAN START",
+        "app": "ETERNA V7",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "public_base_url": PUBLIC_BASE_URL
     }
