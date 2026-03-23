@@ -6,7 +6,7 @@ import urllib.parse
 import uuid
 import secrets
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime
 
 import boto3
 import stripe
@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, Form, HTTPException, UploadFile, File, Request
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
 
-app = FastAPI(title="ETERNA V13 CLEAN ENDINGS")
+app = FastAPI(title="ETERNA V12 WHATSAPP READY")
 
 # =========================================================
 # CONFIG
@@ -42,7 +42,7 @@ R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 
 MAX_VIDEO_SIZE = 30 * 1024 * 1024  # 30 MB
-ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4", "application/octet-stream"}
+ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4"}
 
 DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -149,7 +149,7 @@ init_db()
 # =========================================================
 
 def now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.utcnow().isoformat()
 
 
 def safe_text(v: str) -> str:
@@ -342,58 +342,19 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
+# =========================================================
+# HOME
+# =========================================================
 
-def build_recipient_scenes_json(order: dict) -> str:
-    recipient_name = safe_text(order["recipient_name"])
-    phrase_1 = safe_text(order["phrase_1"])
-    phrase_2 = safe_text(order["phrase_2"])
-    phrase_3 = safe_text(order["phrase_3"])
-    gift_amount = money(order["gift_amount"])
-    gift_video_url = (order.get("gift_video_url") or "").strip()
-
-    scenes = [
-        {"html": f"<h2>Para {recipient_name}</h2>", "duration": 2200},
-    ]
-
-    if gift_video_url:
-        safe_gift_video = html.escape(gift_video_url, quote=True)
-        scenes.append({
-            "html": (
-                "<h2>Hay algo para ti ❤️</h2>"
-                "<div style='margin-top:18px;'>"
-                f"<video controls autoplay playsinline style='width:100%;max-width:780px;border-radius:18px;background:#111;'>"
-                f"<source src='{safe_gift_video}' type='video/mp4'>"
-                f"<source src='{safe_gift_video}' type='video/webm'>"
-                "Tu navegador no puede reproducir este vídeo."
-                "</video>"
-                "</div>"
-            ),
-            "duration": 9000,
-        })
-
-    scenes.extend([
-        {"html": f"<h2>{phrase_1}</h2>", "duration": 2600},
-        {"html": f"<h2>{phrase_2}</h2>", "duration": 2600},
-        {"html": f"<h2>{phrase_3}</h2>", "duration": 2600},
-        {"html": "<h2>...</h2>", "duration": 1400},
-        {
-            "html": f"<h2>💸 Tienes un regalo de {gift_amount}€</h2><p>Después de este momento podrás continuar.</p>",
-            "duration": 4200,
-        },
-    ])
-
-    return json.dumps(scenes, ensure_ascii=False)
-
-
-def page_shell(title: str, content: str, extra_head: str = "") -> str:
+@app.get("/", response_class=HTMLResponse)
+def home():
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        {extra_head}
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>{safe_text(title)}</title>
+        <title>ETERNA</title>
         <style>
             * {{
                 box-sizing: border-box;
@@ -417,94 +378,30 @@ def page_shell(title: str, content: str, extra_head: str = "") -> str:
             }}
             .card {{
                 width: 100%;
-                max-width: 760px;
+                max-width: 700px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 36px 28px;
-                text-align: center;
+                border-radius: 24px;
+                padding: 28px;
             }}
             h1 {{
-                margin: 0 0 14px 0;
-                font-size: 34px;
-                line-height: 1.2;
+                margin: 0 0 10px 0;
+                font-size: 40px;
+                letter-spacing: 2px;
+                text-align: center;
             }}
-            p {{
-                color: rgba(255,255,255,0.82);
-                line-height: 1.65;
-                margin: 0;
-            }}
-            .stack {{
-                display: grid;
-                gap: 14px;
-                margin-top: 24px;
-            }}
-            .box {{
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.06);
-                border-radius: 18px;
-                padding: 18px;
-            }}
-            .label {{
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1.2px;
-                color: rgba(255,255,255,0.48);
-                margin-bottom: 6px;
-            }}
-            .value {{
-                font-size: 30px;
-                font-weight: bold;
-            }}
-            .buttons {{
-                display: grid;
-                gap: 12px;
-                margin-top: 24px;
-            }}
-            .btn {{
-                display: inline-block;
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-                text-decoration: none;
-            }}
-            .btn-ghost {{
-                display: inline-block;
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 1px solid rgba(255,255,255,0.10);
-                background: rgba(255,255,255,0.10);
-                color: white;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-                text-decoration: none;
-            }}
-            .btn-whatsapp {{
-                display: inline-block;
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                background: #25D366;
-                color: white;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-                text-decoration: none;
-            }}
-            .soft {{
-                margin-top: 16px;
-                color: rgba(255,255,255,0.44);
-                font-size: 13px;
+            .subtitle {{
+                text-align: center;
+                color: rgba(255,255,255,0.75);
+                margin-bottom: 26px;
                 line-height: 1.5;
+            }}
+            .section-title {{
+                margin: 20px 0 10px 0;
+                font-size: 14px;
+                text-transform: uppercase;
+                letter-spacing: 1.5px;
+                color: rgba(255,255,255,0.65);
             }}
             input {{
                 width: 100%;
@@ -520,83 +417,83 @@ def page_shell(title: str, content: str, extra_head: str = "") -> str:
             input::placeholder {{
                 color: rgba(255,255,255,0.45);
             }}
-            .section-title {{
-                margin: 20px 0 10px 0;
-                font-size: 14px;
-                text-transform: uppercase;
-                letter-spacing: 1.5px;
-                color: rgba(255,255,255,0.65);
-                text-align: left;
+            .hint {{
+                margin-top: 8px;
+                font-size: 13px;
+                color: rgba(255,255,255,0.5);
+                line-height: 1.4;
             }}
-            video {{
+            button {{
                 width: 100%;
-                max-height: 72vh;
-                border-radius: 18px;
-                background: #111;
-                display: block;
+                margin-top: 22px;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
             }}
-            a {{
-                text-decoration: none;
+            .footer-note {{
+                margin-top: 18px;
+                text-align: center;
+                color: rgba(255,255,255,0.40);
+                font-size: 12px;
+                line-height: 1.5;
             }}
         </style>
     </head>
     <body>
         <div class="card">
-            {content}
+            <h1>ETERNA</h1>
+
+            <div class="subtitle">
+                Le llega por WhatsApp.<br>
+                Lo vive en privado.<br>
+                Y la emoción vuelve a ti.
+            </div>
+
+            <form action="/crear-eterna" method="post">
+                <div class="section-title">Tus datos</div>
+                <input name="customer_name" placeholder="Tu nombre" required>
+                <input name="customer_email" type="email" placeholder="Tu email">
+                <input name="customer_phone" placeholder="Tu teléfono / WhatsApp" required>
+
+                <div class="section-title">Persona que recibe</div>
+                <input name="recipient_name" placeholder="Nombre de la persona" required>
+                <input name="recipient_phone" placeholder="Teléfono / WhatsApp de la persona" required>
+
+                <div class="section-title">Las 3 frases</div>
+                <input name="phrase_1" placeholder="Frase 1" required>
+                <input name="phrase_2" placeholder="Frase 2" required>
+                <input name="phrase_3" placeholder="Frase 3" required>
+
+                <div class="section-title">Dinero a regalar</div>
+                <input
+                    name="gift_amount"
+                    placeholder="Dinero a regalar (€)"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value="0"
+                    required
+                >
+
+                <div class="hint">
+                    Precio base: {money(BASE_PRICE)}€ · Si añades dinero, se suma una pequeña comisión automática.
+                </div>
+
+                <button type="submit">CREAR MI ETERNA</button>
+            </form>
+
+            <div class="footer-note">
+                V12 WhatsApp Ready · SQLite real · tokens privados · Stripe preparado · R2 preparado
+            </div>
         </div>
     </body>
     </html>
     """
-
-# =========================================================
-# HOME
-# =========================================================
-
-@app.get("/", response_class=HTMLResponse)
-def home():
-    content = f"""
-        <h1>ETERNA</h1>
-        <p>
-            Le llega por WhatsApp.<br>
-            Lo vive en privado.<br>
-            Y la emoción vuelve a ti.
-        </p>
-
-        <form action="/crear-eterna" method="post">
-            <div class="section-title">Tus datos</div>
-            <input name="customer_name" placeholder="Tu nombre" required>
-            <input name="customer_email" type="email" placeholder="Tu email">
-            <input name="customer_phone" placeholder="Tu teléfono / WhatsApp" required>
-
-            <div class="section-title">Persona que recibe</div>
-            <input name="recipient_name" placeholder="Nombre de la persona" required>
-            <input name="recipient_phone" placeholder="Teléfono / WhatsApp de la persona" required>
-
-            <div class="section-title">Las 3 frases</div>
-            <input name="phrase_1" placeholder="Frase 1" required>
-            <input name="phrase_2" placeholder="Frase 2" required>
-            <input name="phrase_3" placeholder="Frase 3" required>
-
-            <div class="section-title">Dinero a regalar</div>
-            <input
-                name="gift_amount"
-                placeholder="Dinero a regalar (€)"
-                type="number"
-                step="0.01"
-                min="0"
-                value="0"
-                required
-            >
-
-            <a></a>
-            <button class="btn" type="submit">CREAR MI ETERNA</button>
-        </form>
-
-        <div class="soft">
-            Precio base: {money(BASE_PRICE)}€ · Si añades dinero, se suma una pequeña comisión automática.
-        </div>
-    """
-    return page_shell("ETERNA", content)
 
 # =========================================================
 # CREAR ETERNA
@@ -699,10 +596,12 @@ def crear_eterna(
                     "quantity": 1,
                 }
             ],
-            success_url=f"{PUBLIC_BASE_URL}/checkout-exito/{order_id}?session_id={{CHECKOUT_SESSION_ID}}",
+            success_url=f"{PUBLIC_BASE_URL}/checkout-exito/{order_id}",
             cancel_url=f"{PUBLIC_BASE_URL}/",
             client_reference_id=order_id,
-            metadata={"order_id": order_id},
+            metadata={
+                "order_id": order_id,
+            },
         )
         update_order(order_id, stripe_session_id=session.id, stripe_payment_status="created")
         return RedirectResponse(url=session.url, status_code=303)
@@ -714,43 +613,57 @@ def crear_eterna(
 # =========================================================
 
 @app.get("/checkout-exito/{order_id}", response_class=HTMLResponse)
-def checkout_exito(order_id: str, session_id: str = ""):
+def checkout_exito(order_id: str):
     order = get_order_by_id(order_id)
+    is_paid = bool(order["paid"])
 
-    if not order["paid"] and STRIPE_SECRET_KEY and session_id:
-        try:
-            session = stripe.checkout.Session.retrieve(session_id)
-            if (
-                session
-                and session.get("payment_status") == "paid"
-                and (
-                    session.get("client_reference_id") == order_id
-                    or session.get("metadata", {}).get("order_id") == order_id
-                )
-            ):
-                update_order(
-                    order_id,
-                    paid=1,
-                    stripe_payment_status="paid",
-                    stripe_session_id=session.get("id"),
-                )
-                order = get_order_by_id(order_id)
-        except Exception:
-            pass
+    refresh = '<meta http-equiv="refresh" content="4">' if not is_paid else ""
 
-    if order["paid"]:
-        return RedirectResponse(url=f"/post-pago/{order_id}", status_code=303)
+    body_text = (
+        "Pago confirmado. Redirigiendo..."
+        if is_paid
+        else "Estamos confirmando tu pago. Esta página se actualizará sola."
+    )
+    target = f"/post-pago/{order_id}" if is_paid else f"/checkout-exito/{order_id}"
 
-    content = """
-        <h1>Confirmando pago</h1>
-        <p>Estamos validando tu ETERNA. Esta pantalla se actualizará sola.</p>
-        <div class="soft">Si Stripe ya cobró, el webhook la marcará como pagada.</div>
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        {refresh}
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Confirmando pago</title>
+        <style>
+            body {{
+                margin: 0;
+                min-height: 100vh;
+                background: #000;
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 24px;
+            }}
+            .card {{
+                max-width: 680px;
+            }}
+            a {{
+                color: white;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>ETERNA</h1>
+            <p>{safe_text(body_text)}</p>
+            <p><a href="{target}">Continuar</a></p>
+        </div>
+    </body>
+    </html>
     """
-    return HTMLResponse(page_shell(
-        "Confirmando pago",
-        content,
-        extra_head='<meta http-equiv="refresh" content="4">'
-    ))
 
 
 @app.post("/stripe/webhook")
@@ -772,7 +685,7 @@ async def stripe_webhook(request: Request):
 
     event_type = event.get("type")
 
-    if event_type in {"checkout.session.completed", "checkout.session.async_payment_succeeded"}:
+    if event_type == "checkout.session.completed":
         session = event["data"]["object"]
         order_id = session.get("metadata", {}).get("order_id") or session.get("client_reference_id")
         if order_id:
@@ -792,8 +705,10 @@ async def stripe_webhook(request: Request):
 @app.get("/post-pago/{order_id}")
 def post_pago(order_id: str):
     order = get_order_by_id(order_id)
+
     if not order["paid"]:
         return RedirectResponse(url=f"/checkout-exito/{order_id}", status_code=303)
+
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
 
 # =========================================================
@@ -805,6 +720,8 @@ def resumen(order_id: str):
     order = get_order_by_id(order_id)
 
     experience_url = recipient_experience_url_from_order(order)
+    sender_pack_url = sender_pack_url_from_order(order)
+
     recipient_whatsapp = whatsapp_link(
         order["recipient_phone"],
         (
@@ -814,38 +731,154 @@ def resumen(order_id: str):
         ),
     )
 
+    sender_whatsapp = whatsapp_link(
+        order["sender_phone"],
+        (
+            f"Tu sender pack de ETERNA estará aquí cuando llegue la emoción ❤️\n\n"
+            f"{sender_pack_url}"
+        ),
+    )
+
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
-        return RedirectResponse(url=f"/final-regalante/{order['sender_token']}", status_code=303)
+        status_line = "La emoción ya ha quedado guardada."
+        main_button = f"""
+            <a href="{sender_whatsapp}" target="_blank"><button class="light">Enviar pack al regalante</button></a>
+            <a href="{sender_pack_url}" target="_blank"><button class="ghost">Ver sender pack</button></a>
+        """
+        soft_line = "Ya puedes abrir el pack o enviártelo por WhatsApp."
+    else:
+        status_line = "Ahora toca enviarlo al regalado."
+        main_button = f"""
+            <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
+            <a href="{experience_url}" target="_blank"><button class="ghost">Abrir experiencia</button></a>
+        """
+        soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
 
-    content = f"""
-        <h1>Tu ETERNA está lista</h1>
-        <p>Ahora solo queda enviarla por WhatsApp para que la otra persona la viva.</p>
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Resumen ETERNA</title>
+        <style>
+            * {{ box-sizing: border-box; }}
+            html, body {{ margin: 0; min-height: 100%; background: #000; }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 32px 28px;
+                text-align: center;
+            }}
+            .stats {{
+                display: grid;
+                gap: 12px;
+                margin-top: 24px;
+            }}
+            .stat {{
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.06);
+                border-radius: 16px;
+                padding: 16px;
+            }}
+            .label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+                color: rgba(255,255,255,0.5);
+            }}
+            .value {{
+                font-size: 22px;
+                font-weight: bold;
+                margin-top: 6px;
+            }}
+            .buttons {{
+                display: grid;
+                gap: 14px;
+                margin-top: 28px;
+            }}
+            button {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+            }}
+            .whatsapp {{
+                background: #25D366;
+                color: white;
+            }}
+            .light {{
+                background: white;
+                color: black;
+            }}
+            .ghost {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+            a {{ text-decoration: none; }}
+            .soft {{
+                margin-top: 14px;
+                color: rgba(255,255,255,0.45);
+                font-size: 13px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Tu ETERNA está lista ❤️</h1>
+            <p>{safe_text(status_line)}</p>
 
-        <div class="stack">
-            <div class="box">
-                <div class="label">Total cobrado</div>
-                <div class="value">{money(order["total_amount"])}€</div>
+            <div class="stats">
+                <div class="stat">
+                    <div class="label">Regalo</div>
+                    <div class="value">{money(order["gift_amount"])}€</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Total cobrado</div>
+                    <div class="value">{money(order["total_amount"])}€</div>
+                </div>
+                <div class="stat">
+                    <div class="label">Estado</div>
+                    <div class="value">{"Emoción recibida" if reaction_ready else "Pendiente de vivir"}</div>
+                </div>
+            </div>
+
+            <div class="buttons">
+                {main_button}
+            </div>
+
+            <div class="soft">
+                {safe_text(soft_line)}
             </div>
         </div>
-
-        <div class="buttons">
-            <a class="btn-whatsapp" href="{recipient_whatsapp}" target="_blank">ENVIAR ETERNA</a>
-        </div>
-
-        <div class="soft">
-            Cuando viva la experiencia y se grabe, esta pantalla cambiará sola.
-        </div>
+    </body>
+    </html>
     """
-    return HTMLResponse(page_shell(
-        "Resumen ETERNA",
-        content,
-        extra_head='<meta http-equiv="refresh" content="8">'
-    ))
 
 # =========================================================
-# EXPERIENCIA DEL REGALADO
+# EXPERIENCIA DEL REGALADO (TOKEN PRIVADO)
 # =========================================================
 
 @app.get("/pedido/{recipient_token}", response_class=HTMLResponse)
@@ -853,19 +886,43 @@ def pedido(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not order["paid"]:
-        return HTMLResponse(page_shell(
-            "ETERNA no disponible",
-            """
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <body style="background:#000;color:white;text-align:center;padding-top:100px;font-family:Arial;">
             <h1>Esta ETERNA aún no está disponible</h1>
             <p>El pago todavía no se ha completado.</p>
-            """
-        ))
+        </body>
+        </html>
+        """)
 
     update_order(order["id"], delivered_to_recipient=1)
 
-    scenes_json = build_recipient_scenes_json(order)
-    order_id_js = json.dumps(order["id"], ensure_ascii=False)
-    recipient_token_js = json.dumps(order["recipient_token"], ensure_ascii=False)
+    recipient_name = safe_text(order["recipient_name"])
+    phrase_1 = safe_text(order["phrase_1"])
+    phrase_2 = safe_text(order["phrase_2"])
+    phrase_3 = safe_text(order["phrase_3"])
+    gift_amount = money(order["gift_amount"])
+    gift_video_url = order.get("gift_video_url") or ""
+
+    gift_video_block = ""
+    if gift_video_url:
+        safe_gift_video = html.escape(gift_video_url, quote=True)
+        gift_video_block = f"""
+        {{
+            html: `
+                <h2>Hay algo para ti ❤️</h2>
+                <div style="margin-top:18px;">
+                    <video controls autoplay playsinline style="width:100%;max-width:780px;border-radius:18px;background:#111;">
+                        <source src="{safe_gift_video}" type="video/mp4">
+                        <source src="{safe_gift_video}" type="video/webm">
+                        Tu navegador no puede reproducir este vídeo.
+                    </video>
+                </div>
+            `,
+            duration: 9000
+        }},
+        """
 
     return f"""
     <!DOCTYPE html>
@@ -964,6 +1021,8 @@ def pedido(recipient_token: str):
                 cursor: pointer;
                 margin-top: 20px;
                 font-size: 15px;
+                -webkit-appearance: none;
+                appearance: none;
             }}
             #startBtn:disabled {{
                 opacity: 0.45;
@@ -1043,7 +1102,7 @@ def pedido(recipient_token: str):
                 </label>
 
                 <button id="startBtn" type="button" onclick="startExperience()" disabled>
-                    ACEPTAR Y VIVIR MI ETERNA
+                    Vivir mi ETERNA ❤️
                 </button>
             </div>
         </div>
@@ -1058,9 +1117,33 @@ def pedido(recipient_token: str):
             let currentStream = null;
             let mediaMimeType = "video/webm";
 
-            const scenes = {scenes_json};
-            const recipientToken = {recipient_token_js};
-            const orderId = {order_id_js};
+            const scenes = [
+                {{
+                    html: "<h2>Para {recipient_name}</h2>",
+                    duration: 2200
+                }},
+                {gift_video_block}
+                {{
+                    html: "<h2>{phrase_1}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>{phrase_2}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>{phrase_3}</h2>",
+                    duration: 2600
+                }},
+                {{
+                    html: "<h2>...</h2>",
+                    duration: 1400
+                }},
+                {{
+                    html: "<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
+                    duration: 5000
+                }}
+            ];
 
             function wait(ms) {{
                 return new Promise(resolve => setTimeout(resolve, ms));
@@ -1113,8 +1196,8 @@ def pedido(recipient_token: str):
                     }}
 
                     const formData = new FormData();
-                    formData.append("recipient_token", recipientToken);
-                    formData.append("video", blob, orderId + ".webm");
+                    formData.append("recipient_token", "{order['recipient_token']}");
+                    formData.append("video", blob, "{order['id']}.webm");
 
                     const response = await fetch("/upload-video", {{
                         method: "POST",
@@ -1219,7 +1302,7 @@ def pedido(recipient_token: str):
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
                 await wait(120);
-                content.innerHTML = "<h2>Guardando este momento...</h2><p>Un instante más.</p><div class='loader'>Subiendo reacción...</div>";
+                content.innerHTML = "<h2>Preparando tu cobro...</h2><p>Guardando este momento.</p><div class='loader'>Subiendo reacción...</div>";
                 await wait(30);
                 content.classList.add("visible");
 
@@ -1230,7 +1313,7 @@ def pedido(recipient_token: str):
                     return;
                 }}
 
-                window.location.href = "/cobrar/" + recipientToken;
+                window.location.href = "/cobrar/{order['recipient_token']}";
             }}
         </script>
     </body>
@@ -1251,8 +1334,7 @@ async def upload_video(
     if not order["paid"]:
         raise HTTPException(status_code=403, detail="Pedido no pagado")
 
-    content_type = (video.content_type or "").lower()
-    if content_type not in ALLOWED_VIDEO_TYPES:
+    if video.content_type not in ALLOWED_VIDEO_TYPES:
         raise HTTPException(status_code=400, detail="Formato de vídeo no permitido")
 
     filepath = reaction_video_path(order["id"])
@@ -1332,29 +1414,98 @@ def cobrar(recipient_token: str):
     if not reaction_exists(order):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
-    content = f"""
-        <h1>Cobra tu regalo 💸</h1>
-        <p>
-            Tu momento ya ha quedado guardado.<br>
-            Ahora puedes completar el proceso para cobrar tu regalo.
-        </p>
-
-        <div class="stack">
-            <div class="box">
-                <div class="label">Importe recibido</div>
-                <div class="value">{money(order["gift_amount"])}€</div>
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Cobrar regalo</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 40px 28px;
+                text-align: center;
+            }}
+            .money-box {{
+                margin-top: 22px;
+                padding: 20px;
+                border-radius: 18px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.06);
+            }}
+            .money-label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+                color: rgba(255,255,255,0.50);
+                margin-bottom: 6px;
+            }}
+            .money-value {{
+                font-size: 36px;
+                font-weight: bold;
+            }}
+            .btn {{
+                display: inline-block;
+                width: 100%;
+                margin-top: 24px;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+            }}
+            .soft {{
+                margin-top: 18px;
+                color: rgba(255,255,255,0.46);
+                font-size: 14px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Cobra tu regalo 💸</h1>
+            <p>
+                Tu momento ya ha quedado guardado.<br>
+                Ahora puedes completar el proceso para cobrar tu regalo.
+            </p>
+            <div class="money-box">
+                <div class="money-label">Importe recibido</div>
+                <div class="money-value">{money(order["gift_amount"])}€</div>
+            </div>
+            <a class="btn" href="/iniciar-cobro/{recipient_token}">Cobrar ahora</a>
+            <div class="soft">
+                Cuando termines, podrás volver a verlo y la emoción volverá al regalante.
             </div>
         </div>
-
-        <div class="buttons">
-            <a class="btn" href="/iniciar-cobro/{recipient_token}">CONTINUAR</a>
-        </div>
-
-        <div class="soft">
-            Esta parte sigue siendo demo funcional hasta integrar payout legal real.
-        </div>
+    </body>
+    </html>
     """
-    return page_shell("Cobrar regalo", content)
 
 
 @app.get("/iniciar-cobro/{recipient_token}")
@@ -1367,93 +1518,381 @@ def iniciar_cobro(recipient_token: str):
 def cobro_completado(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
     update_order(order["id"], cashout_completed=1)
-    return RedirectResponse(url=f"/final-regalado/{recipient_token}", status_code=303)
+    return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
 
 # =========================================================
-# FINAL REGALADO
+# REACCIÓN FINAL DEL REGALADO
 # =========================================================
 
-@app.get("/final-regalado/{recipient_token}", response_class=HTMLResponse)
-def final_regalado(recipient_token: str):
+@app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
+def reaccion(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not reaction_exists(order):
-        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="5">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Reacción pendiente</title>
+            <style>
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    background: #000;
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <div>
+                <h1>La reacción aún no ha llegado</h1>
+                <p>Esta página se actualizará sola en unos segundos.</p>
+            </div>
+        </body>
+        </html>
+        """)
 
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
-
-    share_url = recipient_experience_url_from_order(order)
-    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote(share_url)}"
-
-    content = f"""
-        <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-        <p>Gracias por vivirlo.</p>
-
-        <div class="buttons">
-            <a class="btn-whatsapp" href="{whatsapp_share}" target="_blank">COMPARTIR MI ETERNA</a>
-            <a class="btn-ghost" href="/">CREAR OTRA ETERNA</a>
-        </div>
-
-        <div class="soft">
-            El cierre emocional ya está hecho.
-        </div>
-    """
-    return page_shell("Final ETERNA", content)
-
-# =========================================================
-# FINAL REGALANTE
-# =========================================================
-
-@app.get("/final-regalante/{sender_token}", response_class=HTMLResponse)
-def final_regalante(sender_token: str):
-    order = get_order_by_sender_token_or_404(sender_token)
-
-    if not reaction_exists(order):
-        return RedirectResponse(url=f"/resumen/{order['id']}", status_code=303)
-
-    update_order(order["id"], sender_notified=1)
 
     share_url = sender_pack_url_from_order(order)
     whatsapp_share = f"https://wa.me/?text={urllib.parse.quote(share_url)}"
     video_source = order.get("reaction_video_public_url") or f"/video/{order['id']}"
 
-    content = f"""
-        <h1>La emoción ha vuelto a ti ❤️</h1>
-        <p>Aquí tienes el momento final.</p>
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Reacción ETERNA</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 820px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 28px;
+                text-align: center;
+            }}
+            video {{
+                width: 100%;
+                max-height: 72vh;
+                border-radius: 20px;
+                background: #111;
+                display: block;
+            }}
+            .actions {{
+                margin-top: 18px;
+                display: grid;
+                gap: 12px;
+            }}
+            button, a.btn {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+            }}
+            .btn-dark {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+            .soft {{
+                margin-top: 16px;
+                color: rgba(255,255,255,0.42);
+                font-size: 13px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
+            <p>Ahora puedes volver a verlo. La emoción ya está preparada para volver.</p>
 
-        <div class="stack">
-            <div class="box" style="padding:14px;">
-                <video controls autoplay playsinline>
-                    <source src="{html.escape(video_source, quote=True)}" type="video/webm">
-                    <source src="{html.escape(video_source, quote=True)}" type="video/mp4">
-                    Tu navegador no puede reproducir este vídeo.
-                </video>
+            <video id="reactionVideo" controls autoplay playsinline>
+                <source src="{video_source}" type="video/webm">
+                <source src="{video_source}" type="video/mp4">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+
+            <div class="actions">
+                <button onclick="replayVideo()">Volver a verlo ❤️</button>
+                <a class="btn btn-dark" href="{video_source}" target="_blank">Abrir vídeo</a>
+                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir sender pack</a>
+                <button class="btn-dark" onclick="copyLink()">Copiar enlace</button>
+            </div>
+
+            <div class="soft" id="copyMsg">
+                Gracias por formar parte de ETERNA.
             </div>
         </div>
 
-        <div class="buttons">
-            <a class="btn-whatsapp" href="{whatsapp_share}" target="_blank">COMPARTIR EMOCIÓN</a>
-            <a class="btn-ghost" href="/">CREAR OTRA ETERNA</a>
-        </div>
+        <script>
+            function replayVideo() {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.currentTime = 0;
+                video.play().catch(() => {{}});
+            }}
+
+            async function copyLink() {{
+                try {{
+                    await navigator.clipboard.writeText("{share_url}");
+                    document.getElementById("copyMsg").textContent = "Enlace copiado.";
+                }} catch (e) {{
+                    document.getElementById("copyMsg").textContent = "No se pudo copiar el enlace.";
+                }}
+            }}
+
+            window.addEventListener("load", () => {{
+                const video = document.getElementById("reactionVideo");
+                if (!video) return;
+                video.play().catch(() => {{}});
+            }});
+        </script>
+    </body>
+    </html>
     """
-    return page_shell("Final regalante", content)
 
 # =========================================================
-# REACCIÓN LEGACY -> REDIRIGE AL FINAL REGALADO
-# =========================================================
-
-@app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
-def reaccion(recipient_token: str):
-    return RedirectResponse(url=f"/final-regalado/{recipient_token}", status_code=303)
-
-# =========================================================
-# SENDER PACK LEGACY -> REDIRIGE AL FINAL REGALANTE
+# SENDER PACK
 # =========================================================
 
 @app.get("/sender/{sender_token}", response_class=HTMLResponse)
 def sender_pack(sender_token: str):
-    return RedirectResponse(url=f"/final-regalante/{sender_token}", status_code=303)
+    order = get_order_by_sender_token_or_404(sender_token)
+
+    gift_video_url = order.get("gift_video_url")
+    reaction_video_url = order.get("reaction_video_public_url") or (
+        f"/video/{order['id']}" if reaction_exists(order) else None
+    )
+
+    if not reaction_video_url:
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="5">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Pack ETERNA pendiente</title>
+            <style>
+                body {
+                    margin: 0;
+                    min-height: 100vh;
+                    background: #000;
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    align-items: center;
+                    justify-content: center;
+                    padding: 24px;
+                    text-align: center;
+                }
+            </style>
+        </head>
+        <body>
+            <div>
+                <h1>El pack aún no está listo</h1>
+                <p>Esta página se actualizará sola en unos segundos.</p>
+            </div>
+        </body>
+        </html>
+        """)
+
+    safe_gift = html.escape(gift_video_url or "", quote=True)
+    safe_reaction = html.escape(reaction_video_url, quote=True)
+    share_url = sender_pack_url_from_order(order)
+    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote('Mira este momento ❤️ ' + share_url)}"
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Sender Pack ETERNA</title>
+        <style>
+            * {{ box-sizing: border-box; }}
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 24px;
+                padding: 28px;
+            }}
+            h1 {{
+                margin: 0 0 22px 0;
+                text-align: center;
+                font-size: 34px;
+            }}
+            .video-stack {{
+                display: grid;
+                gap: 16px;
+            }}
+            .video-block {{
+                width: 100%;
+            }}
+            video {{
+                width: 100%;
+                aspect-ratio: 16 / 9;
+                object-fit: cover;
+                border-radius: 16px;
+                background: #111;
+                display: block;
+            }}
+            .buttons {{
+                display: grid;
+                gap: 12px;
+                margin-top: 22px;
+            }}
+            .btn {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+                display: inline-block;
+                text-align: center;
+            }}
+            .primary {{
+                background: white;
+                color: black;
+            }}
+            .ghost {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+            .soft {{
+                margin-top: 16px;
+                text-align: center;
+                color: rgba(255,255,255,0.42);
+                font-size: 13px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>ETERNA</h1>
+
+            <div class="video-stack">
+                {f'''
+                <div class="video-block">
+                    <video id="giftVideo" playsinline controls preload="metadata">
+                        <source src="{safe_gift}" type="video/mp4">
+                        <source src="{safe_gift}" type="video/webm">
+                        Tu navegador no puede reproducir este vídeo.
+                    </video>
+                </div>
+                ''' if gift_video_url else ""}
+
+                <div class="video-block">
+                    <video id="reactionVideo" playsinline controls preload="metadata" autoplay>
+                        <source src="{safe_reaction}" type="video/webm">
+                        <source src="{safe_reaction}" type="video/mp4">
+                        Tu navegador no puede reproducir este vídeo.
+                    </video>
+                </div>
+            </div>
+
+            <div class="buttons">
+                <a class="btn primary" href="{whatsapp_share}" target="_blank">Compartir emoción ❤️</a>
+                <a class="btn ghost" href="/">Crear otra ETERNA</a>
+            </div>
+
+            <div class="soft">
+                Lo que creaste y su emoción, juntos.
+            </div>
+        </div>
+
+        <script>
+            const giftVideo = document.getElementById("giftVideo");
+            const reactionVideo = document.getElementById("reactionVideo");
+
+            function syncPlay() {{
+                if (giftVideo) {{
+                    try {{
+                        giftVideo.currentTime = 0;
+                    }} catch (e) {{}}
+                }}
+                if (reactionVideo) {{
+                    try {{
+                        reactionVideo.currentTime = 0;
+                    }} catch (e) {{}}
+                }}
+
+                if (giftVideo) {{
+                    giftVideo.play().catch(() => {{}});
+                }}
+                if (reactionVideo) {{
+                    reactionVideo.play().catch(() => {{}});
+                }}
+            }}
+
+            window.addEventListener("load", () => {{
+                syncPlay();
+            }});
+        </script>
+    </body>
+    </html>
+    """
 
 # =========================================================
 # TEST DEMO OPCIONAL
@@ -1472,7 +1911,7 @@ def upload_demo(order_id: str):
     insert_asset(order["id"], "reaction_video", demo_url, "demo")
 
     updated = get_order_by_id(order_id)
-    return RedirectResponse(url=f"/final-regalante/{updated['sender_token']}", status_code=303)
+    return RedirectResponse(url=f"/sender/{updated['sender_token']}", status_code=303)
 
 # =========================================================
 # HEALTH
@@ -1482,7 +1921,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V13 CLEAN ENDINGS",
+        "app": "ETERNA V12 WHATSAPP READY",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
