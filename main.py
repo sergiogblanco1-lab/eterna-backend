@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V21 TIMELINE LOCKED")
+app = FastAPI(title="ETERNA V21.1 CLEAN SAFE")
 
 # =========================================================
 # CONFIG
@@ -367,17 +367,14 @@ def get_orders_count() -> int:
 def build_recipient_message(order: dict) -> str:
     return (
         f"Hola {order['recipient_name']} ❤️\n\n"
-        f"Alguien ha preparado algo para ti.\n\n"
-        f"No lo abras en cualquier momento.\n"
-        f"Ábrelo cuando estés tranquila.\n\n"
+        f"Hay algo para ti.\n\n"
         f"Aquí:\n{recipient_experience_url_from_order(order)}"
     )
 
 
 def build_sender_ready_message(order: dict) -> str:
     return (
-        f"Tu ETERNA está lista ❤️\n\n"
-        f"Ya puedes ver lo que ha pasado.\n\n"
+        f"Lo que creaste… volvió a ti ❤️\n\n"
         f"Aquí:\n{sender_pack_url_from_order(order)}"
     )
 
@@ -508,9 +505,7 @@ def render_create_form() -> str:
             <h1>CREAR ETERNA</h1>
 
             <div class="subtitle">
-                Le llega por WhatsApp.<br>
-                Lo vive en privado.<br>
-                Y la emoción vuelve a ti.
+                Hay momentos que merecen quedarse para siempre
             </div>
 
             <form action="/crear" method="post">
@@ -758,14 +753,11 @@ def home():
             <h1>ETERNA</h1>
 
             <div class="subtitle">
-                Le llega por WhatsApp.<br>
-                Lo vive en privado.<br>
-                Y la emoción vuelve a ti.
+                Hay momentos que merecen quedarse para siempre
             </div>
 
             <div class="soft">
-                Crea una experiencia íntima y simple.<br>
-                Sin login. Sin pasos raros. Sin ruido.
+                No es un vídeo. Es un momento.
             </div>
 
             <div class="buttons">
@@ -905,16 +897,15 @@ def checkout_exito(order_id: str):
     </head>
     <body>
         <div class="card">
-            <h1>Todo está en camino ❤️</h1>
+            <h1>Todo ya está en camino</h1>
 
             <div class="text">
-                Tu ETERNA ya ha comenzado.<br><br>
                 En unos instantes,<br>
-                alguien va a vivir algo que no espera.
+                alguien va a vivir algo que no espera
             </div>
 
             <div class="soft">
-                Y cuando ocurra… volverá a ti.
+                Y cuando ocurra… volverá a ti
             </div>
         </div>
 
@@ -999,11 +990,11 @@ def resumen(order_id: str):
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
-        status_line = "Tu momento ya ha vuelto a ti ❤️"
+        status_line = "Lo que creaste… volvió a ti"
         soft_line = "Tu enlace privado ya está listo."
         main_button = f"""
             <a href="{safe_attr(sender_pack_url)}" target="_blank" rel="noopener noreferrer">
-                <button class="primary">Abrir mi ETERNA ❤️</button>
+                <button class="primary">Abrir mi ETERNA</button>
             </a>
         """
         extra_block = f"""
@@ -1033,8 +1024,8 @@ def resumen(order_id: str):
             </script>
         """
     else:
-        status_line = "Ahora comienza lo importante. Envíalo… y deja que ocurra."
-        soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
+        status_line = "Ahora solo queda dejar que ocurra"
+        soft_line = "Cuando todo pase, volverá aquí."
         main_button = f"""
             <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
                 <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
@@ -1042,7 +1033,7 @@ def resumen(order_id: str):
         """
         extra_block = ""
 
-    estado_texto = "Emoción recibida" if reaction_ready else "Pendiente de vivir"
+    estado_texto = "Volvió a ti" if reaction_ready else "Todavía en camino"
 
     return f"""
     <!DOCTYPE html>
@@ -1159,7 +1150,7 @@ def resumen(order_id: str):
     </head>
     <body>
         <div class="card">
-            <h1>Tu ETERNA está lista ❤️</h1>
+            <h1>Tu ETERNA está lista</h1>
             <p>{safe_text(status_line)}</p>
 
             <div class="stats">
@@ -1168,7 +1159,7 @@ def resumen(order_id: str):
                     <div class="value">{money(order["gift_amount"])}€</div>
                 </div>
                 <div class="stat">
-                    <div class="label">Total cobrado</div>
+                    <div class="label">Total</div>
                     <div class="value">{money(order["total_amount"])}€</div>
                 </div>
                 <div class="stat">
@@ -1205,7 +1196,6 @@ def pedido(recipient_token: str):
         <html lang="es">
         <body style="background:#000;color:white;text-align:center;padding-top:100px;font-family:Arial;">
             <h1>Esta ETERNA aún no está disponible</h1>
-            <p>El pago todavía no se ha completado.</p>
         </body>
         </html>
         """)
@@ -1213,7 +1203,6 @@ def pedido(recipient_token: str):
     update_order(order["id"], delivered_to_recipient=1)
 
     recipient_name = safe_text(order["recipient_name"])
-    sender_name = safe_text(order["sender_name"])
     phrase_1 = safe_text(order["phrase_1"])
     phrase_2 = safe_text(order["phrase_2"])
     phrase_3 = safe_text(order["phrase_3"])
@@ -1226,7 +1215,6 @@ def pedido(recipient_token: str):
         gift_video_block = f"""
                 {{
                     html: `
-                        <h2>Hay algo para ti ❤️</h2>
                         <div style="margin-top:18px;">
                             <video controls autoplay playsinline style="width:100%;max-width:780px;border-radius:18px;background:#111;">
                                 <source src="{safe_gift_video}" type="video/mp4">
@@ -1302,30 +1290,12 @@ def pedido(recipient_token: str):
                 font-size: 42px;
                 margin-bottom: 18px;
             }}
-            .lead {{
-                color: rgba(255,255,255,0.86);
-                font-size: 18px;
-                line-height: 1.7;
-                margin-bottom: 18px;
-            }}
-            .ritual-box {{
-                margin-top: 12px;
-                padding: 18px;
-                border-radius: 20px;
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.08);
-            }}
-            .ritual-text {{
-                color: rgba(255,255,255,0.68);
-                font-size: 15px;
-                line-height: 1.8;
-            }}
             .consent-row {{
                 margin-top: 22px;
                 display: flex;
-                align-items: flex-start;
+                align-items: center;
+                justify-content: center;
                 gap: 12px;
-                text-align: left;
                 color: rgba(255,255,255,0.88);
                 font-size: 14px;
                 line-height: 1.7;
@@ -1336,9 +1306,8 @@ def pedido(recipient_token: str):
             .consent-row input {{
                 width: 24px;
                 height: 24px;
-                margin-top: 2px;
+                margin-top: 0;
                 accent-color: #00ff88;
-                flex: 0 0 auto;
                 cursor: pointer;
             }}
             #startBtn {{
@@ -1388,38 +1357,9 @@ def pedido(recipient_token: str):
                 line-height: 1.6;
                 font-size: 18px;
             }}
-            .loader {{
-                margin-top: 18px;
-                color: rgba(255,255,255,0.55);
-                font-size: 14px;
-            }}
-            .claim-cta {{
-                display: inline-block;
-                margin-top: 22px;
-                padding: 16px 24px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                font-size: 16px;
-                text-decoration: none;
-                opacity: 0;
-                pointer-events: none;
-                transform: translateY(8px);
-                transition: opacity .4s ease, transform .4s ease;
-            }}
-            .claim-cta.visible {{
-                opacity: 1;
-                pointer-events: auto;
-                transform: translateY(0);
-            }}
             @media (max-width: 640px) {{
                 .gate-card h1 {{
                     font-size: 32px;
-                }}
-                .lead {{
-                    font-size: 16px;
                 }}
                 #content h2 {{
                     font-size: 34px;
@@ -1436,53 +1376,19 @@ def pedido(recipient_token: str):
             <div class="gate-card">
                 <h1>Hay algo para ti</h1>
 
-                <p class="lead">
-                    Esto no es para verlo rápido.
-                    <br>
-                    Esto es para sentirlo.
-                </p>
-
-                <div class="ritual-box">
-                    <div class="ritual-text">
-                        Lo que vas a vivir no está hecho para cualquier sitio.
-                        <br><br>
-                        Busca un lugar tranquilo.
-                        <br>
-                        Sin interrupciones.
-                        <br>
-                        Sin ruido.
-                        <br>
-                        Sin nadie alrededor.
-                        <br><br>
-                        Tómate tu tiempo.
-                        <br>
-                        Vívelo bien.
-                        <br>
-                        No lo abras en cualquier sitio.
-                        <br>
-                        No lo desperdicies.
-                        <br><br>
-                        Cuando estés de verdad preparado,
-                        continúa.
-                    </div>
-                </div>
-
                 <label class="consent-row" id="consentLabel" for="consentCheck">
                     <input type="checkbox" id="consentCheck">
-                    <span>Entiendo que debo vivir esta experiencia en un lugar adecuado y en mi momento</span>
+                    <span>Continúa cuando quieras</span>
                 </label>
 
                 <button id="startBtn" type="button" onclick="startExperience()" disabled>
-                    Quiero vivirlo ❤️
+                    Vivirlo
                 </button>
             </div>
         </div>
 
         <div id="experience" class="screen hidden">
             <div id="content"></div>
-            <a id="claimBtn" class="claim-cta" href="/iniciar-cobro/{safe_attr(order['recipient_token'])}">
-                Cobrar ahora
-            </a>
         </div>
 
         <script>
@@ -1492,40 +1398,9 @@ def pedido(recipient_token: str):
             let mediaMimeType = "video/webm";
             let autoStopped = false;
 
-            const TIMELINE = {{
-                countdownMs: 3000,
-                emotionalVideoStartMs: 3000,
-                emotionalVideoEndMs: 35000,
-                moneyMessageStartMs: 35000,
-                moneyMessageEndMs: 42000,
-                claimButtonAtMs: 42000,
-                stopAtMs: 47000
-            }};
-
-            const scenes = [
-                {{
-                    html: "<h2>Para {recipient_name}</h2>",
-                    duration: 1800
-                }},
-                {{
-                    html: "<h2>…</h2>",
-                    duration: 1200
-                }},
-                {{
-                    html: "<h2>De {sender_name}</h2>",
-                    duration: 2200
-                }},
-                {gift_video_block}
-            ];
-
-            function wait(ms) {{
-                return new Promise(resolve => setTimeout(resolve, ms));
-            }}
-
             document.addEventListener("DOMContentLoaded", () => {{
                 const consentCheck = document.getElementById("consentCheck");
                 const startBtn = document.getElementById("startBtn");
-                const consentLabel = document.getElementById("consentLabel");
 
                 let ready = false;
 
@@ -1538,18 +1413,40 @@ def pedido(recipient_token: str):
                     }} else {{
                         startBtn.classList.remove("enabled");
                     }}
-
-                    consentLabel.style.opacity = consentCheck.checked ? "1" : "0.88";
                 }}
 
                 setTimeout(() => {{
                     ready = true;
                     updateButton();
-                }}, 4000);
+                }}, 1200);
 
                 consentCheck.addEventListener("change", updateButton);
                 updateButton();
             }});
+
+            const scenes = [
+                {{
+                    html: "<h2>Para ti</h2>",
+                    duration: 1800
+                }},
+                {{
+                    html: "<h2>…</h2>",
+                    duration: 1200
+                }},
+                {{
+                    html: "<h2>Esto no es casualidad</h2>",
+                    duration: 2200
+                }},
+                {gift_video_block}
+                {{
+                    html: "<h2>💸</h2><h2>Alguien ha querido cuidarte<br>con este regalo en dinero</h2><p>{gift_amount}€</p>",
+                    duration: 5000
+                }}
+            ];
+
+            function wait(ms) {{
+                return new Promise(resolve => setTimeout(resolve, ms));
+            }}
 
             async function showScene(htmlContent, duration) {{
                 const content = document.getElementById("content");
@@ -1646,7 +1543,7 @@ def pedido(recipient_token: str):
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
                 await wait(120);
-                content.innerHTML = "<h2>Preparando tu cobro...</h2><p>Guardando este momento.</p><div class='loader'>Subiendo reacción...</div>";
+                content.innerHTML = "<h2>…</h2>";
                 await wait(30);
                 content.classList.add("visible");
 
@@ -1658,13 +1555,6 @@ def pedido(recipient_token: str):
                 }}
 
                 window.location.href = "/cobrar/{safe_attr(order['recipient_token'])}";
-            }}
-
-            function showClaimButton() {{
-                const claimBtn = document.getElementById("claimBtn");
-                if (claimBtn) {{
-                    claimBtn.classList.add("visible");
-                }}
             }}
 
             async function startExperience() {{
@@ -1722,7 +1612,7 @@ def pedido(recipient_token: str):
 
                     await runExperience();
                 }} catch (e) {{
-                    alert("Necesitamos acceso a cámara y micrófono para continuar con la experiencia.");
+                    alert("Necesitamos acceso a cámara y micrófono para continuar.");
                 }}
             }}
 
@@ -1733,22 +1623,7 @@ def pedido(recipient_token: str):
                     await showScene(scene.html, scene.duration);
                 }}
 
-                await showScene(
-                    "<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
-                    7000
-                );
-
-                showClaimButton();
-
-                const content = document.getElementById("content");
-                content.classList.remove("visible");
-                await wait(120);
-                content.innerHTML = "<h2>Ya puedes cobrarlo</h2><p>Tu momento sigue guardándose automáticamente.</p>";
-                await wait(30);
-                content.classList.add("visible");
-
                 await wait(5000);
-
                 await autoStopAndGo();
             }}
         </script>
@@ -1865,8 +1740,6 @@ def cobrar(recipient_token: str):
     if not reaction_exists(order):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
-    recipient_name = safe_text(order["recipient_name"])
-    sender_name = safe_text(order["sender_name"])
     amount_text = format_amount_display(order["gift_amount"])
 
     return f"""
@@ -1945,21 +1818,6 @@ def cobrar(recipient_token: str):
                 line-height: 1;
                 margin-bottom: 10px;
             }}
-            .money-sub {{
-                color: rgba(255,255,255,0.72);
-                font-size: 14px;
-                line-height: 1.6;
-            }}
-            .info-box {{
-                margin-top: 18px;
-                padding: 18px;
-                border-radius: 18px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.06);
-                color: rgba(255,255,255,0.80);
-                font-size: 14px;
-                line-height: 1.7;
-            }}
             .actions {{
                 display: grid;
                 gap: 12px;
@@ -1998,30 +1856,20 @@ def cobrar(recipient_token: str):
         <div class="card">
             <div class="eyebrow">ETERNA</div>
 
-            <h1>Tu regalo también tiene valor</h1>
+            <h1>Aquí está lo que te han dejado</h1>
 
             <div class="lead">
-                {recipient_name}, tu emoción ya siguió su camino.
-                <br><br>
-                Ahora puedes continuar con tu cobro de forma segura.
+                Y lo que sentiste… ya no se pierde
             </div>
 
             <div class="money-box">
-                <div class="money-label">Importe disponible</div>
+                <div class="money-label">Regalo</div>
                 <div class="money-value">{amount_text}</div>
-                <div class="money-sub">
-                    Enviado por {sender_name}
-                </div>
-            </div>
-
-            <div class="info-box">
-                Este es el siguiente paso de tu experiencia.
-                Aquí dejaremos conectado el cobro real de forma simple, limpia y segura.
             </div>
 
             <div class="actions">
                 <a class="btn btn-primary" href="/iniciar-cobro/{safe_attr(recipient_token)}">
-                    Continuar con el cobro
+                    Recibirlo
                 </a>
 
                 <a class="btn btn-secondary" href="/reaccion/{safe_attr(recipient_token)}">
@@ -2030,7 +1878,7 @@ def cobrar(recipient_token: str):
             </div>
 
             <div class="soft">
-                Gestión segura · ETERNA
+                …
             </div>
         </div>
     </body>
@@ -2046,7 +1894,6 @@ def iniciar_cobro(recipient_token: str):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     amount_text = format_amount_display(order["gift_amount"])
-    recipient_name = safe_text(order["recipient_name"])
 
     return f"""
     <!DOCTYPE html>
@@ -2123,16 +1970,6 @@ def iniciar_cobro(recipient_token: str):
                 font-weight: bold;
                 line-height: 1;
             }}
-            .box {{
-                margin-top: 18px;
-                padding: 18px;
-                border-radius: 18px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.06);
-                color: rgba(255,255,255,0.80);
-                font-size: 14px;
-                line-height: 1.7;
-            }}
             .actions {{
                 display: grid;
                 gap: 12px;
@@ -2174,7 +2011,7 @@ def iniciar_cobro(recipient_token: str):
             <h1>Tu cobro estará listo aquí</h1>
 
             <div class="lead">
-                {recipient_name}, esta parte ya ha quedado preparada para conectar el cobro real.
+                El siguiente paso ya está preparado
             </div>
 
             <div class="amount-box">
@@ -2182,14 +2019,9 @@ def iniciar_cobro(recipient_token: str):
                 <div class="amount-value">{amount_text}</div>
             </div>
 
-            <div class="box">
-                El siguiente paso será enlazar aquí el onboarding seguro del cobro.
-                De momento dejamos la estructura lista para no romper el flujo.
-            </div>
-
             <div class="actions">
                 <a class="btn btn-primary" href="/cobro-completado/{safe_attr(recipient_token)}">
-                    Confirmar y continuar
+                    Continuar
                 </a>
 
                 <a class="btn btn-secondary" href="/cobrar/{safe_attr(recipient_token)}">
@@ -2198,7 +2030,7 @@ def iniciar_cobro(recipient_token: str):
             </div>
 
             <div class="soft">
-                Próximo bloque: Stripe Connect Express
+                …
             </div>
         </div>
     </body>
@@ -2246,8 +2078,7 @@ def reaccion(recipient_token: str):
         </head>
         <body>
             <div>
-                <h1>Tu momento ya está siendo guardado</h1>
-                <p>Esta página se actualizará sola en unos segundos.</p>
+                <h1>…</h1>
             </div>
         </body>
         </html>
@@ -2407,12 +2238,10 @@ def reaccion(recipient_token: str):
     </head>
     <body>
         <div class="card">
-            <h1>Tu momento ya ha sido enviado ❤️</h1>
+            <h1>Este momento ya es tuyo</h1>
 
             <div class="lead">
-                Aquí está lo que has recibido.
-                <br><br>
-                Tu emoción ya siguió su camino.
+                Y también de quien lo creó
             </div>
 
             {video_block}
@@ -2420,7 +2249,7 @@ def reaccion(recipient_token: str):
             {share_block}
 
             <div class="soft" id="copyMsg">
-                Puedes compartir solo el vídeo que te llegó.
+                Si quieres… puedes compartirlo
             </div>
         </div>
     </body>
@@ -2466,8 +2295,7 @@ def sender_pack(sender_token: str):
         </head>
         <body>
             <div>
-                <h1>La emoción aún no ha vuelto</h1>
-                <p>Esta página se actualizará sola en unos segundos.</p>
+                <h1>…</h1>
             </div>
         </body>
         </html>
@@ -2562,7 +2390,7 @@ def sender_pack(sender_token: str):
     </head>
     <body>
         <div class="card">
-            <h1>ETERNA</h1>
+            <h1>Lo que hiciste ya es para siempre</h1>
 
             <div class="video-stack">
                 {f'''
@@ -2589,7 +2417,7 @@ def sender_pack(sender_token: str):
             </div>
 
             <div class="soft">
-                Lo que creaste y su emoción, juntos.
+                Lo que creaste… volvió a ti
             </div>
         </div>
 
@@ -2652,7 +2480,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V21 TIMELINE LOCKED",
+        "app": "ETERNA V21.1 CLEAN SAFE",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
