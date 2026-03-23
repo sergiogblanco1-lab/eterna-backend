@@ -1,20 +1,20 @@
 import html
 import json
 import os
+import secrets
 import sqlite3
 import urllib.parse
 import uuid
-import secrets
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import boto3
 import stripe
 from botocore.client import Config
-from fastapi import FastAPI, Form, HTTPException, UploadFile, File, Request
-from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse, FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V12 WHATSAPP READY")
+app = FastAPI(title="ETERNA V13 CLEAN FLOW")
 
 # =========================================================
 # CONFIG
@@ -342,19 +342,15 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
-# =========================================================
-# HOME
-# =========================================================
 
-@app.get("/", response_class=HTMLResponse)
-def home():
+def render_create_form() -> str:
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
+        <title>Crear ETERNA</title>
         <style>
             * {{
                 box-sizing: border-box;
@@ -378,7 +374,7 @@ def home():
             }}
             .card {{
                 width: 100%;
-                max-width: 700px;
+                max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 24px;
@@ -386,7 +382,7 @@ def home():
             }}
             h1 {{
                 margin: 0 0 10px 0;
-                font-size: 40px;
+                font-size: 38px;
                 letter-spacing: 2px;
                 text-align: center;
             }}
@@ -423,17 +419,31 @@ def home():
                 color: rgba(255,255,255,0.5);
                 line-height: 1.4;
             }}
-            button {{
-                width: 100%;
+            .buttons {{
+                display: grid;
+                gap: 12px;
                 margin-top: 22px;
+            }}
+            button, .ghost {{
+                width: 100%;
                 padding: 16px 22px;
                 border-radius: 999px;
                 border: 0;
-                background: white;
-                color: black;
                 font-weight: bold;
                 font-size: 15px;
                 cursor: pointer;
+                text-decoration: none;
+                text-align: center;
+                display: inline-block;
+            }}
+            button {{
+                background: white;
+                color: black;
+            }}
+            .ghost {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
             }}
             .footer-note {{
                 margin-top: 18px;
@@ -446,7 +456,7 @@ def home():
     </head>
     <body>
         <div class="card">
-            <h1>ETERNA</h1>
+            <h1>CREAR ETERNA</h1>
 
             <div class="subtitle">
                 Le llega por WhatsApp.<br>
@@ -454,7 +464,7 @@ def home():
                 Y la emoción vuelve a ti.
             </div>
 
-            <form action="/crear-eterna" method="post">
+            <form action="/crear" method="post">
                 <div class="section-title">Tus datos</div>
                 <input name="customer_name" placeholder="Tu nombre" required>
                 <input name="customer_email" type="email" placeholder="Tu email">
@@ -484,32 +494,31 @@ def home():
                     Precio base: {money(BASE_PRICE)}€ · Si añades dinero, se suma una pequeña comisión automática.
                 </div>
 
-                <button type="submit">CREAR MI ETERNA</button>
+                <div class="buttons">
+                    <button type="submit">CONTINUAR</button>
+                    <a class="ghost" href="/">Volver</a>
+                </div>
             </form>
 
             <div class="footer-note">
-                V12 WhatsApp Ready · SQLite real · tokens privados · Stripe preparado · R2 preparado
+                V13 Clean Flow · SQLite real · tokens privados · Stripe preparado · R2 preparado
             </div>
         </div>
     </body>
     </html>
     """
 
-# =========================================================
-# CREAR ETERNA
-# =========================================================
 
-@app.post("/crear-eterna")
-def crear_eterna(
-    customer_name: str = Form(...),
-    customer_email: str = Form(""),
-    customer_phone: str = Form(...),
-    recipient_name: str = Form(...),
-    recipient_phone: str = Form(...),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
-    gift_amount: float = Form(0),
+def create_order_and_redirect(
+    customer_name: str,
+    customer_email: str,
+    customer_phone: str,
+    recipient_name: str,
+    recipient_phone: str,
+    phrase_1: str,
+    phrase_2: str,
+    phrase_3: str,
+    gift_amount: float,
 ):
     order_id = new_order_id()
     recipient_token = new_token()
@@ -597,7 +606,7 @@ def crear_eterna(
                 }
             ],
             success_url=f"{PUBLIC_BASE_URL}/checkout-exito/{order_id}",
-            cancel_url=f"{PUBLIC_BASE_URL}/",
+            cancel_url=f"{PUBLIC_BASE_URL}/crear",
             client_reference_id=order_id,
             metadata={
                 "order_id": order_id,
@@ -609,6 +618,182 @@ def crear_eterna(
         raise HTTPException(status_code=500, detail=f"Error creando checkout Stripe: {e}")
 
 # =========================================================
+# HOME / CREAR
+# =========================================================
+
+@app.get("/", response_class=HTMLResponse)
+def home():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            * {
+                box-sizing: border-box;
+            }
+            html, body {
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }
+            body {
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+            }
+            .card {
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 42px 30px;
+                text-align: center;
+            }
+            h1 {
+                margin: 0 0 10px 0;
+                font-size: 48px;
+                letter-spacing: 3px;
+            }
+            .subtitle {
+                color: rgba(255,255,255,0.80);
+                font-size: 20px;
+                line-height: 1.8;
+                margin-top: 18px;
+            }
+            .soft {
+                margin-top: 24px;
+                color: rgba(255,255,255,0.50);
+                font-size: 15px;
+                line-height: 1.7;
+            }
+            .buttons {
+                display: grid;
+                gap: 14px;
+                margin-top: 30px;
+            }
+            .btn {
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+                text-align: center;
+                display: inline-block;
+            }
+            .primary {
+                background: white;
+                color: black;
+            }
+            .ghost {
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }
+            .footer {
+                margin-top: 20px;
+                color: rgba(255,255,255,0.35);
+                font-size: 12px;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>ETERNA</h1>
+
+            <div class="subtitle">
+                Le llega por WhatsApp.<br>
+                Lo vive en privado.<br>
+                Y la emoción vuelve a ti.
+            </div>
+
+            <div class="soft">
+                Crea una experiencia íntima y simple.<br>
+                Sin login. Sin pasos raros. Sin ruido.
+            </div>
+
+            <div class="buttons">
+                <a class="btn primary" href="/crear">CREAR MI ETERNA</a>
+                <a class="btn ghost" href="/health">Ver health</a>
+            </div>
+
+            <div class="footer">
+                V13 Clean Flow
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@app.get("/crear", response_class=HTMLResponse)
+def crear_get():
+    return render_create_form()
+
+
+@app.post("/crear")
+def crear_post(
+    customer_name: str = Form(...),
+    customer_email: str = Form(""),
+    customer_phone: str = Form(...),
+    recipient_name: str = Form(...),
+    recipient_phone: str = Form(...),
+    phrase_1: str = Form(...),
+    phrase_2: str = Form(...),
+    phrase_3: str = Form(...),
+    gift_amount: float = Form(0),
+):
+    return create_order_and_redirect(
+        customer_name=customer_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        phrase_1=phrase_1,
+        phrase_2=phrase_2,
+        phrase_3=phrase_3,
+        gift_amount=gift_amount,
+    )
+
+
+@app.post("/crear-eterna")
+def crear_eterna_legacy(
+    customer_name: str = Form(...),
+    customer_email: str = Form(""),
+    customer_phone: str = Form(...),
+    recipient_name: str = Form(...),
+    recipient_phone: str = Form(...),
+    phrase_1: str = Form(...),
+    phrase_2: str = Form(...),
+    phrase_3: str = Form(...),
+    gift_amount: float = Form(0),
+):
+    return create_order_and_redirect(
+        customer_name=customer_name,
+        customer_email=customer_email,
+        customer_phone=customer_phone,
+        recipient_name=recipient_name,
+        recipient_phone=recipient_phone,
+        phrase_1=phrase_1,
+        phrase_2=phrase_2,
+        phrase_3=phrase_3,
+        gift_amount=gift_amount,
+    )
+
+# =========================================================
 # CHECKOUT / WEBHOOK STRIPE
 # =========================================================
 
@@ -618,7 +803,6 @@ def checkout_exito(order_id: str):
     is_paid = bool(order["paid"])
 
     refresh = '<meta http-equiv="refresh" content="4">' if not is_paid else ""
-
     body_text = (
         "Pago confirmado. Redirigiendo..."
         if is_paid
@@ -878,7 +1062,7 @@ def resumen(order_id: str):
     """
 
 # =========================================================
-# EXPERIENCIA DEL REGALADO (TOKEN PRIVADO)
+# EXPERIENCIA DEL REGALADO
 # =========================================================
 
 @app.get("/pedido/{recipient_token}", response_class=HTMLResponse)
@@ -1895,7 +2079,7 @@ def sender_pack(sender_token: str):
     """
 
 # =========================================================
-# TEST DEMO OPCIONAL
+# DEMO
 # =========================================================
 
 @app.get("/upload-demo/{order_id}")
@@ -1921,7 +2105,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V12 WHATSAPP READY",
+        "app": "ETERNA V13 CLEAN FLOW",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
@@ -1929,13 +2113,13 @@ def health():
         "orders": get_orders_count(),
         "assets": get_assets_count(),
     }
-    # =========================
-# RUN (RENDER FIX)
-# =========================
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
     import uvicorn
-    import os
 
     port = int(os.environ.get("PORT", 10000))
 
