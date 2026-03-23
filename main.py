@@ -931,19 +931,15 @@ def resumen(order_id: str):
 
     if reaction_ready:
         status_line = "Tu momento ya ha vuelto a ti ❤️"
-
         main_button = f"""
             <a href="{sender_pack_url}" target="_blank"><button class="whatsapp">Abrir mi ETERNA ❤️</button></a>
         """
-
         soft_line = "La emoción ya está contigo."
     else:
         status_line = "Ahora comienza lo importante. Envíalo… y deja que ocurra."
-
         main_button = f"""
             <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
         """
-
         soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
 
     return f"""
@@ -1779,24 +1775,22 @@ def reaccion(recipient_token: str):
     share_block = ""
 
     if gift_video_url:
-    video_url_safe = gift_video_url or PUBLIC_BASE_URL
+        video_url_safe = gift_video_url or PUBLIC_BASE_URL
+        safe_gift_video_url = html.escape(video_url_safe, quote=True)
 
-    safe_gift_video_url = html.escape(video_url_safe, quote=True)
+        share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
+        encoded_share_text = urllib.parse.quote(share_text)
+        whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
 
-    share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
-    encoded_share_text = urllib.parse.quote(share_text)
-
-    whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
-
-    video_block = f"""
-    <div class="video-wrap">
-        <video controls playsinline preload="metadata">
-            <source src="{safe_gift_video_url}" type="video/mp4">
-            <source src="{safe_gift_video_url}" type="video/webm">
-            Tu navegador no puede reproducir este vídeo.
-        </video>
-    </div>
-    """
+        video_block = f"""
+        <div class="video-wrap">
+            <video controls playsinline preload="metadata">
+                <source src="{safe_gift_video_url}" type="video/mp4">
+                <source src="{safe_gift_video_url}" type="video/webm">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+        </div>
+        """
 
         share_block = f"""
         <div class="actions">
@@ -1811,6 +1805,7 @@ def reaccion(recipient_token: str):
                 const shareText = "No sé cómo explicarte esto... solo míralo ❤️";
                 const fullText = shareText + "\\n\\n" + url;
                 const whatsappFallback = "{whatsapp_fallback}";
+                const msg = document.getElementById("copyMsg");
 
                 try {{
                     if (navigator.share) {{
@@ -1834,12 +1829,10 @@ def reaccion(recipient_token: str):
 
                 try {{
                     await navigator.clipboard.writeText(fullText);
-                    const msg = document.getElementById("copyMsg");
                     if (msg) {{
                         msg.textContent = "Enlace copiado ❤️";
                     }}
                 }} catch (err) {{
-                    const msg = document.getElementById("copyMsg");
                     if (msg) {{
                         msg.textContent = "No se pudo compartir ahora.";
                     }}
