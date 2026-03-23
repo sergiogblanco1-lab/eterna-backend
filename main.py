@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V15 SHARE BACK")
+app = FastAPI(title="ETERNA V17 RECIPIENT SHARE STEP")
 
 # =========================================================
 # CONFIG
@@ -930,20 +930,13 @@ def resumen(order_id: str):
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
-        share_link = sender_pack_url
-
-        share_whatsapp = whatsapp_link(
-            order["recipient_phone"],
-            f"Esto también es para ti ❤️\n\nMira este momento:\n{share_link}"
-        )
-
         status_line = "Tu momento ya ha vuelto a ti ❤️"
 
         main_button = f"""
-            <a href="{share_whatsapp}" target="_blank"><button class="whatsapp">Compartir con ella ❤️</button></a>
+            <a href="{sender_pack_url}" target="_blank"><button class="whatsapp">Abrir mi ETERNA ❤️</button></a>
         """
 
-        soft_line = "Lo que ha sentido… ahora también es suyo."
+        soft_line = "La emoción ya está contigo."
     else:
         status_line = "Ahora comienza lo importante. Envíalo… y deja que ocurra."
 
@@ -1781,7 +1774,60 @@ def reaccion(recipient_token: str):
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    return """
+    gift_video_url = (order.get("gift_video_url") or "").strip()
+    share_button = ""
+
+    if gift_video_url:
+        safe_gift_video_url = html.escape(gift_video_url, quote=True)
+        whatsapp_fallback = f"https://wa.me/?text={urllib.parse.quote('Quiero enseñarte esto ❤️\\n\\n' + gift_video_url)}"
+
+        share_button = f"""
+        <div class="actions">
+            <button class="btn primary" onclick="shareGiftVideo()">Compartir lo que recibí ❤️</button>
+        </div>
+
+        <script>
+            async function shareGiftVideo() {{
+                const url = "{safe_gift_video_url}";
+                const whatsappFallback = "{whatsapp_fallback}";
+
+                try {{
+                    if (navigator.share) {{
+                        await navigator.share({{
+                            title: "ETERNA",
+                            text: "Quiero enseñarte esto ❤️",
+                            url: url
+                        }});
+                        return;
+                    }}
+                }} catch (err) {{
+                    if (String(err).toLowerCase().includes("abort")) {{
+                        return;
+                    }}
+                }}
+
+                try {{
+                    window.location.href = whatsappFallback;
+                    return;
+                }} catch (err) {{}}
+
+                try {{
+                    await navigator.clipboard.writeText(url);
+                    const msg = document.getElementById("copyMsg");
+                    if (msg) {{
+                        msg.textContent = "Enlace copiado ❤️";
+                    }}
+                }} catch (err) {{
+                    const msg = document.getElementById("copyMsg");
+                    if (msg) {{
+                        msg.textContent = "No se pudo compartir ahora.";
+                    }}
+                }}
+            }}
+        </script>
+        """
+
+    return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
@@ -1789,12 +1835,12 @@ def reaccion(recipient_token: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            html, body {
+            html, body {{
                 margin: 0;
                 min-height: 100%;
                 background: #000;
-            }
-            body {
+            }}
+            body {{
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
@@ -1806,32 +1852,50 @@ def reaccion(recipient_token: str):
                 justify-content: center;
                 padding: 24px;
                 text-align: center;
-            }
-            .card {
+            }}
+            .card {{
                 width: 100%;
                 max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
                 padding: 42px 30px;
-            }
-            h1 {
+            }}
+            h1 {{
                 margin: 0 0 18px 0;
                 font-size: 40px;
                 letter-spacing: 1px;
-            }
-            .lead {
+            }}
+            .lead {{
                 color: rgba(255,255,255,0.84);
                 line-height: 1.8;
                 font-size: 20px;
                 margin: 0;
-            }
-            .soft {
+            }}
+            .actions {{
+                display: grid;
+                gap: 12px;
+                margin-top: 28px;
+            }}
+            .btn {{
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+            }}
+            .primary {{
+                background: white;
+                color: black;
+            }}
+            .soft {{
                 margin-top: 24px;
                 color: rgba(255,255,255,0.42);
                 font-size: 14px;
                 line-height: 1.7;
-            }
+            }}
         </style>
     </head>
     <body>
@@ -1846,7 +1910,9 @@ def reaccion(recipient_token: str):
                 es haberlo sentido.
             </div>
 
-            <div class="soft">
+            {share_button}
+
+            <div class="soft" id="copyMsg">
                 Quizá alguien te enseñe lo que acabas de provocar.
             </div>
         </div>
@@ -1902,8 +1968,6 @@ def sender_pack(sender_token: str):
 
     safe_gift = html.escape(gift_video_url or "", quote=True)
     safe_reaction = html.escape(reaction_video_url, quote=True)
-    share_url = sender_pack_url_from_order(order)
-    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote('Mira este momento ❤️ ' + share_url)}"
 
     return f"""
     <!DOCTYPE html>
@@ -2018,7 +2082,6 @@ def sender_pack(sender_token: str):
             </div>
 
             <div class="buttons">
-                <a class="btn primary" href="{whatsapp_share}" target="_blank">Compartir emoción ❤️</a>
                 <a class="btn ghost" href="/">Crear otra ETERNA</a>
             </div>
 
@@ -2086,7 +2149,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V15 SHARE BACK",
+        "app": "ETERNA V17 RECIPIENT SHARE STEP",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
