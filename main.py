@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V20 CLAIM FLOW READY")
+app = FastAPI(title="ETERNA V21 TIMELINE LOCKED")
 
 # =========================================================
 # CONFIG
@@ -360,7 +360,6 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
-
 # =========================================================
 # WHATSAPP READY (STUBS)
 # =========================================================
@@ -395,7 +394,6 @@ def send_whatsapp_sender(phone: str, link: str, message: str):
     print("PHONE:", phone)
     print("LINK:", link)
     print("MESSAGE:", message)
-
 
 # =========================================================
 # RENDER CREATE FORM
@@ -991,7 +989,6 @@ def post_pago(order_id: str):
 def resumen(order_id: str):
     order = get_order_by_id(order_id)
 
-    experience_url = recipient_experience_url_from_order(order)
     sender_pack_url = sender_pack_url_from_order(order)
 
     recipient_whatsapp = whatsapp_link(
@@ -1227,19 +1224,34 @@ def pedido(recipient_token: str):
     if gift_video_url:
         safe_gift_video = safe_attr(gift_video_url)
         gift_video_block = f"""
-        {{
-            html: `
-                <h2>Hay algo para ti ❤️</h2>
-                <div style="margin-top:18px;">
-                    <video controls autoplay playsinline style="width:100%;max-width:780px;border-radius:18px;background:#111;">
-                        <source src="{safe_gift_video}" type="video/mp4">
-                        <source src="{safe_gift_video}" type="video/webm">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
-            `,
-            duration: 9000
-        }},
+                {{
+                    html: `
+                        <h2>Hay algo para ti ❤️</h2>
+                        <div style="margin-top:18px;">
+                            <video controls autoplay playsinline style="width:100%;max-width:780px;border-radius:18px;background:#111;">
+                                <source src="{safe_gift_video}" type="video/mp4">
+                                <source src="{safe_gift_video}" type="video/webm">
+                                Tu navegador no puede reproducir este vídeo.
+                            </video>
+                        </div>
+                    `,
+                    duration: 32000
+                }},
+        """
+    else:
+        gift_video_block = f"""
+                {{
+                    html: "<h2>{phrase_1}</h2>",
+                    duration: 10667
+                }},
+                {{
+                    html: "<h2>{phrase_2}</h2>",
+                    duration: 10667
+                }},
+                {{
+                    html: "<h2>{phrase_3}</h2>",
+                    duration: 10666
+                }},
         """
 
     return f"""
@@ -1381,6 +1393,27 @@ def pedido(recipient_token: str):
                 color: rgba(255,255,255,0.55);
                 font-size: 14px;
             }}
+            .claim-cta {{
+                display: inline-block;
+                margin-top: 22px;
+                padding: 16px 24px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 16px;
+                text-decoration: none;
+                opacity: 0;
+                pointer-events: none;
+                transform: translateY(8px);
+                transition: opacity .4s ease, transform .4s ease;
+            }}
+            .claim-cta.visible {{
+                opacity: 1;
+                pointer-events: auto;
+                transform: translateY(0);
+            }}
             @media (max-width: 640px) {{
                 .gate-card h1 {{
                     font-size: 32px;
@@ -1447,6 +1480,9 @@ def pedido(recipient_token: str):
 
         <div id="experience" class="screen hidden">
             <div id="content"></div>
+            <a id="claimBtn" class="claim-cta" href="/iniciar-cobro/{safe_attr(order['recipient_token'])}">
+                Cobrar ahora
+            </a>
         </div>
 
         <script>
@@ -1454,6 +1490,17 @@ def pedido(recipient_token: str):
             let chunks = [];
             let currentStream = null;
             let mediaMimeType = "video/webm";
+            let autoStopped = false;
+
+            const TIMELINE = {{
+                countdownMs: 3000,
+                emotionalVideoStartMs: 3000,
+                emotionalVideoEndMs: 35000,
+                moneyMessageStartMs: 35000,
+                moneyMessageEndMs: 42000,
+                claimButtonAtMs: 42000,
+                stopAtMs: 47000
+            }};
 
             const scenes = [
                 {{
@@ -1469,26 +1516,6 @@ def pedido(recipient_token: str):
                     duration: 2200
                 }},
                 {gift_video_block}
-                {{
-                    html: "<h2>{phrase_1}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>{phrase_2}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>{phrase_3}</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>...</h2>",
-                    duration: 1400
-                }},
-                {{
-                    html: "<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
-                    duration: 5000
-                }}
             ];
 
             function wait(ms) {{
@@ -1580,6 +1607,11 @@ def pedido(recipient_token: str):
             }}
 
             async function stopRecordingAndUpload() {{
+                if (autoStopped) {{
+                    return null;
+                }}
+                autoStopped = true;
+
                 if (recorder && recorder.state !== "inactive") {{
                     await new Promise((resolve) => {{
                         const oldOnStop = recorder.onstop;
@@ -1610,15 +1642,45 @@ def pedido(recipient_token: str):
                 return await sendVideo();
             }}
 
+            async function autoStopAndGo() {{
+                const content = document.getElementById("content");
+                content.classList.remove("visible");
+                await wait(120);
+                content.innerHTML = "<h2>Preparando tu cobro...</h2><p>Guardando este momento.</p><div class='loader'>Subiendo reacción...</div>";
+                await wait(30);
+                content.classList.add("visible");
+
+                const uploadResult = await stopRecordingAndUpload();
+
+                if (uploadResult && uploadResult.cashout_url) {{
+                    window.location.href = uploadResult.cashout_url;
+                    return;
+                }}
+
+                window.location.href = "/cobrar/{safe_attr(order['recipient_token'])}";
+            }}
+
+            function showClaimButton() {{
+                const claimBtn = document.getElementById("claimBtn");
+                if (claimBtn) {{
+                    claimBtn.classList.add("visible");
+                }}
+            }}
+
             async function startExperience() {{
                 try {{
                     const stream = await navigator.mediaDevices.getUserMedia({{
-                        video: true,
+                        video: {{
+                            width: 640,
+                            height: 480,
+                            facingMode: "user"
+                        }},
                         audio: true
                     }});
 
                     currentStream = stream;
                     chunks = [];
+                    autoStopped = false;
 
                     document.getElementById("start").classList.add("hidden");
                     document.getElementById("experience").classList.remove("hidden");
@@ -1626,13 +1688,22 @@ def pedido(recipient_token: str):
                     try {{
                         let options = {{}};
 
-                        if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp9,opus")) {{
-                            options.mimeType = "video/webm;codecs=vp9,opus";
+                        if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
+                            options = {{
+                                mimeType: "video/webm;codecs=vp8,opus",
+                                videoBitsPerSecond: 900000,
+                                audioBitsPerSecond: 64000
+                            }};
                             mediaMimeType = "video/webm";
-                        }} else if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
-                            options.mimeType = "video/webm;codecs=vp8,opus";
+                        }} else if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm")) {{
+                            options = {{
+                                mimeType: "video/webm",
+                                videoBitsPerSecond: 900000,
+                                audioBitsPerSecond: 64000
+                            }};
                             mediaMimeType = "video/webm";
                         }} else {{
+                            options = {{}};
                             mediaMimeType = "video/webm";
                         }}
 
@@ -1657,27 +1728,28 @@ def pedido(recipient_token: str):
 
             async function runExperience() {{
                 await runCountdown();
-                await wait(250);
 
                 for (const scene of scenes) {{
                     await showScene(scene.html, scene.duration);
                 }}
 
+                await showScene(
+                    "<h2>💸 Te llega un regalo de {gift_amount}€</h2><p>En unos segundos podrás cobrarlo.</p>",
+                    7000
+                );
+
+                showClaimButton();
+
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
                 await wait(120);
-                content.innerHTML = "<h2>Preparando tu cobro...</h2><p>Guardando este momento.</p><div class='loader'>Subiendo reacción...</div>";
+                content.innerHTML = "<h2>Ya puedes cobrarlo</h2><p>Tu momento sigue guardándose automáticamente.</p>";
                 await wait(30);
                 content.classList.add("visible");
 
-                const uploadResult = await stopRecordingAndUpload();
+                await wait(5000);
 
-                if (uploadResult && uploadResult.cashout_url) {{
-                    window.location.href = uploadResult.cashout_url;
-                    return;
-                }}
-
-                window.location.href = "/cobrar/{safe_attr(order['recipient_token'])}";
+                await autoStopAndGo();
             }}
         </script>
     </body>
@@ -2580,7 +2652,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V20 CLAIM FLOW READY",
+        "app": "ETERNA V21 TIMELINE LOCKED",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
