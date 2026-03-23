@@ -800,39 +800,145 @@ def crear_eterna_legacy(
 @app.get("/checkout-exito/{order_id}", response_class=HTMLResponse)
 def checkout_exito(order_id: str):
     order = get_order_by_id(order_id)
-    is_paid = bool(order["paid"])
 
-    refresh = '<meta http-equiv="refresh" content="4">' if not is_paid else ""
-    body_text = (
-        "Pago confirmado. Redirigiendo..."
-        if is_paid
-        else "Estamos confirmando tu pago. Esta página se actualizará sola."
+    if not order["paid"]:
+        return f"""
+        <!DOCTYPE html>
+        <html lang="es">
+        <head>
+            <meta charset="UTF-8">
+            <meta http-equiv="refresh" content="4">
+            <meta name="viewport" content="width=device-width, initial-scale=1.0">
+            <title>Confirmando pago</title>
+            <style>
+                html, body {{
+                    margin: 0;
+                    min-height: 100%;
+                    background: #000;
+                }}
+                body {{
+                    min-height: 100vh;
+                    background:
+                        radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                        linear-gradient(180deg, #050505 0%, #000000 100%);
+                    color: white;
+                    font-family: Arial, sans-serif;
+                    display: flex;
+                    justify-content: center;
+                    align-items: center;
+                    padding: 24px;
+                    text-align: center;
+                }}
+                .card {{
+                    width: 100%;
+                    max-width: 720px;
+                    background: rgba(255,255,255,0.04);
+                    border: 1px solid rgba(255,255,255,0.08);
+                    border-radius: 28px;
+                    padding: 40px 28px;
+                }}
+                h1 {{
+                    margin: 0 0 14px 0;
+                    font-size: 42px;
+                    letter-spacing: 2px;
+                }}
+                p {{
+                    color: rgba(255,255,255,0.78);
+                    line-height: 1.7;
+                    font-size: 18px;
+                    margin: 0;
+                }}
+                .soft {{
+                    margin-top: 18px;
+                    color: rgba(255,255,255,0.42);
+                    font-size: 13px;
+                }}
+                a {{
+                    color: white;
+                }}
+            </style>
+        </head>
+        <body>
+            <div class="card">
+                <h1>ETERNA</h1>
+                <p>Estamos confirmando tu pago.</p>
+                <div class="soft">
+                    Esta página se actualizará sola.<br>
+                    <a href="/checkout-exito/{order_id}">Actualizar ahora</a>
+                </div>
+            </div>
+        </body>
+        </html>
+        """
+
+    experience_url = recipient_experience_url_from_order(order)
+
+    wa_link = whatsapp_link(
+        order["recipient_phone"],
+        (
+            f"Hola {order['recipient_name']} ❤️\n\n"
+            f"{order['sender_name']} te ha enviado algo muy especial.\n\n"
+            f"Ábrelo aquí:\n{experience_url}"
+        ),
     )
-    target = f"/post-pago/{order_id}" if is_paid else f"/checkout-exito/{order_id}"
 
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        {refresh}
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Confirmando pago</title>
+        <title>ETERNA enviada</title>
         <style>
-            body {{
+            html, body {{
                 margin: 0;
-                min-height: 100vh;
+                min-height: 100%;
                 background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
                 display: flex;
-                align-items: center;
                 justify-content: center;
-                text-align: center;
+                align-items: center;
                 padding: 24px;
+                text-align: center;
             }}
             .card {{
-                max-width: 680px;
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 42px 30px;
+            }}
+            h1 {{
+                margin: 0 0 18px 0;
+                font-size: 42px;
+                letter-spacing: 2px;
+            }}
+            .lead {{
+                color: rgba(255,255,255,0.84);
+                line-height: 1.8;
+                font-size: 20px;
+                margin: 0;
+            }}
+            .soft {{
+                margin-top: 22px;
+                color: rgba(255,255,255,0.46);
+                font-size: 14px;
+                line-height: 1.7;
+            }}
+            .loading {{
+                margin-top: 26px;
+                color: rgba(255,255,255,0.32);
+                font-size: 13px;
+                letter-spacing: 1px;
+                text-transform: uppercase;
             }}
             a {{
                 color: white;
@@ -841,10 +947,33 @@ def checkout_exito(order_id: str):
     </head>
     <body>
         <div class="card">
-            <h1>ETERNA</h1>
-            <p>{safe_text(body_text)}</p>
-            <p><a href="{target}">Continuar</a></p>
+            <h1>Tu ETERNA ya está en camino ❤️</h1>
+
+            <p class="lead">
+                Tu mensaje ya ha sido preparado para esa persona.
+                <br><br>
+                No tiene por qué abrirlo ahora.
+                Lo hará cuando sea su momento.
+                <br><br>
+                Cuando lo viva, tendrás noticias nuestras.
+            </p>
+
+            <div class="soft">
+                En unos segundos se abrirá WhatsApp con el mensaje listo.
+                <br>
+                Si no se abre solo, <a href="{wa_link}">pulsa aquí</a>.
+            </div>
+
+            <div class="loading">
+                Abriendo WhatsApp...
+            </div>
         </div>
+
+        <script>
+            setTimeout(() => {{
+                window.location.href = "{wa_link}";
+            }}, 3500);
+        </script>
     </body>
     </html>
     """
