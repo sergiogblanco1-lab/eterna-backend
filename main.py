@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V19 WHATSAPP READY")
+app = FastAPI(title="ETERNA V20 CLAIM FLOW READY")
 
 # =========================================================
 # CONFIG
@@ -166,6 +166,13 @@ def safe_attr(v: str) -> str:
 
 def money(v: float) -> str:
     return f"{float(v):.2f}"
+
+
+def format_amount_display(value) -> str:
+    try:
+        return f"{float(value):.2f} €".replace(".", ",")
+    except Exception:
+        return "0,00 €"
 
 
 def normalize_phone(p: str) -> str:
@@ -1786,6 +1793,10 @@ def cobrar(recipient_token: str):
     if not reaction_exists(order):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
+    recipient_name = safe_text(order["recipient_name"])
+    sender_name = safe_text(order["sender_name"])
+    amount_text = format_amount_display(order["gift_amount"])
+
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -1794,6 +1805,9 @@ def cobrar(recipient_token: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Cobrar regalo</title>
         <style>
+            * {{
+                box-sizing: border-box;
+            }}
             html, body {{
                 margin: 0;
                 min-height: 100%;
@@ -1802,7 +1816,7 @@ def cobrar(recipient_token: str):
             body {{
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
@@ -1820,59 +1834,131 @@ def cobrar(recipient_token: str):
                 padding: 40px 28px;
                 text-align: center;
             }}
+            .eyebrow {{
+                font-size: 12px;
+                letter-spacing: 0.22em;
+                text-transform: uppercase;
+                color: rgba(255,255,255,0.50);
+                margin-bottom: 14px;
+            }}
+            h1 {{
+                margin: 0 0 16px 0;
+                font-size: 40px;
+                line-height: 1.15;
+            }}
+            .lead {{
+                max-width: 520px;
+                margin: 0 auto;
+                color: rgba(255,255,255,0.84);
+                font-size: 18px;
+                line-height: 1.8;
+            }}
             .money-box {{
-                margin-top: 22px;
-                padding: 20px;
-                border-radius: 18px;
+                margin-top: 24px;
+                padding: 24px 20px;
+                border-radius: 22px;
                 background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.06);
+                border: 1px solid rgba(255,255,255,0.08);
             }}
             .money-label {{
                 font-size: 12px;
                 text-transform: uppercase;
                 letter-spacing: 1.2px;
                 color: rgba(255,255,255,0.50);
-                margin-bottom: 6px;
+                margin-bottom: 8px;
             }}
             .money-value {{
-                font-size: 36px;
+                font-size: 42px;
                 font-weight: bold;
+                line-height: 1;
+                margin-bottom: 10px;
+            }}
+            .money-sub {{
+                color: rgba(255,255,255,0.72);
+                font-size: 14px;
+                line-height: 1.6;
+            }}
+            .info-box {{
+                margin-top: 18px;
+                padding: 18px;
+                border-radius: 18px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.06);
+                color: rgba(255,255,255,0.80);
+                font-size: 14px;
+                line-height: 1.7;
+            }}
+            .actions {{
+                display: grid;
+                gap: 12px;
+                margin-top: 24px;
             }}
             .btn {{
                 display: inline-block;
                 width: 100%;
-                margin-top: 24px;
                 padding: 16px 22px;
                 border-radius: 999px;
                 border: 0;
-                background: white;
-                color: black;
                 font-weight: bold;
                 font-size: 15px;
                 cursor: pointer;
                 text-decoration: none;
+                text-align: center;
+            }}
+            .btn-primary {{
+                background: white;
+                color: black;
+            }}
+            .btn-secondary {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
             }}
             .soft {{
-                margin-top: 18px;
+                margin-top: 20px;
                 color: rgba(255,255,255,0.46);
                 font-size: 14px;
+                line-height: 1.7;
             }}
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>Cobra tu regalo 💸</h1>
-            <p>
-                Tu momento ya ha quedado guardado.<br>
-                Ahora puedes completar el proceso para cobrar tu regalo.
-            </p>
-            <div class="money-box">
-                <div class="money-label">Importe recibido</div>
-                <div class="money-value">{money(order["gift_amount"])}€</div>
+            <div class="eyebrow">ETERNA</div>
+
+            <h1>Tu regalo también tiene valor</h1>
+
+            <div class="lead">
+                {recipient_name}, tu emoción ya siguió su camino.
+                <br><br>
+                Ahora puedes continuar con tu cobro de forma segura.
             </div>
-            <a class="btn" href="/iniciar-cobro/{safe_attr(recipient_token)}">Cobrar ahora</a>
+
+            <div class="money-box">
+                <div class="money-label">Importe disponible</div>
+                <div class="money-value">{amount_text}</div>
+                <div class="money-sub">
+                    Enviado por {sender_name}
+                </div>
+            </div>
+
+            <div class="info-box">
+                Este es el siguiente paso de tu experiencia.
+                Aquí dejaremos conectado el cobro real de forma simple, limpia y segura.
+            </div>
+
+            <div class="actions">
+                <a class="btn btn-primary" href="/iniciar-cobro/{safe_attr(recipient_token)}">
+                    Continuar con el cobro
+                </a>
+
+                <a class="btn btn-secondary" href="/reaccion/{safe_attr(recipient_token)}">
+                    Ver cierre
+                </a>
+            </div>
+
             <div class="soft">
-                Cuando termines, la emoción seguirá su camino.
+                Gestión segura · ETERNA
             </div>
         </div>
     </body>
@@ -1880,10 +1966,172 @@ def cobrar(recipient_token: str):
     """
 
 
-@app.get("/iniciar-cobro/{recipient_token}")
+@app.get("/iniciar-cobro/{recipient_token}", response_class=HTMLResponse)
 def iniciar_cobro(recipient_token: str):
-    get_order_by_recipient_token_or_404(recipient_token)
-    return RedirectResponse(url=f"/cobro-completado/{recipient_token}", status_code=303)
+    order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if not reaction_exists(order):
+        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
+
+    amount_text = format_amount_display(order["gift_amount"])
+    recipient_name = safe_text(order["recipient_name"])
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Iniciar cobro</title>
+        <style>
+            * {{
+                box-sizing: border-box;
+            }}
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 40px 28px;
+                text-align: center;
+            }}
+            .eyebrow {{
+                font-size: 12px;
+                letter-spacing: 0.22em;
+                text-transform: uppercase;
+                color: rgba(255,255,255,0.50);
+                margin-bottom: 14px;
+            }}
+            h1 {{
+                margin: 0 0 16px 0;
+                font-size: 38px;
+                line-height: 1.15;
+            }}
+            .lead {{
+                max-width: 540px;
+                margin: 0 auto;
+                color: rgba(255,255,255,0.84);
+                font-size: 17px;
+                line-height: 1.8;
+            }}
+            .amount-box {{
+                margin-top: 24px;
+                padding: 24px 20px;
+                border-radius: 22px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.08);
+            }}
+            .amount-label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+                color: rgba(255,255,255,0.50);
+                margin-bottom: 8px;
+            }}
+            .amount-value {{
+                font-size: 40px;
+                font-weight: bold;
+                line-height: 1;
+            }}
+            .box {{
+                margin-top: 18px;
+                padding: 18px;
+                border-radius: 18px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.06);
+                color: rgba(255,255,255,0.80);
+                font-size: 14px;
+                line-height: 1.7;
+            }}
+            .actions {{
+                display: grid;
+                gap: 12px;
+                margin-top: 24px;
+            }}
+            .btn {{
+                display: inline-block;
+                width: 100%;
+                padding: 16px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+                text-decoration: none;
+                text-align: center;
+            }}
+            .btn-primary {{
+                background: white;
+                color: black;
+            }}
+            .btn-secondary {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+            .soft {{
+                margin-top: 18px;
+                color: rgba(255,255,255,0.46);
+                font-size: 14px;
+                line-height: 1.7;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="eyebrow">ETERNA</div>
+
+            <h1>Tu cobro estará listo aquí</h1>
+
+            <div class="lead">
+                {recipient_name}, esta parte ya ha quedado preparada para conectar el cobro real.
+            </div>
+
+            <div class="amount-box">
+                <div class="amount-label">Importe preparado</div>
+                <div class="amount-value">{amount_text}</div>
+            </div>
+
+            <div class="box">
+                El siguiente paso será enlazar aquí el onboarding seguro del cobro.
+                De momento dejamos la estructura lista para no romper el flujo.
+            </div>
+
+            <div class="actions">
+                <a class="btn btn-primary" href="/cobro-completado/{safe_attr(recipient_token)}">
+                    Confirmar y continuar
+                </a>
+
+                <a class="btn btn-secondary" href="/cobrar/{safe_attr(recipient_token)}">
+                    Volver
+                </a>
+            </div>
+
+            <div class="soft">
+                Próximo bloque: Stripe Connect Express
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 
 @app.get("/cobro-completado/{recipient_token}")
@@ -2332,7 +2580,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V19 WHATSAPP READY",
+        "app": "ETERNA V20 CLAIM FLOW READY",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
