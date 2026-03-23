@@ -1775,27 +1775,45 @@ def reaccion(recipient_token: str):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
     gift_video_url = (order.get("gift_video_url") or "").strip()
-    share_button = ""
+    video_block = ""
+    share_block = ""
 
     if gift_video_url:
         safe_gift_video_url = html.escape(gift_video_url, quote=True)
-        whatsapp_fallback = f"https://wa.me/?text={urllib.parse.quote('Quiero enseñarte esto ❤️\\n\\n' + gift_video_url)}"
+        video_url_safe = gift_video_url or PUBLIC_BASE_URL
+        share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
+        encoded_share_text = urllib.parse.quote(share_text)
+        whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
 
-        share_button = f"""
+        video_block = f"""
+        <div class="video-wrap">
+            <video controls playsinline preload="metadata">
+                <source src="{safe_gift_video_url}" type="video/mp4">
+                <source src="{safe_gift_video_url}" type="video/webm">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
+        </div>
+        """
+
+        share_block = f"""
         <div class="actions">
-            <button class="btn primary" onclick="shareGiftVideo()">Compartir lo que recibí ❤️</button>
+            <button class="btn primary" type="button" onclick="shareGiftVideo()">
+                Compartir
+            </button>
         </div>
 
         <script>
             async function shareGiftVideo() {{
                 const url = "{safe_gift_video_url}";
+                const shareText = "No sé cómo explicarte esto... solo míralo ❤️";
+                const fullText = shareText + "\\n\\n" + url;
                 const whatsappFallback = "{whatsapp_fallback}";
 
                 try {{
                     if (navigator.share) {{
                         await navigator.share({{
                             title: "ETERNA",
-                            text: "Quiero enseñarte esto ❤️",
+                            text: shareText,
                             url: url
                         }});
                         return;
@@ -1812,7 +1830,7 @@ def reaccion(recipient_token: str):
                 }} catch (err) {{}}
 
                 try {{
-                    await navigator.clipboard.writeText(url);
+                    await navigator.clipboard.writeText(fullText);
                     const msg = document.getElementById("copyMsg");
                     if (msg) {{
                         msg.textContent = "Enlace copiado ❤️";
@@ -1872,10 +1890,19 @@ def reaccion(recipient_token: str):
                 font-size: 20px;
                 margin: 0;
             }}
+            .video-wrap {{
+                margin-top: 26px;
+            }}
+            video {{
+                width: 100%;
+                border-radius: 18px;
+                background: #111;
+                display: block;
+            }}
             .actions {{
                 display: grid;
                 gap: 12px;
-                margin-top: 28px;
+                margin-top: 22px;
             }}
             .btn {{
                 width: 100%;
@@ -1903,17 +1930,17 @@ def reaccion(recipient_token: str):
             <h1>Tu momento ya ha sido enviado ❤️</h1>
 
             <div class="lead">
-                No necesitas hacer nada más.
+                Aquí está lo que has recibido.
                 <br><br>
-                A veces, lo importante no es verlo…
-                <br>
-                es haberlo sentido.
+                Tu emoción ya siguió su camino.
             </div>
 
-            {share_button}
+            {video_block}
+
+            {share_block}
 
             <div class="soft" id="copyMsg">
-                Quizá alguien te enseñe lo que acabas de provocar.
+                Puedes compartir solo el vídeo que te llegó.
             </div>
         </div>
     </body>
