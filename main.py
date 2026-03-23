@@ -1779,12 +1779,13 @@ def reaccion(recipient_token: str):
     share_block = ""
 
     if gift_video_url:
-        safe_gift_video_url = html.escape(gift_video_url, quote=True)
-        video_url_safe = gift_video_url or PUBLIC_BASE_URL
-        share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
-        encoded_share_text = urllib.parse.quote(share_text)
-        whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
+    video_url_safe = gift_video_url or PUBLIC_BASE_URL
 
+share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
+encoded_share_text = urllib.parse.quote(share_text)
+
+whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
+safe_gift_video_url = html.escape(video_url_safe, quote=True)
         video_block = f"""
         <div class="video-wrap">
             <video controls playsinline preload="metadata">
