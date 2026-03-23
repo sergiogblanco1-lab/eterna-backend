@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V17 RECIPIENT SHARE STEP")
+app = FastAPI(title="ETERNA V19 WHATSAPP READY")
 
 # =========================================================
 # CONFIG
@@ -42,7 +42,11 @@ R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 
 MAX_VIDEO_SIZE = 30 * 1024 * 1024  # 30 MB
-ALLOWED_VIDEO_TYPES = {"video/webm", "video/mp4"}
+ALLOWED_VIDEO_TYPES = {
+    "video/webm",
+    "video/mp4",
+    "application/octet-stream",
+}
 
 DATA_FOLDER = Path("data")
 DATA_FOLDER.mkdir(parents=True, exist_ok=True)
@@ -156,14 +160,21 @@ def safe_text(v: str) -> str:
     return html.escape(str(v or "").strip())
 
 
+def safe_attr(v: str) -> str:
+    return html.escape(str(v or "").strip(), quote=True)
+
+
 def money(v: float) -> str:
     return f"{float(v):.2f}"
 
 
 def normalize_phone(p: str) -> str:
-    raw = "".join(ch for ch in str(p or "") if ch.isdigit() or ch == "+")
+    raw = str(p or "").strip()
+    raw = raw.replace(" ", "").replace("-", "").replace("(", "").replace(")", "")
     if raw.startswith("00"):
-        raw = "+" + raw[2:]
+        raw = raw[2:]
+    if raw.startswith("+"):
+        raw = raw[1:]
     return "".join(ch for ch in raw if ch.isdigit())
 
 
@@ -342,6 +353,46 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
+
+# =========================================================
+# WHATSAPP READY (STUBS)
+# =========================================================
+
+def build_recipient_message(order: dict) -> str:
+    return (
+        f"Hola {order['recipient_name']} ❤️\n\n"
+        f"Alguien ha preparado algo para ti.\n\n"
+        f"No lo abras en cualquier momento.\n"
+        f"Ábrelo cuando estés tranquila.\n\n"
+        f"Aquí:\n{recipient_experience_url_from_order(order)}"
+    )
+
+
+def build_sender_ready_message(order: dict) -> str:
+    return (
+        f"Tu ETERNA está lista ❤️\n\n"
+        f"Ya puedes ver lo que ha pasado.\n\n"
+        f"Aquí:\n{sender_pack_url_from_order(order)}"
+    )
+
+
+def send_whatsapp_recipient(phone: str, link: str, message: str):
+    print("WA RECIPIENT READY")
+    print("PHONE:", phone)
+    print("LINK:", link)
+    print("MESSAGE:", message)
+
+
+def send_whatsapp_sender(phone: str, link: str, message: str):
+    print("WA SENDER READY")
+    print("PHONE:", phone)
+    print("LINK:", link)
+    print("MESSAGE:", message)
+
+
+# =========================================================
+# RENDER CREATE FORM
+# =========================================================
 
 def render_create_form() -> str:
     return f"""
@@ -526,9 +577,9 @@ def create_order_and_redirect(
         INSERT INTO senders (name, email, phone, created_at)
         VALUES (?, ?, ?, ?)
     """, (
-        customer_name.strip(),
-        customer_email.strip(),
-        customer_phone.strip(),
+        (customer_name or "").strip(),
+        (customer_email or "").strip(),
+        (customer_phone or "").strip(),
         created_at,
     ))
     sender_id = cur.lastrowid
@@ -537,8 +588,8 @@ def create_order_and_redirect(
         INSERT INTO recipients (name, phone, created_at)
         VALUES (?, ?, ?)
     """, (
-        recipient_name.strip(),
-        recipient_phone.strip(),
+        (recipient_name or "").strip(),
+        (recipient_phone or "").strip(),
         created_at,
     ))
     recipient_id = cur.lastrowid
@@ -557,7 +608,7 @@ def create_order_and_redirect(
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
-        phrase_1.strip(), phrase_2.strip(), phrase_3.strip(),
+        (phrase_1 or "").strip(), (phrase_2 or "").strip(), (phrase_3 or "").strip(),
         gift_amount, gift_commission, total_amount,
         0, 0, 0, 0, 0,
         None, None,
@@ -571,6 +622,16 @@ def create_order_and_redirect(
 
     if not STRIPE_SECRET_KEY:
         update_order(order_id, paid=1, stripe_payment_status="test_no_stripe")
+        order = get_order_by_id(order_id)
+        try:
+            send_whatsapp_recipient(
+                phone=order["recipient_phone"],
+                link=recipient_experience_url_from_order(order),
+                message=build_recipient_message(order),
+            )
+        except Exception as e:
+            print("WA recipient stub error:", e)
+
         return RedirectResponse(url=f"/post-pago/{order_id}", status_code=303)
 
     try:
@@ -890,6 +951,16 @@ async def stripe_webhook(request: Request):
                 stripe_session_id=session.get("id"),
             )
 
+            try:
+                order = get_order_by_id(order_id)
+                send_whatsapp_recipient(
+                    phone=order["recipient_phone"],
+                    link=recipient_experience_url_from_order(order),
+                    message=build_recipient_message(order),
+                )
+            except Exception as e:
+                print("WA recipient stub error:", e)
+
     return {"received": True}
 
 # =========================================================
@@ -918,29 +989,56 @@ def resumen(order_id: str):
 
     recipient_whatsapp = whatsapp_link(
         order["recipient_phone"],
-        (
-            f"Hola {order['recipient_name']} ❤️\n\n"
-            f"{order['sender_name']} te ha preparado algo.\n\n"
-            f"No lo abras en cualquier momento.\n"
-            f"Ábrelo cuando estés tranquila.\n\n"
-            f"Aquí:\n{experience_url}"
-        ),
+        build_recipient_message(order),
     )
 
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
         status_line = "Tu momento ya ha vuelto a ti ❤️"
+        soft_line = "Tu enlace privado ya está listo."
         main_button = f"""
-            <a href="{sender_pack_url}" target="_blank"><button class="whatsapp">Abrir mi ETERNA ❤️</button></a>
+            <a href="{safe_attr(sender_pack_url)}" target="_blank" rel="noopener noreferrer">
+                <button class="primary">Abrir mi ETERNA ❤️</button>
+            </a>
         """
-        soft_line = "La emoción ya está contigo."
+        extra_block = f"""
+            <div class="private-link-box">
+                <div class="private-link-label">Enlace privado</div>
+                <div class="private-link-url">{safe_text(sender_pack_url)}</div>
+            </div>
+
+            <div class="buttons secondary-buttons">
+                <button class="ghost" type="button" onclick="copySenderLink()">
+                    Copiar enlace
+                </button>
+            </div>
+
+            <script>
+                async function copySenderLink() {{
+                    const value = "{safe_attr(sender_pack_url)}";
+                    const msg = document.getElementById("copyMsg");
+
+                    try {{
+                        await navigator.clipboard.writeText(value);
+                        if (msg) msg.textContent = "Enlace copiado ❤️";
+                    }} catch (err) {{
+                        if (msg) msg.textContent = "No se pudo copiar ahora.";
+                    }}
+                }}
+            </script>
+        """
     else:
         status_line = "Ahora comienza lo importante. Envíalo… y deja que ocurra."
-        main_button = f"""
-            <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
-        """
         soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
+        main_button = f"""
+            <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
+                <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
+            </a>
+        """
+        extra_block = ""
+
+    estado_texto = "Emoción recibida" if reaction_ready else "Pendiente de vivir"
 
     return f"""
     <!DOCTYPE html>
@@ -1001,6 +1099,9 @@ def resumen(order_id: str):
                 gap: 14px;
                 margin-top: 28px;
             }}
+            .secondary-buttons {{
+                margin-top: 14px;
+            }}
             button {{
                 width: 100%;
                 padding: 16px 22px;
@@ -1014,7 +1115,37 @@ def resumen(order_id: str):
                 background: #25D366;
                 color: white;
             }}
+            .primary {{
+                background: white;
+                color: black;
+            }}
+            .ghost {{
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
             a {{ text-decoration: none; }}
+            .private-link-box {{
+                margin-top: 18px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 16px;
+                padding: 16px;
+                text-align: left;
+                word-break: break-word;
+            }}
+            .private-link-label {{
+                font-size: 12px;
+                text-transform: uppercase;
+                letter-spacing: 1.2px;
+                color: rgba(255,255,255,0.5);
+                margin-bottom: 8px;
+            }}
+            .private-link-url {{
+                color: rgba(255,255,255,0.88);
+                font-size: 14px;
+                line-height: 1.6;
+            }}
             .soft {{
                 margin-top: 14px;
                 color: rgba(255,255,255,0.45);
@@ -1038,7 +1169,7 @@ def resumen(order_id: str):
                 </div>
                 <div class="stat">
                     <div class="label">Estado</div>
-                    <div class="value">{"Emoción recibida" if reaction_ready else "Pendiente de vivir"}</div>
+                    <div class="value">{safe_text(estado_texto)}</div>
                 </div>
             </div>
 
@@ -1046,7 +1177,9 @@ def resumen(order_id: str):
                 {main_button}
             </div>
 
-            <div class="soft">
+            {extra_block}
+
+            <div class="soft" id="copyMsg">
                 {safe_text(soft_line)}
             </div>
         </div>
@@ -1076,15 +1209,16 @@ def pedido(recipient_token: str):
     update_order(order["id"], delivered_to_recipient=1)
 
     recipient_name = safe_text(order["recipient_name"])
+    sender_name = safe_text(order["sender_name"])
     phrase_1 = safe_text(order["phrase_1"])
     phrase_2 = safe_text(order["phrase_2"])
     phrase_3 = safe_text(order["phrase_3"])
     gift_amount = money(order["gift_amount"])
-    gift_video_url = order.get("gift_video_url") or ""
+    gift_video_url = (order.get("gift_video_url") or "").strip()
 
     gift_video_block = ""
     if gift_video_url:
-        safe_gift_video = html.escape(gift_video_url, quote=True)
+        safe_gift_video = safe_attr(gift_video_url)
         gift_video_block = f"""
         {{
             html: `
@@ -1171,19 +1305,20 @@ def pedido(recipient_token: str):
                 margin-top: 22px;
                 display: flex;
                 align-items: flex-start;
-                gap: 10px;
+                gap: 12px;
                 text-align: left;
-                color: rgba(255,255,255,0.82);
+                color: rgba(255,255,255,0.88);
                 font-size: 14px;
-                line-height: 1.6;
+                line-height: 1.7;
                 cursor: pointer;
                 user-select: none;
+                opacity: 0.95;
             }}
             .consent-row input {{
-                width: 22px;
-                height: 22px;
+                width: 24px;
+                height: 24px;
                 margin-top: 2px;
-                accent-color: white;
+                accent-color: #00ff88;
                 flex: 0 0 auto;
                 cursor: pointer;
             }}
@@ -1200,10 +1335,10 @@ def pedido(recipient_token: str):
                 font-size: 15px;
                 -webkit-appearance: none;
                 appearance: none;
-            }}
-            #startBtn:disabled {{
                 opacity: 0.45;
-                cursor: not-allowed;
+            }}
+            #startBtn.enabled {{
+                opacity: 1;
             }}
             #experience {{
                 background: #000;
@@ -1292,7 +1427,7 @@ def pedido(recipient_token: str):
                     </div>
                 </div>
 
-                <label class="consent-row" for="consentCheck">
+                <label class="consent-row" id="consentLabel" for="consentCheck">
                     <input type="checkbox" id="consentCheck">
                     <span>Entiendo que debo vivir esta experiencia en un lugar adecuado y en mi momento</span>
                 </label>
@@ -1316,6 +1451,14 @@ def pedido(recipient_token: str):
             const scenes = [
                 {{
                     html: "<h2>Para {recipient_name}</h2>",
+                    duration: 1800
+                }},
+                {{
+                    html: "<h2>…</h2>",
+                    duration: 1200
+                }},
+                {{
+                    html: "<h2>De {sender_name}</h2>",
                     duration: 2200
                 }},
                 {gift_video_block}
@@ -1348,11 +1491,21 @@ def pedido(recipient_token: str):
             document.addEventListener("DOMContentLoaded", () => {{
                 const consentCheck = document.getElementById("consentCheck");
                 const startBtn = document.getElementById("startBtn");
+                const consentLabel = document.getElementById("consentLabel");
 
                 let ready = false;
 
                 function updateButton() {{
-                    startBtn.disabled = !(consentCheck.checked && ready);
+                    const enabled = consentCheck.checked && ready;
+                    startBtn.disabled = !enabled;
+
+                    if (enabled) {{
+                        startBtn.classList.add("enabled");
+                    }} else {{
+                        startBtn.classList.remove("enabled");
+                    }}
+
+                    consentLabel.style.opacity = consentCheck.checked ? "1" : "0.88";
                 }}
 
                 setTimeout(() => {{
@@ -1360,10 +1513,8 @@ def pedido(recipient_token: str):
                     updateButton();
                 }}, 4000);
 
-                if (consentCheck && startBtn) {{
-                    consentCheck.addEventListener("change", updateButton);
-                    updateButton();
-                }}
+                consentCheck.addEventListener("change", updateButton);
+                updateButton();
             }});
 
             async function showScene(htmlContent, duration) {{
@@ -1402,8 +1553,8 @@ def pedido(recipient_token: str):
                     }}
 
                     const formData = new FormData();
-                    formData.append("recipient_token", "{order['recipient_token']}");
-                    formData.append("video", blob, "{order['id']}.webm");
+                    formData.append("recipient_token", "{safe_attr(order['recipient_token'])}");
+                    formData.append("video", blob, "{safe_attr(order['id'])}.webm");
 
                     const response = await fetch("/upload-video", {{
                         method: "POST",
@@ -1519,7 +1670,7 @@ def pedido(recipient_token: str):
                     return;
                 }}
 
-                window.location.href = "/cobrar/{order['recipient_token']}";
+                window.location.href = "/cobrar/{safe_attr(order['recipient_token'])}";
             }}
         </script>
     </body>
@@ -1540,7 +1691,13 @@ async def upload_video(
     if not order["paid"]:
         raise HTTPException(status_code=403, detail="Pedido no pagado")
 
-    if video.content_type not in ALLOWED_VIDEO_TYPES:
+    content_type = (video.content_type or "").lower().strip()
+    filename = (video.filename or "").lower().strip()
+
+    is_allowed_type = content_type in ALLOWED_VIDEO_TYPES
+    is_allowed_name = filename.endswith(".webm") or filename.endswith(".mp4")
+
+    if not is_allowed_type and not is_allowed_name:
         raise HTTPException(status_code=400, detail="Formato de vídeo no permitido")
 
     filepath = reaction_video_path(order["id"])
@@ -1584,6 +1741,15 @@ async def upload_video(
             insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/{order['id']}", "local")
 
         updated_order = get_order_by_id(order["id"])
+
+        try:
+            send_whatsapp_sender(
+                phone=updated_order["sender_phone"],
+                link=sender_pack_url_from_order(updated_order),
+                message=build_sender_ready_message(updated_order),
+            )
+        except Exception as e:
+            print("WA sender stub error:", e)
 
         return JSONResponse({
             "status": "ok",
@@ -1704,7 +1870,7 @@ def cobrar(recipient_token: str):
                 <div class="money-label">Importe recibido</div>
                 <div class="money-value">{money(order["gift_amount"])}€</div>
             </div>
-            <a class="btn" href="/iniciar-cobro/{recipient_token}">Cobrar ahora</a>
+            <a class="btn" href="/iniciar-cobro/{safe_attr(recipient_token)}">Cobrar ahora</a>
             <div class="soft">
                 Cuando termines, la emoción seguirá su camino.
             </div>
@@ -1775,12 +1941,10 @@ def reaccion(recipient_token: str):
     share_block = ""
 
     if gift_video_url:
-        video_url_safe = gift_video_url or PUBLIC_BASE_URL
-        safe_gift_video_url = html.escape(video_url_safe, quote=True)
-
-        share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
-        encoded_share_text = urllib.parse.quote(share_text)
-        whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
+        safe_gift_video_url = safe_attr(gift_video_url)
+        share_text = "No sé cómo explicarte esto... solo míralo ❤️"
+        full_share_text = share_text + "\n\n" + gift_video_url
+        whatsapp_fallback = f"https://wa.me/?text={urllib.parse.quote(full_share_text)}"
 
         video_block = f"""
         <div class="video-wrap">
@@ -1801,10 +1965,10 @@ def reaccion(recipient_token: str):
 
         <script>
             async function shareGiftVideo() {{
-                const url = "{safe_gift_video_url}";
+                const url = "{safe_attr(gift_video_url)}";
                 const shareText = "No sé cómo explicarte esto... solo míralo ❤️";
                 const fullText = shareText + "\\n\\n" + url;
-                const whatsappFallback = "{whatsapp_fallback}";
+                const whatsappFallback = "{safe_attr(whatsapp_fallback)}";
                 const msg = document.getElementById("copyMsg");
 
                 try {{
@@ -1951,7 +2115,7 @@ def reaccion(recipient_token: str):
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
-    gift_video_url = order.get("gift_video_url")
+    gift_video_url = (order.get("gift_video_url") or "").strip()
     reaction_video_url = order.get("reaction_video_public_url") or (
         f"/video/{order['id']}" if reaction_exists(order) else None
     )
@@ -1989,8 +2153,8 @@ def sender_pack(sender_token: str):
         </html>
         """)
 
-    safe_gift = html.escape(gift_video_url or "", quote=True)
-    safe_reaction = html.escape(reaction_video_url, quote=True)
+    safe_gift = safe_attr(gift_video_url or "")
+    safe_reaction = safe_attr(reaction_video_url)
 
     return f"""
     <!DOCTYPE html>
@@ -2062,10 +2226,6 @@ def sender_pack(sender_token: str):
                 text-decoration: none;
                 display: inline-block;
                 text-align: center;
-            }}
-            .primary {{
-                background: white;
-                color: black;
             }}
             .ghost {{
                 background: rgba(255,255,255,0.10);
@@ -2172,7 +2332,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V17 RECIPIENT SHARE STEP",
+        "app": "ETERNA V19 WHATSAPP READY",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
