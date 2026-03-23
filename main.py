@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V14 PRODUCT CLEAN")
+app = FastAPI(title="ETERNA V15 SHARE BACK")
 
 # =========================================================
 # CONFIG
@@ -25,7 +25,7 @@ STRIPE_WEBHOOK_SECRET = os.getenv("STRIPE_WEBHOOK_SECRET", "").strip()
 
 PUBLIC_BASE_URL = os.getenv(
     "PUBLIC_BASE_URL",
-    "http://127.0.0.1:8000",
+    "https://eterna-v2-lab.onrender.com",
 ).strip().rstrip("/")
 
 BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE", "29"))
@@ -920,34 +920,37 @@ def resumen(order_id: str):
         order["recipient_phone"],
         (
             f"Hola {order['recipient_name']} ❤️\n\n"
-            f"{order['sender_name']} te ha enviado algo muy especial.\n\n"
-            f"Ábrelo aquí:\n{experience_url}"
-        ),
-    )
-
-    sender_whatsapp = whatsapp_link(
-        order["sender_phone"],
-        (
-            f"Tu sender pack de ETERNA estará aquí cuando llegue la emoción ❤️\n\n"
-            f"{sender_pack_url}"
+            f"{order['sender_name']} te ha preparado algo.\n\n"
+            f"No lo abras en cualquier momento.\n"
+            f"Ábrelo cuando estés tranquila.\n\n"
+            f"Aquí:\n{experience_url}"
         ),
     )
 
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
-        status_line = "La emoción ya ha quedado guardada."
+        share_link = sender_pack_url
+
+        share_whatsapp = whatsapp_link(
+            order["recipient_phone"],
+            f"Esto también es para ti ❤️\n\nMira este momento:\n{share_link}"
+        )
+
+        status_line = "Tu momento ya ha vuelto a ti ❤️"
+
         main_button = f"""
-            <a href="{sender_whatsapp}" target="_blank"><button class="light">Enviar pack al regalante</button></a>
-            <a href="{sender_pack_url}" target="_blank"><button class="ghost">Ver sender pack</button></a>
+            <a href="{share_whatsapp}" target="_blank"><button class="whatsapp">Compartir con ella ❤️</button></a>
         """
-        soft_line = "Ya puedes abrir el pack o enviártelo por WhatsApp."
+
+        soft_line = "Lo que ha sentido… ahora también es suyo."
     else:
-        status_line = "Ahora toca enviarlo al regalado."
+        status_line = "Ahora comienza lo importante. Envíalo… y deja que ocurra."
+
         main_button = f"""
             <a href="{recipient_whatsapp}" target="_blank"><button class="whatsapp">Enviar ETERNA por WhatsApp</button></a>
-            <a href="{experience_url}" target="_blank"><button class="ghost">Abrir experiencia</button></a>
         """
+
         soft_line = "Cuando viva la experiencia y se grabe, aquí aparecerá el retorno."
 
     return f"""
@@ -1021,15 +1024,6 @@ def resumen(order_id: str):
             .whatsapp {{
                 background: #25D366;
                 color: white;
-            }}
-            .light {{
-                background: white;
-                color: black;
-            }}
-            .ghost {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
             }}
             a {{ text-decoration: none; }}
             .soft {{
@@ -1279,7 +1273,9 @@ def pedido(recipient_token: str):
                 <h1>Hay algo para ti</h1>
 
                 <p class="lead">
-                    No lo abras todavía si este no es tu momento.
+                    Esto no es para verlo rápido.
+                    <br>
+                    Esto es para sentirlo.
                 </p>
 
                 <div class="ritual-box">
@@ -1313,7 +1309,7 @@ def pedido(recipient_token: str):
                 </label>
 
                 <button id="startBtn" type="button" onclick="startExperience()" disabled>
-                    Vivir mi ETERNA ❤️
+                    Quiero vivirlo ❤️
                 </button>
             </div>
         </div>
@@ -2090,7 +2086,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V14 PRODUCT CLEAN",
+        "app": "ETERNA V15 SHARE BACK",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
