@@ -1781,20 +1781,22 @@ def reaccion(recipient_token: str):
     if gift_video_url:
     video_url_safe = gift_video_url or PUBLIC_BASE_URL
 
-share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
-encoded_share_text = urllib.parse.quote(share_text)
+    safe_gift_video_url = html.escape(video_url_safe, quote=True)
 
-whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
-safe_gift_video_url = html.escape(video_url_safe, quote=True)
-        video_block = f"""
-        <div class="video-wrap">
-            <video controls playsinline preload="metadata">
-                <source src="{safe_gift_video_url}" type="video/mp4">
-                <source src="{safe_gift_video_url}" type="video/webm">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
-        </div>
-        """
+    share_text = "No sé cómo explicarte esto... solo míralo ❤️\n\n" + video_url_safe
+    encoded_share_text = urllib.parse.quote(share_text)
+
+    whatsapp_fallback = f"https://wa.me/?text={encoded_share_text}"
+
+    video_block = f"""
+    <div class="video-wrap">
+        <video controls playsinline preload="metadata">
+            <source src="{safe_gift_video_url}" type="video/mp4">
+            <source src="{safe_gift_video_url}" type="video/webm">
+            Tu navegador no puede reproducir este vídeo.
+        </video>
+    </div>
+    """
 
         share_block = f"""
         <div class="actions">
