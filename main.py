@@ -1398,20 +1398,37 @@ def pedido(recipient_token: str):
                 <h1>Hay algo para ti</h1>
 
                 <p class="lead">
-                    Antes de empezar, busca un momento tranquilo solo para ti.
+                    No lo abras todavía si este no es tu momento.
                 </p>
 
                 <div class="ritual-box">
                     <div class="ritual-text">
-                        Tu experiencia será vivida y compartida con la persona que te hizo este regalo.
+                        Lo que vas a vivir no está hecho para cualquier sitio.
                         <br><br>
-                        Al continuar, aceptas vivirla en un entorno adecuado y que este momento forme parte de ETERNA.
+                        Busca un lugar tranquilo.
+                        <br>
+                        Sin interrupciones.
+                        <br>
+                        Sin ruido.
+                        <br>
+                        Sin nadie alrededor.
+                        <br><br>
+                        Tómate tu tiempo.
+                        <br>
+                        Vívelo bien.
+                        <br>
+                        No lo abras en cualquier sitio.
+                        <br>
+                        No lo desperdicies.
+                        <br><br>
+                        Cuando estés de verdad preparado,
+                        continúa.
                     </div>
                 </div>
 
                 <label class="consent-row" for="consentCheck">
                     <input type="checkbox" id="consentCheck">
-                    <span>He entendido y quiero continuar</span>
+                    <span>Entiendo que debo vivir esta experiencia en un lugar adecuado y en mi momento</span>
                 </label>
 
                 <button id="startBtn" type="button" onclick="startExperience()" disabled>
@@ -1466,10 +1483,20 @@ def pedido(recipient_token: str):
                 const consentCheck = document.getElementById("consentCheck");
                 const startBtn = document.getElementById("startBtn");
 
+                let ready = false;
+
+                function updateButton() {{
+                    startBtn.disabled = !(consentCheck.checked && ready);
+                }}
+
+                setTimeout(() => {{
+                    ready = true;
+                    updateButton();
+                }}, 4000);
+
                 if (consentCheck && startBtn) {{
-                    consentCheck.addEventListener("change", () => {{
-                        startBtn.disabled = !consentCheck.checked;
-                    }});
+                    consentCheck.addEventListener("change", updateButton);
+                    updateButton();
                 }}
             }});
 
