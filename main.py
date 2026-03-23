@@ -14,7 +14,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V13 CLEAN FLOW")
+app = FastAPI(title="ETERNA V14 PRODUCT CLEAN")
 
 # =========================================================
 # CONFIG
@@ -445,13 +445,6 @@ def render_create_form() -> str:
                 color: white;
                 border: 1px solid rgba(255,255,255,0.10);
             }}
-            .footer-note {{
-                margin-top: 18px;
-                text-align: center;
-                color: rgba(255,255,255,0.40);
-                font-size: 12px;
-                line-height: 1.5;
-            }}
         </style>
     </head>
     <body>
@@ -499,10 +492,6 @@ def render_create_form() -> str:
                     <a class="ghost" href="/">Volver</a>
                 </div>
             </form>
-
-            <div class="footer-note">
-                V13 Clean Flow · SQLite real · tokens privados · Stripe preparado · R2 preparado
-            </div>
         </div>
     </body>
     </html>
@@ -684,29 +673,17 @@ def home():
             }
             .btn {
                 width: 100%;
-                padding: 16px 22px;
+                padding: 18px 24px;
                 border-radius: 999px;
                 border: 0;
                 font-weight: bold;
-                font-size: 15px;
+                font-size: 16px;
                 cursor: pointer;
                 text-decoration: none;
                 text-align: center;
                 display: inline-block;
-            }
-            .primary {
                 background: white;
                 color: black;
-            }
-            .ghost {
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-            }
-            .footer {
-                margin-top: 20px;
-                color: rgba(255,255,255,0.35);
-                font-size: 12px;
             }
         </style>
     </head>
@@ -726,12 +703,7 @@ def home():
             </div>
 
             <div class="buttons">
-                <a class="btn primary" href="/crear">CREAR MI ETERNA</a>
-                <a class="btn ghost" href="/health">Ver health</a>
-            </div>
-
-            <div class="footer">
-                V13 Clean Flow
+                <a class="btn" href="/crear">CREAR MI ETERNA</a>
             </div>
         </div>
     </body>
@@ -800,95 +772,23 @@ def crear_eterna_legacy(
 @app.get("/checkout-exito/{order_id}", response_class=HTMLResponse)
 def checkout_exito(order_id: str):
     order = get_order_by_id(order_id)
+    is_paid = bool(order["paid"])
 
-    if not order["paid"]:
-        return f"""
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="4">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Confirmando pago</title>
-            <style>
-                html, body {{
-                    margin: 0;
-                    min-height: 100%;
-                    background: #000;
-                }}
-                body {{
-                    min-height: 100vh;
-                    background:
-                        radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
-                        linear-gradient(180deg, #050505 0%, #000000 100%);
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    justify-content: center;
-                    align-items: center;
-                    padding: 24px;
-                    text-align: center;
-                }}
-                .card {{
-                    width: 100%;
-                    max-width: 720px;
-                    background: rgba(255,255,255,0.04);
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 28px;
-                    padding: 40px 28px;
-                }}
-                h1 {{
-                    margin: 0 0 14px 0;
-                    font-size: 42px;
-                    letter-spacing: 2px;
-                }}
-                p {{
-                    color: rgba(255,255,255,0.78);
-                    line-height: 1.7;
-                    font-size: 18px;
-                    margin: 0;
-                }}
-                .soft {{
-                    margin-top: 18px;
-                    color: rgba(255,255,255,0.42);
-                    font-size: 13px;
-                }}
-                a {{
-                    color: white;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>ETERNA</h1>
-                <p>Estamos confirmando tu pago.</p>
-                <div class="soft">
-                    Esta página se actualizará sola.<br>
-                    <a href="/checkout-exito/{order_id}">Actualizar ahora</a>
-                </div>
-            </div>
-        </body>
-        </html>
-        """
-
-    experience_url = recipient_experience_url_from_order(order)
-
-    wa_link = whatsapp_link(
-        order["recipient_phone"],
-        (
-            f"Hola {order['recipient_name']} ❤️\n\n"
-            f"{order['sender_name']} te ha enviado algo muy especial.\n\n"
-            f"Ábrelo aquí:\n{experience_url}"
-        ),
-    )
+    refresh = '<meta http-equiv="refresh" content="4">' if not is_paid else ""
+    redirect_script = f"""
+        setTimeout(function() {{
+            window.location.href = "/post-pago/{order_id}";
+        }}, 3500);
+    """ if is_paid else ""
 
     return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
+        {refresh}
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA enviada</title>
+        <title>ETERNA</title>
         <style>
             html, body {{
                 margin: 0;
@@ -903,76 +803,57 @@ def checkout_exito(order_id: str):
                 color: white;
                 font-family: Arial, sans-serif;
                 display: flex;
-                justify-content: center;
                 align-items: center;
-                padding: 24px;
+                justify-content: center;
                 text-align: center;
+                padding: 24px;
             }}
             .card {{
-                width: 100%;
-                max-width: 760px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 42px 30px;
+                max-width: 680px;
+                opacity: 0;
+                transform: translateY(10px);
+                animation: fadeIn 1.2s ease forwards;
             }}
             h1 {{
-                margin: 0 0 18px 0;
                 font-size: 42px;
+                margin-bottom: 18px;
                 letter-spacing: 2px;
             }}
-            .lead {{
-                color: rgba(255,255,255,0.84);
-                line-height: 1.8;
+            .text {{
                 font-size: 20px;
-                margin: 0;
+                line-height: 1.8;
+                color: rgba(255,255,255,0.85);
             }}
             .soft {{
-                margin-top: 22px;
-                color: rgba(255,255,255,0.46);
+                margin-top: 24px;
                 font-size: 14px;
-                line-height: 1.7;
+                color: rgba(255,255,255,0.4);
             }}
-            .loading {{
-                margin-top: 26px;
-                color: rgba(255,255,255,0.32);
-                font-size: 13px;
-                letter-spacing: 1px;
-                text-transform: uppercase;
-            }}
-            a {{
-                color: white;
+            @keyframes fadeIn {{
+                to {{
+                    opacity: 1;
+                    transform: translateY(0);
+                }}
             }}
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>Tu ETERNA ya está en camino ❤️</h1>
+            <h1>Todo está en camino ❤️</h1>
 
-            <p class="lead">
-                Tu mensaje ya ha sido preparado para esa persona.
-                <br><br>
-                No tiene por qué abrirlo ahora.
-                Lo hará cuando sea su momento.
-                <br><br>
-                Cuando lo viva, tendrás noticias nuestras.
-            </p>
-
-            <div class="soft">
-                En unos segundos se abrirá WhatsApp con el mensaje listo.
-                <br>
-                Si no se abre solo, <a href="{wa_link}">pulsa aquí</a>.
+            <div class="text">
+                Tu ETERNA ya ha comenzado.<br><br>
+                En unos instantes,<br>
+                alguien va a vivir algo que no espera.
             </div>
 
-            <div class="loading">
-                Abriendo WhatsApp...
+            <div class="soft">
+                Y cuando ocurra… volverá a ti.
             </div>
         </div>
 
         <script>
-            setTimeout(() => {{
-                window.location.href = "{wa_link}";
-            }}, 3500);
+            {redirect_script}
         </script>
     </body>
     </html>
@@ -1840,7 +1721,7 @@ def cobrar(recipient_token: str):
             </div>
             <a class="btn" href="/iniciar-cobro/{recipient_token}">Cobrar ahora</a>
             <div class="soft">
-                Cuando termines, podrás volver a verlo y la emoción volverá al regalante.
+                Cuando termines, la emoción seguirá su camino.
             </div>
         </div>
     </body>
@@ -1861,7 +1742,7 @@ def cobro_completado(recipient_token: str):
     return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
 
 # =========================================================
-# REACCIÓN FINAL DEL REGALADO
+# CIERRE DEL REGALADO
 # =========================================================
 
 @app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
@@ -1876,7 +1757,7 @@ def reaccion(recipient_token: str):
             <meta charset="UTF-8">
             <meta http-equiv="refresh" content="5">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Reacción pendiente</title>
+            <title>ETERNA</title>
             <style>
                 body {
                     margin: 0;
@@ -1894,7 +1775,7 @@ def reaccion(recipient_token: str):
         </head>
         <body>
             <div>
-                <h1>La reacción aún no ha llegado</h1>
+                <h1>Tu momento ya está siendo guardado</h1>
                 <p>Esta página se actualizará sola en unos segundos.</p>
             </div>
         </body>
@@ -1904,24 +1785,20 @@ def reaccion(recipient_token: str):
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    share_url = sender_pack_url_from_order(order)
-    whatsapp_share = f"https://wa.me/?text={urllib.parse.quote(share_url)}"
-    video_source = order.get("reaction_video_public_url") or f"/video/{order['id']}"
-
-    return f"""
+    return """
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Reacción ETERNA</title>
+        <title>ETERNA</title>
         <style>
-            html, body {{
+            html, body {
                 margin: 0;
                 min-height: 100%;
                 background: #000;
-            }}
-            body {{
+            }
+            body {
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
@@ -1932,99 +1809,51 @@ def reaccion(recipient_token: str):
                 align-items: center;
                 justify-content: center;
                 padding: 24px;
-            }}
-            .card {{
+                text-align: center;
+            }
+            .card {
                 width: 100%;
-                max-width: 820px;
+                max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
-                padding: 28px;
-                text-align: center;
-            }}
-            video {{
-                width: 100%;
-                max-height: 72vh;
-                border-radius: 20px;
-                background: #111;
-                display: block;
-            }}
-            .actions {{
-                margin-top: 18px;
-                display: grid;
-                gap: 12px;
-            }}
-            button, a.btn {{
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-                text-decoration: none;
-                display: inline-block;
-            }}
-            .btn-dark {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-            }}
-            .soft {{
-                margin-top: 16px;
+                border-radius: 28px;
+                padding: 42px 30px;
+            }
+            h1 {
+                margin: 0 0 18px 0;
+                font-size: 40px;
+                letter-spacing: 1px;
+            }
+            .lead {
+                color: rgba(255,255,255,0.84);
+                line-height: 1.8;
+                font-size: 20px;
+                margin: 0;
+            }
+            .soft {
+                margin-top: 24px;
                 color: rgba(255,255,255,0.42);
-                font-size: 13px;
-            }}
+                font-size: 14px;
+                line-height: 1.7;
+            }
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>Tu momento ya forma parte de ETERNA ❤️</h1>
-            <p>Ahora puedes volver a verlo. La emoción ya está preparada para volver.</p>
+            <h1>Tu momento ya ha sido enviado ❤️</h1>
 
-            <video id="reactionVideo" controls autoplay playsinline>
-                <source src="{video_source}" type="video/webm">
-                <source src="{video_source}" type="video/mp4">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
-
-            <div class="actions">
-                <button onclick="replayVideo()">Volver a verlo ❤️</button>
-                <a class="btn btn-dark" href="{video_source}" target="_blank">Abrir vídeo</a>
-                <a class="btn btn-dark" href="{whatsapp_share}" target="_blank">Compartir sender pack</a>
-                <button class="btn-dark" onclick="copyLink()">Copiar enlace</button>
+            <div class="lead">
+                No necesitas hacer nada más.
+                <br><br>
+                A veces, lo importante no es verlo…
+                <br>
+                es haberlo sentido.
             </div>
 
-            <div class="soft" id="copyMsg">
-                Gracias por formar parte de ETERNA.
+            <div class="soft">
+                Quizá alguien te enseñe lo que acabas de provocar.
             </div>
         </div>
-
-        <script>
-            function replayVideo() {{
-                const video = document.getElementById("reactionVideo");
-                if (!video) return;
-                video.currentTime = 0;
-                video.play().catch(() => {{}});
-            }}
-
-            async function copyLink() {{
-                try {{
-                    await navigator.clipboard.writeText("{share_url}");
-                    document.getElementById("copyMsg").textContent = "Enlace copiado.";
-                }} catch (e) {{
-                    document.getElementById("copyMsg").textContent = "No se pudo copiar el enlace.";
-                }}
-            }}
-
-            window.addEventListener("load", () => {{
-                const video = document.getElementById("reactionVideo");
-                if (!video) return;
-                video.play().catch(() => {{}});
-            }});
-        </script>
     </body>
     </html>
     """
@@ -2050,7 +1879,7 @@ def sender_pack(sender_token: str):
             <meta charset="UTF-8">
             <meta http-equiv="refresh" content="5">
             <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>Pack ETERNA pendiente</title>
+            <title>ETERNA</title>
             <style>
                 body {
                     margin: 0;
@@ -2068,7 +1897,7 @@ def sender_pack(sender_token: str):
         </head>
         <body>
             <div>
-                <h1>El pack aún no está listo</h1>
+                <h1>La emoción aún no ha vuelto</h1>
                 <p>Esta página se actualizará sola en unos segundos.</p>
             </div>
         </body>
@@ -2261,7 +2090,7 @@ def upload_demo(order_id: str):
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V13 CLEAN FLOW",
+        "app": "ETERNA V14 PRODUCT CLEAN",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
