@@ -6,7 +6,7 @@ import secrets
 import sqlite3
 import urllib.parse
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional
 
@@ -16,7 +16,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V30 CLEAN LOCKED TRANSFER")
+app = FastAPI(title="ETERNA V32 CLEAN LOCKED TRANSFER REFUND")
 
 # =========================================================
 # CONFIG
@@ -36,6 +36,7 @@ CURRENCY = os.getenv("ETERNA_CURRENCY", "eur").strip().lower()
 
 GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 FIXED_PLATFORM_FEE = float(os.getenv("ETERNA_FIXED_FEE", "2"))
+GIFT_REFUND_DAYS = int(os.getenv("GIFT_REFUND_DAYS", "20"))
 
 DEFAULT_GIFT_VIDEO_URL = os.getenv("DEFAULT_GIFT_VIDEO_URL", "").strip()
 
@@ -136,16 +137,19 @@ def init_db():
         reaction_uploaded INTEGER NOT NULL DEFAULT 0,
         cashout_completed INTEGER NOT NULL DEFAULT 0,
         transfer_completed INTEGER NOT NULL DEFAULT 0,
+        transfer_in_progress INTEGER NOT NULL DEFAULT 0,
         sender_notified INTEGER NOT NULL DEFAULT 0,
         experience_started INTEGER NOT NULL DEFAULT 0,
         experience_completed INTEGER NOT NULL DEFAULT 0,
         connect_onboarding_completed INTEGER NOT NULL DEFAULT 0,
+        gift_refunded INTEGER NOT NULL DEFAULT 0,
 
         stripe_session_id TEXT,
         stripe_payment_status TEXT,
         stripe_payment_intent_id TEXT,
         stripe_connected_account_id TEXT,
         stripe_transfer_id TEXT,
+        stripe_gift_refund_id TEXT,
 
         recipient_token TEXT NOT NULL UNIQUE,
         sender_token TEXT NOT NULL UNIQUE,
@@ -153,6 +157,8 @@ def init_db():
         reaction_video_local TEXT,
         reaction_video_public_url TEXT,
         gift_video_url TEXT,
+
+        gift_refund_deadline_at TEXT,
 
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -244,6 +250,11 @@ def init_db():
     )
     add_column_if_missing(
         "orders",
+        "transfer_in_progress",
+        "ALTER TABLE orders ADD COLUMN transfer_in_progress INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
         "platform_fixed_fee",
         "ALTER TABLE orders ADD COLUMN platform_fixed_fee REAL NOT NULL DEFAULT 0",
     )
@@ -257,6 +268,21 @@ def init_db():
         "platform_total_fee",
         "ALTER TABLE orders ADD COLUMN platform_total_fee REAL NOT NULL DEFAULT 0",
     )
+    add_column_if_missing(
+        "orders",
+        "gift_refund_deadline_at",
+        "ALTER TABLE orders ADD COLUMN gift_refund_deadline_at TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "gift_refunded",
+        "ALTER TABLE orders ADD COLUMN gift_refunded INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "stripe_gift_refund_id",
+        "ALTER TABLE orders ADD COLUMN stripe_gift_refund_id TEXT",
+    )
 
 
 init_db()
@@ -266,8 +292,26 @@ init_db()
 # =========================================================
 
 
+def now_dt() -> datetime:
+    return datetime.utcnow()
+
+
 def now_iso() -> str:
-    return datetime.utcnow().isoformat()
+    return now_dt().isoformat()
+
+
+def parse_iso(value: Optional[str]) -> Optional[datetime]:
+    raw = (value or "").strip()
+    if not raw:
+        return None
+    try:
+        return datetime.fromisoformat(raw)
+    except Exception:
+        return None
+
+
+def gift_refund_deadline_iso() -> str:
+    return (now_dt() + timedelta(days=GIFT_REFUND_DAYS)).isoformat()
 
 
 def safe_text(v: str) -> str:
@@ -541,6 +585,48 @@ def calculate_fees(gift_amount: float) -> dict:
     }
 
 
+def try_acquire_transfer_lock(order_id: str) -> bool:
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        UPDATE orders
+        SET transfer_in_progress = 1, updated_at = ?
+        WHERE id = ?
+          AND transfer_in_progress = 0
+          AND transfer_completed = 0
+          AND gift_refunded = 0
+    """, (now_iso(), order_id))
+    conn.commit()
+    acquired = cur.rowcount > 0
+    conn.close()
+    return acquired
+
+
+def release_transfer_lock(order_id: str):
+    update_order(order_id, transfer_in_progress=0)
+
+
+def compute_cashout_status(order: dict) -> str:
+    gift_amount = float(order.get("gift_amount") or 0)
+
+    if bool(order.get("gift_refunded")):
+        return "gift_refunded"
+
+    if gift_amount <= 0 and bool(order.get("cashout_completed")):
+        return "completed"
+
+    if gift_amount > 0 and bool(order.get("transfer_completed")):
+        return "completed"
+
+    if bool(order.get("transfer_in_progress")):
+        return "verifying"
+
+    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
+        return "ready_to_finalize"
+
+    return "pending"
+
+
 # =========================================================
 # STRIPE CONNECT HELPERS
 # =========================================================
@@ -602,13 +688,18 @@ def refresh_connect_status(order: dict) -> bool:
 
 
 def process_gift_transfer_for_order(order: dict) -> dict:
+    order = get_order_by_id(order["id"])
     gift_amount = float(order.get("gift_amount") or 0)
+
+    if bool(order.get("gift_refunded")):
+        return {"status": "gift_already_refunded"}
 
     if gift_amount <= 0:
         update_order(
             order["id"],
             transfer_completed=1,
             cashout_completed=1,
+            transfer_in_progress=0,
         )
         return {"status": "no_gift"}
 
@@ -617,11 +708,16 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             order["id"],
             transfer_completed=1,
             cashout_completed=1,
+            connect_onboarding_completed=1,
+            transfer_in_progress=0,
         )
         return {"status": "stripe_disabled_test_mode"}
 
     if not bool(order.get("paid")):
         return {"status": "not_paid"}
+
+    if not bool(order.get("experience_completed")):
+        return {"status": "experience_not_completed"}
 
     if not bool(order.get("connect_onboarding_completed")):
         return {"status": "onboarding_not_ready"}
@@ -632,12 +728,23 @@ def process_gift_transfer_for_order(order: dict) -> dict:
                 order["id"],
                 transfer_completed=1,
                 cashout_completed=1,
+                transfer_in_progress=0,
             )
         return {"status": "already_transferred", "transfer_id": order.get("stripe_transfer_id")}
 
     destination = (order.get("stripe_connected_account_id") or "").strip()
     if not destination:
         return {"status": "missing_destination"}
+
+    if not try_acquire_transfer_lock(order["id"]):
+        refreshed = get_order_by_id(order["id"])
+        if refreshed.get("stripe_transfer_id"):
+            return {"status": "already_transferred", "transfer_id": refreshed.get("stripe_transfer_id")}
+        if bool(refreshed.get("gift_refunded")):
+            return {"status": "gift_already_refunded"}
+        if bool(refreshed.get("transfer_in_progress")):
+            return {"status": "transfer_in_progress"}
+        return {"status": "lock_not_acquired"}
 
     try:
         transfer = stripe.Transfer.create(
@@ -649,6 +756,7 @@ def process_gift_transfer_for_order(order: dict) -> dict:
                 "type": "eterna_gift_transfer",
             },
             transfer_group=f"ETERNA_ORDER_{order['id']}",
+            idempotency_key=f"gift_transfer_{order['id']}",
         )
 
         update_order(
@@ -656,12 +764,101 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             stripe_transfer_id=transfer.id,
             transfer_completed=1,
             cashout_completed=1,
+            transfer_in_progress=0,
         )
 
         return {"status": "ok", "transfer_id": transfer.id}
     except Exception as e:
         print("Transfer error:", e)
+        release_transfer_lock(order["id"])
         return {"status": "error", "error": str(e)}
+
+
+def process_expired_gift_refunds() -> dict:
+    conn = db_conn()
+    cur = conn.cursor()
+    cur.execute("""
+        SELECT id
+        FROM orders
+        WHERE paid = 1
+          AND gift_amount > 0
+          AND transfer_completed = 0
+          AND gift_refunded = 0
+          AND stripe_gift_refund_id IS NULL
+          AND gift_refund_deadline_at IS NOT NULL
+    """)
+    rows = cur.fetchall()
+    conn.close()
+
+    checked = 0
+    refunded = 0
+    skipped = 0
+    errors = 0
+    now = now_dt()
+
+    for row in rows:
+        checked += 1
+        order = get_order_by_id(row["id"])
+        deadline = parse_iso(order.get("gift_refund_deadline_at"))
+
+        if deadline is None or deadline > now:
+            skipped += 1
+            continue
+
+        if bool(order.get("transfer_completed")) or bool(order.get("gift_refunded")):
+            skipped += 1
+            continue
+
+        if order.get("stripe_transfer_id"):
+            skipped += 1
+            continue
+
+        payment_intent_id = (order.get("stripe_payment_intent_id") or "").strip()
+        gift_amount = float(order.get("gift_amount") or 0)
+
+        if gift_amount <= 0:
+            update_order(order["id"], gift_refunded=1)
+            skipped += 1
+            continue
+
+        try:
+            if STRIPE_SECRET_KEY and payment_intent_id:
+                refund = stripe.Refund.create(
+                    payment_intent=payment_intent_id,
+                    amount=int(round(gift_amount * 100)),
+                    metadata={
+                        "order_id": order["id"],
+                        "type": "eterna_gift_partial_refund",
+                    },
+                    idempotency_key=f"gift_refund_{order['id']}",
+                )
+                update_order(
+                    order["id"],
+                    gift_refunded=1,
+                    stripe_gift_refund_id=refund.id,
+                    transfer_in_progress=0,
+                    cashout_completed=0,
+                )
+            else:
+                update_order(
+                    order["id"],
+                    gift_refunded=1,
+                    stripe_gift_refund_id="test_no_stripe_refund",
+                    transfer_in_progress=0,
+                    cashout_completed=0,
+                )
+
+            refunded += 1
+        except Exception as e:
+            print("Gift refund error:", order["id"], e)
+            errors += 1
+
+    return {
+        "checked": checked,
+        "refunded": refunded,
+        "skipped": skipped,
+        "errors": errors,
+    }
 
 
 # =========================================================
@@ -885,13 +1082,15 @@ def create_order_and_redirect(
             phrase_1, phrase_2, phrase_3,
             gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
             paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
-            sender_notified, experience_started, experience_completed, connect_onboarding_completed,
-            stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id,
+            transfer_in_progress, sender_notified, experience_started, experience_completed, connect_onboarding_completed,
+            gift_refunded,
+            stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id, stripe_gift_refund_id,
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
+            gift_refund_deadline_at,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
         (phrase_1 or "").strip(),
@@ -903,10 +1102,12 @@ def create_order_and_redirect(
         fees["total_fee"],
         fees["total_amount"],
         0, 0, 0, 0, 0,
-        0, 0, 0, 0,
-        None, None, None, None, None,
+        0, 0, 0, 0, 0,
+        0,
+        None, None, None, None, None, None,
         recipient_token, sender_token,
         None, None, DEFAULT_GIFT_VIDEO_URL or None,
+        None,
         created_at, created_at
     ))
 
@@ -914,7 +1115,12 @@ def create_order_and_redirect(
     conn.close()
 
     if not STRIPE_SECRET_KEY:
-        update_order(order_id, paid=1, stripe_payment_status="test_no_stripe")
+        update_order(
+            order_id,
+            paid=1,
+            stripe_payment_status="test_no_stripe",
+            gift_refund_deadline_at=gift_refund_deadline_iso(),
+        )
         order = get_order_by_id(order_id)
         try:
             send_whatsapp_recipient(
@@ -1233,6 +1439,7 @@ async def stripe_webhook(request: Request):
                 stripe_payment_status="paid",
                 stripe_session_id=session.get("id"),
                 stripe_payment_intent_id=session.get("payment_intent"),
+                gift_refund_deadline_at=gift_refund_deadline_iso(),
             )
 
             try:
@@ -2089,20 +2296,20 @@ def cobrar(recipient_token: str):
         </html>
         """)
 
+    cashout_status = compute_cashout_status(order)
     gift_amount = float(order.get("gift_amount") or 0)
 
-    if gift_amount > 0 and bool(order.get("transfer_completed")):
+    if cashout_status == "completed":
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
-    if gift_amount <= 0 and bool(order.get("cashout_completed")):
+    if cashout_status == "gift_refunded":
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     amount_text = format_amount_display(order["gift_amount"])
-
     button_href = f"/iniciar-cobro-real/{safe_attr(recipient_token)}"
     button_text = "Cobrar"
 
-    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")) and not bool(order.get("transfer_completed")):
+    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
         button_text = "Finalizar cobro"
 
     return f"""
@@ -2217,6 +2424,9 @@ def iniciar_cobro_real(recipient_token: str):
     if not bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
+    if bool(order.get("gift_refunded")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
     gift_amount = float(order.get("gift_amount") or 0)
 
     if gift_amount <= 0:
@@ -2225,6 +2435,7 @@ def iniciar_cobro_real(recipient_token: str):
             transfer_completed=1,
             cashout_completed=1,
             connect_onboarding_completed=1,
+            transfer_in_progress=0,
         )
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
@@ -2234,14 +2445,21 @@ def iniciar_cobro_real(recipient_token: str):
             transfer_completed=1,
             cashout_completed=1,
             connect_onboarding_completed=1,
+            transfer_in_progress=0,
         )
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
+    if bool(order.get("transfer_completed")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    if bool(order.get("transfer_in_progress")):
+        return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+
     if bool(order.get("connect_onboarding_completed")):
         result = process_gift_transfer_for_order(order)
-        if result.get("status") in {"ok", "already_transferred"}:
+        if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
             return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
 
     link_url = create_connect_onboarding_link(order)
     return RedirectResponse(url=link_url, status_code=303)
@@ -2250,6 +2468,10 @@ def iniciar_cobro_real(recipient_token: str):
 @app.get("/connect/refresh/{recipient_token}")
 def connect_refresh(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if bool(order.get("gift_refunded")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
     link_url = create_connect_onboarding_link(order)
     return RedirectResponse(url=link_url, status_code=303)
 
@@ -2257,10 +2479,14 @@ def connect_refresh(recipient_token: str):
 @app.get("/connect/return/{recipient_token}")
 def connect_return(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if bool(order.get("gift_refunded")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
     ready = refresh_connect_status(order)
 
     if not ready:
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
 
     refreshed_order = get_order_by_recipient_token_or_404(recipient_token)
     result = process_gift_transfer_for_order(refreshed_order)
@@ -2268,7 +2494,95 @@ def connect_return(recipient_token: str):
     if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
-    return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+    return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+
+
+# =========================================================
+# VERIFICANDO COBRO
+# =========================================================
+
+
+@app.get("/verificando-cobro/{recipient_token}", response_class=HTMLResponse)
+def verificando_cobro(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if bool(order.get("gift_refunded")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    gift_amount = float(order.get("gift_amount") or 0)
+
+    if gift_amount <= 0 and bool(order.get("cashout_completed")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    if gift_amount > 0 and bool(order.get("transfer_completed")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta http-equiv="refresh" content="7">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Verificando cobro</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 42px 30px;
+            }}
+            h1 {{
+                margin: 0 0 18px 0;
+                font-size: 40px;
+            }}
+            .lead {{
+                color: rgba(255,255,255,0.88);
+                line-height: 1.8;
+                font-size: 20px;
+            }}
+            .soft {{
+                margin-top: 18px;
+                color: rgba(255,255,255,0.50);
+                font-size: 14px;
+                line-height: 1.7;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Estamos verificando tu cobro</h1>
+            <div class="lead">
+                Stripe está terminando el proceso seguro.<br>
+                No necesitas volver a empezar.
+            </div>
+            <div class="soft">
+                Esta pantalla se actualizará sola en unos segundos.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
 
 
 # =========================================================
@@ -2288,21 +2602,30 @@ def gracias_cobro(recipient_token: str):
 
     gift_amount = float(order.get("gift_amount") or 0)
 
-    if gift_amount > 0 and not bool(order.get("transfer_completed")):
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+    if bool(order.get("gift_refunded")):
+        title = "Ya está"
+        lead = "El regalo ha quedado cancelado"
+        soft = (
+            f"Han pasado {GIFT_REFUND_DAYS} días sin completar el cobro. "
+            "El importe regalado se ha devuelto al comprador. "
+            "La experiencia sigue completada."
+        )
+    else:
+        if gift_amount > 0 and not bool(order.get("transfer_completed")):
+            return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
 
-    if gift_amount <= 0 and not bool(order.get("cashout_completed")):
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+        if gift_amount <= 0 and not bool(order.get("cashout_completed")):
+            return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+
+        title = "Ya está"
+        lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
+        soft = (
+            "Stripe ya ha recibido tus datos y el cobro ha quedado preparado. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
+            if gift_amount > 0
+            else "La experiencia ha quedado cerrada correctamente."
+        )
 
     gift_video_url = order.get("gift_video_url") or DEFAULT_GIFT_VIDEO_URL
-
-    title = "Ya está"
-    lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
-    soft = (
-        "Stripe ya ha recibido tus datos y el cobro ha quedado preparado. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
-        if gift_amount > 0
-        else "La experiencia ha quedado cerrada correctamente."
-    )
 
     video_block = ""
     if gift_video_url:
@@ -2577,6 +2900,20 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
 
 
 # =========================================================
+# REFUNDS ADMIN
+# =========================================================
+
+
+@app.post("/admin/process-expired-refunds")
+def admin_process_expired_refunds(x_admin_token: Optional[str] = Header(default=None)):
+    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="No autorizado")
+
+    result = process_expired_gift_refunds()
+    return result
+
+
+# =========================================================
 # LEGAL
 # =========================================================
 
@@ -2687,11 +3024,12 @@ def privacidad():
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V30 CLEAN LOCKED TRANSFER",
+        "app": "ETERNA V32 CLEAN LOCKED TRANSFER REFUND",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
         "public_base_url": PUBLIC_BASE_URL,
+        "gift_refund_days": GIFT_REFUND_DAYS,
         "orders": get_orders_count(),
         "assets": get_assets_count(),
     }
