@@ -1,6 +1,5 @@
 fastapi
 uvicorn
-python-multipart
 stripe
 boto3
-botocore
+python-multipart
