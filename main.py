@@ -65,6 +65,22 @@ if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
 
 # =========================================================
+# LOG
+# =========================================================
+
+
+def log_info(label: str, value=None):
+    if value is None:
+        print(f"[INFO] {label}")
+    else:
+        print(f"[INFO] {label}: {value}")
+
+
+def log_error(label: str, error: Exception):
+    print(f"[ERROR] {label}: {error}")
+
+
+# =========================================================
 # DB
 # =========================================================
 
@@ -756,7 +772,6 @@ def process_gift_transfer_for_order(order: dict) -> dict:
                 "type": "eterna_gift_transfer",
             },
             transfer_group=f"ETERNA_ORDER_{order['id']}",
-            idempotency_key=f"gift_transfer_{order['id']}",
         )
 
         update_order(
@@ -769,7 +784,7 @@ def process_gift_transfer_for_order(order: dict) -> dict:
 
         return {"status": "ok", "transfer_id": transfer.id}
     except Exception as e:
-        print("Transfer error:", e)
+        log_error("Transfer error", e)
         release_transfer_lock(order["id"])
         return {"status": "error", "error": str(e)}
 
@@ -830,7 +845,6 @@ def process_expired_gift_refunds() -> dict:
                         "order_id": order["id"],
                         "type": "eterna_gift_partial_refund",
                     },
-                    idempotency_key=f"gift_refund_{order['id']}",
                 )
                 update_order(
                     order["id"],
@@ -850,7 +864,7 @@ def process_expired_gift_refunds() -> dict:
 
             refunded += 1
         except Exception as e:
-            print("Gift refund error:", order["id"], e)
+            log_error(f"Gift refund error {order['id']}", e)
             errors += 1
 
     return {
@@ -957,6 +971,10 @@ def render_create_form() -> str:
                 background: white;
                 color: black;
             }}
+            button[disabled] {{
+                opacity: 0.7;
+                cursor: not-allowed;
+            }}
             .ghost {{
                 background: rgba(255,255,255,0.10);
                 color: white;
@@ -982,7 +1000,7 @@ def render_create_form() -> str:
                 Hay momentos que merecen quedarse para siempre
             </div>
 
-            <form action="/crear" method="post">
+            <form action="/crear" method="post" id="createForm">
                 <div class="section-title">Tus datos</div>
                 <input name="customer_name" placeholder="Tu nombre" required>
                 <input name="customer_email" type="email" placeholder="Tu email">
@@ -993,9 +1011,9 @@ def render_create_form() -> str:
                 <input name="recipient_phone" placeholder="Teléfono / WhatsApp de la persona" required>
 
                 <div class="section-title">Las 3 frases</div>
-                <input name="phrase_1" placeholder="Frase 1" required>
-                <input name="phrase_2" placeholder="Frase 2" required>
-                <input name="phrase_3" placeholder="Frase 3" required>
+                <input name="phrase_1" placeholder="Frase 1" required maxlength="160">
+                <input name="phrase_2" placeholder="Frase 2" required maxlength="160">
+                <input name="phrase_3" placeholder="Frase 3" required maxlength="160">
 
                 <div class="section-title">Dinero a regalar</div>
                 <input
@@ -1018,11 +1036,23 @@ def render_create_form() -> str:
                 </div>
 
                 <div class="buttons">
-                    <button type="submit">CONTINUAR</button>
+                    <button type="submit" id="submitBtn">CONTINUAR</button>
                     <a class="ghost" href="/">Volver</a>
                 </div>
             </form>
         </div>
+
+        <script>
+            document.addEventListener("DOMContentLoaded", function () {{
+                const form = document.getElementById("createForm");
+                const button = document.getElementById("submitBtn");
+
+                form.addEventListener("submit", function () {{
+                    button.disabled = true;
+                    button.textContent = "Procesando...";
+                }});
+            }});
+        </script>
     </body>
     </html>
     """
@@ -1039,6 +1069,34 @@ def create_order_and_redirect(
     phrase_3: str,
     gift_amount: float,
 ):
+    customer_name = (customer_name or "").strip()
+    customer_email = (customer_email or "").strip()
+    recipient_name = (recipient_name or "").strip()
+
+    phrase_1 = (phrase_1 or "").strip()
+    phrase_2 = (phrase_2 or "").strip()
+    phrase_3 = (phrase_3 or "").strip()
+
+    if not customer_name:
+        raise HTTPException(status_code=400, detail="Tu nombre es obligatorio")
+
+    if not recipient_name:
+        raise HTTPException(status_code=400, detail="El nombre del destinatario es obligatorio")
+
+    if not phrase_1 or not phrase_2 or not phrase_3:
+        raise HTTPException(status_code=400, detail="Las 3 frases son obligatorias")
+
+    if len(phrase_1) > 160 or len(phrase_2) > 160 or len(phrase_3) > 160:
+        raise HTTPException(status_code=400, detail="Las frases son demasiado largas")
+
+    try:
+        gift_amount = round(float(gift_amount or 0), 2)
+    except Exception:
+        raise HTTPException(status_code=400, detail="Importe no válido")
+
+    if gift_amount < 0:
+        raise HTTPException(status_code=400, detail="Importe no válido")
+
     sender_phone = normalize_phone(customer_phone)
     recipient_phone_norm = normalize_phone(recipient_phone)
 
@@ -1059,8 +1117,8 @@ def create_order_and_redirect(
         INSERT INTO senders (name, email, phone, created_at)
         VALUES (?, ?, ?, ?)
     """, (
-        (customer_name or "").strip(),
-        (customer_email or "").strip(),
+        customer_name,
+        customer_email,
         sender_phone,
         created_at,
     ))
@@ -1070,7 +1128,7 @@ def create_order_and_redirect(
         INSERT INTO recipients (name, phone, created_at)
         VALUES (?, ?, ?)
     """, (
-        (recipient_name or "").strip(),
+        recipient_name,
         recipient_phone_norm,
         created_at,
     ))
@@ -1090,12 +1148,10 @@ def create_order_and_redirect(
             gift_refund_deadline_at,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
-        (phrase_1 or "").strip(),
-        (phrase_2 or "").strip(),
-        (phrase_3 or "").strip(),
+        phrase_1, phrase_2, phrase_3,
         fees["gift_amount"],
         fees["fixed_fee"],
         fees["variable_fee"],
@@ -1129,7 +1185,7 @@ def create_order_and_redirect(
                 message=build_recipient_message(order),
             )
         except Exception as e:
-            print("WA recipient stub error:", e)
+            log_error("WA recipient stub error", e)
 
         return RedirectResponse(url=f"/post-pago/{order_id}", status_code=303)
 
@@ -1331,6 +1387,13 @@ def checkout_exito(order_id: str):
         }}, 8000);
     """ if is_paid else ""
 
+    fallback_link = f"""
+        <div class="soft">
+            Si esta página no avanza sola,
+            <a href="/post-pago/{safe_attr(order_id)}" style="color:white;">pulsa aquí</a>
+        </div>
+    """
+
     return f"""
     <!DOCTYPE html>
     <html lang="es">
@@ -1394,9 +1457,7 @@ def checkout_exito(order_id: str):
                 En unos instantes,<br>
                 alguien va a vivir algo que no espera
             </div>
-            <div class="soft">
-                Y cuando ocurra… volverá a ti
-            </div>
+            {fallback_link}
         </div>
 
         <script>
@@ -1432,7 +1493,13 @@ async def stripe_webhook(request: Request):
     if event_type == "checkout.session.completed":
         session = event["data"]["object"]
         order_id = session.get("metadata", {}).get("order_id") or session.get("client_reference_id")
+
         if order_id:
+            try:
+                get_order_by_id(order_id)
+            except HTTPException:
+                return {"received": True}
+
             update_order(
                 order_id,
                 paid=1,
@@ -1450,7 +1517,7 @@ async def stripe_webhook(request: Request):
                     message=build_recipient_message(order),
                 )
             except Exception as e:
-                print("WA recipient stub error:", e)
+                log_error("WA recipient stub error", e)
 
     return {"received": True}
 
@@ -1475,7 +1542,6 @@ def resumen(order_id: str):
     order = get_order_by_id(order_id)
 
     sender_pack_url = sender_pack_url_from_order(order)
-    recipient_whatsapp = whatsapp_link(order["recipient_phone"], build_recipient_message(order))
     reaction_ready = reaction_exists(order)
 
     if reaction_ready:
@@ -1493,12 +1559,12 @@ def resumen(order_id: str):
             </div>
         """
     else:
-        status_line = "Ahora solo queda dejar que ocurra"
-        soft_line = "Envíala por WhatsApp y cuando todo pase, volverá aquí."
-        main_button = f"""
-            <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
-                <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
-            </a>
+        status_line = "Ya está enviada"
+        soft_line = "La persona la recibirá por WhatsApp. Cuando viva el momento, volverá aquí."
+        main_button = """
+            <button class="primary" type="button" disabled style="opacity:.75;cursor:default;">
+                ETERNA enviada
+            </button>
         """
         extra_block = ""
 
@@ -1571,10 +1637,6 @@ def resumen(order_id: str):
                 font-weight: bold;
                 font-size: 15px;
                 cursor: pointer;
-            }}
-            .whatsapp {{
-                background: #25D366;
-                color: white;
             }}
             .primary {{
                 background: white;
@@ -2016,12 +2078,13 @@ def pedido(recipient_token: str):
                 try {{
                     if (!chunks.length) return null;
 
+                    const ext = mediaMimeType.includes("mp4") ? "mp4" : "webm";
                     const blob = new Blob(chunks, {{ type: mediaMimeType }});
                     if (!blob || blob.size === 0) return null;
 
                     const formData = new FormData();
                     formData.append("recipient_token", "{safe_attr(order['recipient_token'])}");
-                    formData.append("video", blob, "{safe_attr(order['id'])}.webm");
+                    formData.append("video", blob, "{safe_attr(order['id'])}." + ext);
 
                     const response = await fetch("/upload-video", {{
                         method: "POST",
@@ -2090,8 +2153,9 @@ def pedido(recipient_token: str):
                 startBtn.disabled = true;
 
                 try {{
-                    const lockOk = await lockExperienceStart();
-                    if (!lockOk) return;
+                    if (!window.MediaRecorder) {{
+                        throw new Error("MediaRecorder no soportado");
+                    }}
 
                     const stream = await navigator.mediaDevices.getUserMedia({{
                         video: {{ width: 640, height: 480, facingMode: "user" }},
@@ -2104,20 +2168,40 @@ def pedido(recipient_token: str):
 
                     let options = null;
 
-                    if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
+                    if (MediaRecorder.isTypeSupported("video/webm;codecs=vp8,opus")) {{
+                        mediaMimeType = "video/webm;codecs=vp8,opus";
                         options = {{
-                            mimeType: "video/webm;codecs=vp8,opus",
+                            mimeType: mediaMimeType,
                             videoBitsPerSecond: 900000,
                             audioBitsPerSecond: 64000
                         }};
-                    }} else if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm")) {{
+                    }} else if (MediaRecorder.isTypeSupported("video/webm")) {{
+                        mediaMimeType = "video/webm";
                         options = {{
-                            mimeType: "video/webm",
+                            mimeType: mediaMimeType,
+                            videoBitsPerSecond: 900000,
+                            audioBitsPerSecond: 64000
+                        }};
+                    }} else if (MediaRecorder.isTypeSupported("video/mp4")) {{
+                        mediaMimeType = "video/mp4";
+                        options = {{
+                            mimeType: mediaMimeType,
                             videoBitsPerSecond: 900000,
                             audioBitsPerSecond: 64000
                         }};
                     }} else {{
-                        options = {{}};
+                        currentStream.getTracks().forEach(track => track.stop());
+                        currentStream = null;
+                        throw new Error("Formato de grabación no soportado");
+                    }}
+
+                    const lockOk = await lockExperienceStart();
+                    if (!lockOk) {{
+                        if (currentStream) {{
+                            currentStream.getTracks().forEach(track => track.stop());
+                            currentStream = null;
+                        }}
+                        return;
                     }}
 
                     recorder = new MediaRecorder(stream, options);
@@ -2138,7 +2222,13 @@ def pedido(recipient_token: str):
                     await finishFlow();
 
                 }} catch (e) {{
+                    if (currentStream) {{
+                        currentStream.getTracks().forEach(track => track.stop());
+                        currentStream = null;
+                    }}
                     alert("Necesitamos acceso a cámara y micrófono para continuar.");
+                    experienceStarted = false;
+                    startBtn.disabled = false;
                     window.location.reload();
                 }}
             }}
@@ -2204,7 +2294,7 @@ async def upload_video(
                 final_content_type,
             )
         except Exception as e:
-            print("Error subiendo a R2:", e)
+            log_error("Error subiendo a R2", e)
 
         update_order(
             order["id"],
@@ -2223,7 +2313,7 @@ async def upload_video(
             except Exception:
                 pass
         else:
-            insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/{order['id']}", "local")
+            insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}", "local")
 
         updated_order = get_order_by_id(order["id"])
 
@@ -2235,7 +2325,7 @@ async def upload_video(
             )
             update_order(updated_order["id"], sender_notified=1)
         except Exception as e:
-            print("WA sender stub error:", e)
+            log_error("WA sender stub error", e)
 
         return JSONResponse({
             "status": "ok",
@@ -2248,13 +2338,13 @@ async def upload_video(
 
 
 # =========================================================
-# VIDEO FILE
+# VIDEO FILE PRIVADO
 # =========================================================
 
 
-@app.get("/video/{order_id}")
-def get_video(order_id: str):
-    order = get_order_by_id(order_id)
+@app.get("/video/sender/{sender_token}")
+def get_video_for_sender(sender_token: str):
+    order = get_order_by_sender_token_or_404(sender_token)
 
     filepath = order.get("reaction_video_local")
     if not filepath or not os.path.exists(filepath):
@@ -2749,7 +2839,7 @@ def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
     reaction_video_url = order.get("reaction_video_public_url") or (
-        f"/video/{order['id']}" if reaction_exists(order) else None
+        f"/video/sender/{order['sender_token']}" if reaction_exists(order) else None
     )
 
     if not reaction_video_url:
@@ -3033,6 +3123,11 @@ def health():
         "orders": get_orders_count(),
         "assets": get_assets_count(),
     }
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 # =========================================================
