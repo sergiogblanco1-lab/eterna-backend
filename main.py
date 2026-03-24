@@ -1,5 +1,6 @@
 import html
 import json
+import mimetypes
 import os
 import secrets
 import sqlite3
@@ -15,7 +16,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V27 FULL FLOW CLEAN")
+app = FastAPI(title="ETERNA V29 CLEAN LOCKED")
 
 # =========================================================
 # CONFIG
@@ -32,7 +33,9 @@ PUBLIC_BASE_URL = os.getenv(
 
 BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE", "29"))
 CURRENCY = os.getenv("ETERNA_CURRENCY", "eur").strip().lower()
-COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
+
+GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
+FIXED_PLATFORM_FEE = float(os.getenv("ETERNA_FIXED_FEE", "2"))
 
 DEFAULT_GIFT_VIDEO_URL = os.getenv("DEFAULT_GIFT_VIDEO_URL", "").strip()
 
@@ -123,7 +126,9 @@ def init_db():
         phrase_3 TEXT NOT NULL,
 
         gift_amount REAL NOT NULL DEFAULT 0,
-        gift_commission REAL NOT NULL DEFAULT 0,
+        platform_fixed_fee REAL NOT NULL DEFAULT 0,
+        platform_variable_fee REAL NOT NULL DEFAULT 0,
+        platform_total_fee REAL NOT NULL DEFAULT 0,
         total_amount REAL NOT NULL DEFAULT 0,
 
         paid INTEGER NOT NULL DEFAULT 0,
@@ -133,9 +138,11 @@ def init_db():
         sender_notified INTEGER NOT NULL DEFAULT 0,
         experience_started INTEGER NOT NULL DEFAULT 0,
         experience_completed INTEGER NOT NULL DEFAULT 0,
+        connect_onboarding_completed INTEGER NOT NULL DEFAULT 0,
 
         stripe_session_id TEXT,
         stripe_payment_status TEXT,
+        stripe_connected_account_id TEXT,
 
         recipient_token TEXT NOT NULL UNIQUE,
         sender_token TEXT NOT NULL UNIQUE,
@@ -143,11 +150,6 @@ def init_db():
         reaction_video_local TEXT,
         reaction_video_public_url TEXT,
         gift_video_url TEXT,
-
-        cashout_full_name TEXT,
-        cashout_email TEXT,
-        cashout_phone TEXT,
-        cashout_iban TEXT,
 
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -214,23 +216,28 @@ def init_db():
     )
     add_column_if_missing(
         "orders",
-        "cashout_full_name",
-        "ALTER TABLE orders ADD COLUMN cashout_full_name TEXT",
+        "stripe_connected_account_id",
+        "ALTER TABLE orders ADD COLUMN stripe_connected_account_id TEXT",
     )
     add_column_if_missing(
         "orders",
-        "cashout_email",
-        "ALTER TABLE orders ADD COLUMN cashout_email TEXT",
+        "connect_onboarding_completed",
+        "ALTER TABLE orders ADD COLUMN connect_onboarding_completed INTEGER NOT NULL DEFAULT 0",
     )
     add_column_if_missing(
         "orders",
-        "cashout_phone",
-        "ALTER TABLE orders ADD COLUMN cashout_phone TEXT",
+        "platform_fixed_fee",
+        "ALTER TABLE orders ADD COLUMN platform_fixed_fee REAL NOT NULL DEFAULT 0",
     )
     add_column_if_missing(
         "orders",
-        "cashout_iban",
-        "ALTER TABLE orders ADD COLUMN cashout_iban TEXT",
+        "platform_variable_fee",
+        "ALTER TABLE orders ADD COLUMN platform_variable_fee REAL NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "platform_total_fee",
+        "ALTER TABLE orders ADD COLUMN platform_total_fee REAL NOT NULL DEFAULT 0",
     )
 
 
@@ -290,8 +297,25 @@ def new_token() -> str:
     return secrets.token_urlsafe(24)
 
 
-def reaction_video_path(order_id: str) -> str:
-    return str(VIDEO_FOLDER / f"{order_id}.webm")
+def detect_video_extension(upload: UploadFile) -> str:
+    content_type = (upload.content_type or "").lower().strip()
+    filename = (upload.filename or "").lower().strip()
+
+    if filename.endswith(".mp4") or content_type == "video/mp4":
+        return "mp4"
+    return "webm"
+
+
+def reaction_video_path(order_id: str, extension: str = "webm") -> str:
+    extension = (extension or "webm").lower().strip()
+    if extension not in {"webm", "mp4"}:
+        extension = "webm"
+    return str(VIDEO_FOLDER / f"{order_id}.{extension}")
+
+
+def guess_media_type_from_path(path: str) -> str:
+    media_type, _ = mimetypes.guess_type(path)
+    return media_type or "application/octet-stream"
 
 
 def r2_enabled() -> bool:
@@ -484,9 +508,86 @@ def send_whatsapp_sender(phone: str, link: str, message: str):
     print("MESSAGE:", message)
 
 
+def calculate_fees(gift_amount: float) -> dict:
+    gift_amount = max(0.0, round(float(gift_amount or 0), 2))
+    fixed_fee = round(FIXED_PLATFORM_FEE, 2)
+    variable_fee = round(gift_amount * GIFT_COMMISSION_RATE, 2)
+    total_fee = round(fixed_fee + variable_fee, 2)
+    total_amount = round(BASE_PRICE + gift_amount + total_fee, 2)
+    return {
+        "gift_amount": gift_amount,
+        "fixed_fee": fixed_fee,
+        "variable_fee": variable_fee,
+        "total_fee": total_fee,
+        "total_amount": total_amount,
+    }
+
+
+# =========================================================
+# STRIPE CONNECT HELPERS
+# =========================================================
+
+
+def get_or_create_connected_account(order: dict) -> str:
+    existing = (order.get("stripe_connected_account_id") or "").strip()
+    if existing:
+        return existing
+
+    if not STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=500, detail="Stripe no configurado")
+
+    account = stripe.Account.create(
+        type="express",
+        country="ES",
+        capabilities={
+            "transfers": {"requested": True},
+        },
+        metadata={
+            "order_id": order["id"],
+            "recipient_name": order.get("recipient_name", ""),
+        },
+    )
+
+    update_order(order["id"], stripe_connected_account_id=account.id)
+    return account.id
+
+
+def create_connect_onboarding_link(order: dict) -> str:
+    account_id = get_or_create_connected_account(order)
+
+    link = stripe.AccountLink.create(
+        account=account_id,
+        refresh_url=f"{PUBLIC_BASE_URL}/connect/refresh/{order['recipient_token']}",
+        return_url=f"{PUBLIC_BASE_URL}/connect/return/{order['recipient_token']}",
+        type="account_onboarding",
+    )
+    return link.url
+
+
+def refresh_connect_status(order: dict) -> bool:
+    account_id = (order.get("stripe_connected_account_id") or "").strip()
+    if not account_id:
+        return False
+
+    acct = stripe.Account.retrieve(account_id)
+
+    ready = bool(acct.get("details_submitted")) and (
+        acct.get("capabilities", {}).get("transfers") == "active"
+    )
+
+    update_order(
+        order["id"],
+        connect_onboarding_completed=1 if ready else 0,
+        cashout_completed=1 if ready else 0,
+    )
+
+    return ready
+
+
 # =========================================================
 # CREATE FORM
 # =========================================================
+
 
 def render_create_form() -> str:
     return f"""
@@ -556,7 +657,7 @@ def render_create_form() -> str:
                 margin-top: 8px;
                 font-size: 13px;
                 color: rgba(255,255,255,0.5);
-                line-height: 1.4;
+                line-height: 1.6;
             }}
             .buttons {{
                 display: grid;
@@ -583,6 +684,16 @@ def render_create_form() -> str:
                 background: rgba(255,255,255,0.10);
                 color: white;
                 border: 1px solid rgba(255,255,255,0.10);
+            }}
+            .price-box {{
+                margin-top: 12px;
+                background: rgba(255,255,255,0.05);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 16px;
+                padding: 14px 16px;
+                font-size: 14px;
+                line-height: 1.8;
+                color: rgba(255,255,255,0.82);
             }}
         </style>
     </head>
@@ -620,8 +731,13 @@ def render_create_form() -> str:
                     required
                 >
 
+                <div class="price-box">
+                    Precio base ETERNA: {money(BASE_PRICE)}€<br>
+                    Comisión regalo: {money(FIXED_PLATFORM_FEE)}€ + {(GIFT_COMMISSION_RATE * 100):.0f}% del importe regalado
+                </div>
+
                 <div class="hint">
-                    Precio base: {money(BASE_PRICE)}€ · Si añades dinero, se suma una pequeña comisión automática.
+                    Ejemplo: si regalas 100€, pagarás 100€ + {money(FIXED_PLATFORM_FEE)}€ + 5%.
                 </div>
 
                 <div class="buttons">
@@ -656,10 +772,7 @@ def create_order_and_redirect(
     recipient_token = new_token()
     sender_token = new_token()
 
-    gift_amount = max(0.0, round(float(gift_amount or 0), 2))
-    gift_commission = round(gift_amount * COMMISSION_RATE, 2)
-    total_amount = round(BASE_PRICE + gift_amount + gift_commission, 2)
-
+    fees = calculate_fees(gift_amount)
     created_at = now_iso()
 
     conn = db_conn()
@@ -690,28 +803,30 @@ def create_order_and_redirect(
         INSERT INTO orders (
             id, sender_id, recipient_id,
             phrase_1, phrase_2, phrase_3,
-            gift_amount, gift_commission, total_amount,
+            gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
             paid, delivered_to_recipient, reaction_uploaded, cashout_completed,
-            sender_notified, experience_started, experience_completed,
-            stripe_session_id, stripe_payment_status,
+            sender_notified, experience_started, experience_completed, connect_onboarding_completed,
+            stripe_session_id, stripe_payment_status, stripe_connected_account_id,
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
-            cashout_full_name, cashout_email, cashout_phone, cashout_iban,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
         (phrase_1 or "").strip(),
         (phrase_2 or "").strip(),
         (phrase_3 or "").strip(),
-        gift_amount, gift_commission, total_amount,
+        fees["gift_amount"],
+        fees["fixed_fee"],
+        fees["variable_fee"],
+        fees["total_fee"],
+        fees["total_amount"],
         0, 0, 0, 0,
-        0, 0, 0,
-        None, None,
+        0, 0, 0, 0,
+        None, None, None,
         recipient_token, sender_token,
         None, None, DEFAULT_GIFT_VIDEO_URL or None,
-        None, None, None, None,
         created_at, created_at
     ))
 
@@ -743,12 +858,12 @@ def create_order_and_redirect(
                         "product_data": {
                             "name": "ETERNA",
                             "description": (
-                                f"ETERNA {money(BASE_PRICE)}€ + "
-                                f"regalo {money(gift_amount)}€ + "
-                                f"comisión {money(gift_commission)}€"
+                                f"Base {money(BASE_PRICE)}€ + "
+                                f"regalo {money(fees['gift_amount'])}€ + "
+                                f"comisión {money(fees['total_fee'])}€"
                             ),
                         },
-                        "unit_amount": int(round(total_amount * 100)),
+                        "unit_amount": int(round(fees["total_amount"] * 100)),
                     },
                     "quantity": 1,
                 }
@@ -767,6 +882,7 @@ def create_order_and_redirect(
 # =========================================================
 # HOME / CREAR
 # =========================================================
+
 
 @app.get("/", response_class=HTMLResponse)
 def home():
@@ -916,16 +1032,17 @@ def crear_eterna_legacy(
 # CHECKOUT / WEBHOOK STRIPE
 # =========================================================
 
+
 @app.get("/checkout-exito/{order_id}", response_class=HTMLResponse)
 def checkout_exito(order_id: str):
     order = get_order_by_id(order_id)
     is_paid = bool(order["paid"])
 
-    refresh = '<meta http-equiv="refresh" content="4">' if not is_paid else ""
+    refresh = '<meta http-equiv="refresh" content="9">' if not is_paid else ""
     redirect_script = f"""
         setTimeout(function() {{
             window.location.href = "/post-pago/{safe_attr(order_id)}";
-        }}, 3500);
+        }}, 8000);
     """ if is_paid else ""
 
     return f"""
@@ -959,7 +1076,7 @@ def checkout_exito(order_id: str):
                 max-width: 680px;
                 opacity: 0;
                 transform: translateY(10px);
-                animation: fadeIn 1.2s ease forwards;
+                animation: fadeIn 1.6s ease forwards;
             }}
             h1 {{
                 font-size: 42px;
@@ -1053,6 +1170,7 @@ async def stripe_webhook(request: Request):
 # =========================================================
 # POST PAGO / RESUMEN
 # =========================================================
+
 
 @app.get("/post-pago/{order_id}")
 def post_pago(order_id: str):
@@ -1217,6 +1335,10 @@ def resumen(order_id: str):
                     <div class="value">{money(order["gift_amount"])}€</div>
                 </div>
                 <div class="stat">
+                    <div class="label">Comisión</div>
+                    <div class="value">{money(order["platform_total_fee"])}€</div>
+                </div>
+                <div class="stat">
                     <div class="label">Total</div>
                     <div class="value">{money(order["total_amount"])}€</div>
                 </div>
@@ -1242,6 +1364,7 @@ def resumen(order_id: str):
 # =========================================================
 # START EXPERIENCE LOCK
 # =========================================================
+
 
 @app.post("/start-experience")
 def start_experience(recipient_token: str = Form(...)):
@@ -1272,8 +1395,9 @@ def start_experience(recipient_token: str = Form(...)):
 
 
 # =========================================================
-# BLOQUEO DE SEGUNDA ENTRADA
+# BLOQUEO SEGUNDA ENTRADA
 # =========================================================
+
 
 @app.get("/bloqueado/{recipient_token}", response_class=HTMLResponse)
 def bloqueado(recipient_token: str):
@@ -1342,6 +1466,7 @@ def bloqueado(recipient_token: str):
 # =========================================================
 # EXPERIENCIA DEL REGALADO
 # =========================================================
+
 
 @app.get("/pedido/{recipient_token}", response_class=HTMLResponse)
 def pedido(recipient_token: str):
@@ -1415,10 +1540,13 @@ def pedido(recipient_token: str):
                 line-height: 1.9;
             }}
             .single {{
-                margin-top: 22px;
-                color: rgba(255,255,255,0.94);
-                font-size: 18px;
-                line-height: 1.8;
+                margin-top: 26px;
+                font-size: 24px;
+                font-weight: bold;
+                letter-spacing: 1px;
+                color: white;
+                opacity: 0;
+                animation: fadeIn 1.5s ease forwards, pulse 2.5s ease-in-out infinite;
             }}
             .consent-row {{
                 margin-top: 28px;
@@ -1492,6 +1620,17 @@ def pedido(recipient_token: str):
                 color: rgba(255,255,255,0.6);
                 font-size: 14px;
             }}
+            @keyframes fadeIn {{
+                to {{
+                    opacity: 1;
+                    transform: translateY(0);
+                }}
+            }}
+            @keyframes pulse {{
+                0% {{ opacity: 0.8; transform: scale(1); }}
+                50% {{ opacity: 1; transform: scale(1.02); }}
+                100% {{ opacity: 0.8; transform: scale(1); }}
+            }}
         </style>
     </head>
     <body>
@@ -1505,7 +1644,7 @@ def pedido(recipient_token: str):
                 </div>
 
                 <div class="single">
-                    Esta experiencia solo se vive una vez.
+                    Esta experiencia solo se vive una vez
                 </div>
 
                 <label class="consent-row" for="consentCheck">
@@ -1728,6 +1867,7 @@ def pedido(recipient_token: str):
 # SUBIR VIDEO
 # =========================================================
 
+
 @app.post("/upload-video")
 async def upload_video(
     recipient_token: str = Form(...),
@@ -1747,7 +1887,9 @@ async def upload_video(
     if not is_allowed_type and not is_allowed_name:
         raise HTTPException(status_code=400, detail="Formato de vídeo no permitido")
 
-    filepath = reaction_video_path(order["id"])
+    video_extension = detect_video_extension(video)
+    filepath = reaction_video_path(order["id"], video_extension)
+    final_content_type = "video/mp4" if video_extension == "mp4" else "video/webm"
     total_size = 0
 
     try:
@@ -1771,7 +1913,11 @@ async def upload_video(
 
         public_video_url = None
         try:
-            public_video_url = upload_video_to_r2(filepath, f"{order['id']}.webm", "video/webm")
+            public_video_url = upload_video_to_r2(
+                filepath,
+                f"{order['id']}.{video_extension}",
+                final_content_type,
+            )
         except Exception as e:
             print("Error subiendo a R2:", e)
 
@@ -1820,6 +1966,7 @@ async def upload_video(
 # VIDEO FILE
 # =========================================================
 
+
 @app.get("/video/{order_id}")
 def get_video(order_id: str):
     order = get_order_by_id(order_id)
@@ -1828,12 +1975,14 @@ def get_video(order_id: str):
     if not filepath or not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Vídeo no encontrado")
 
-    return FileResponse(filepath, media_type="video/webm", filename=f"{order_id}.webm")
+    media_type = guess_media_type_from_path(filepath)
+    return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
 
 
 # =========================================================
 # COBRAR
 # =========================================================
+
 
 @app.get("/cobrar/{recipient_token}", response_class=HTMLResponse)
 def cobrar(recipient_token: str):
@@ -1862,7 +2011,12 @@ def cobrar(recipient_token: str):
         </html>
         """)
 
-    if bool(order.get("cashout_completed")):
+    gift_amount = float(order.get("gift_amount") or 0)
+
+    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    if gift_amount <= 0 and bool(order.get("cashout_completed")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     amount_text = format_amount_display(order["gift_amount"])
@@ -1930,12 +2084,6 @@ def cobrar(recipient_token: str):
                 text-decoration: none;
                 text-align: center;
             }}
-            .btn-secondary {{
-                margin-top: 12px;
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-            }}
             .soft {{
                 margin-top: 18px;
                 font-size: 13px;
@@ -1949,23 +2097,17 @@ def cobrar(recipient_token: str):
             <h1>Esto ya es tuyo</h1>
 
             <div class="lead">
-                Alguien ha querido cuidarte de esta manera
+                Para cobrarlo de verdad, Stripe te pedirá tus datos en una página segura.
             </div>
 
             <div class="amount">{amount_text}</div>
 
-            <a class="btn" href="/datos-cobro/{safe_attr(recipient_token)}">
-                Recibirlo
-            </a>
-
-            <a class="btn btn-secondary" href="/gracias-cobro/{safe_attr(recipient_token)}">
-                Ver cierre
+            <a class="btn" href="/iniciar-cobro-real/{safe_attr(recipient_token)}">
+                Cobrar
             </a>
 
             <div class="soft">
-                El envío del dinero puede tardar según los tiempos habituales de bancos y proveedores de pago.
-                Al continuar aceptas las
-                <a href="/condiciones" target="_blank" style="color:white;">condiciones</a>.
+                ETERNA no guarda tu IBAN. Stripe se encarga del proceso seguro.
             </div>
         </div>
     </body>
@@ -1974,173 +2116,16 @@ def cobrar(recipient_token: str):
 
 
 # =========================================================
-# DATOS DE COBRO
+# STRIPE CONNECT ONBOARDING
 # =========================================================
 
-@app.get("/datos-cobro/{recipient_token}", response_class=HTMLResponse)
-def datos_cobro(recipient_token: str):
+
+@app.get("/iniciar-cobro-real/{recipient_token}")
+def iniciar_cobro_real(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
-    if not bool(order.get("experience_started")):
+    if not bool(order.get("paid")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
-
-    if not bool(order.get("experience_completed")):
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos preparando tu cobro…</h1></div>
-        </body>
-        </html>
-        """)
-
-    if not reaction_exists(order):
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos guardando este momento…</h1></div>
-        </body>
-        </html>
-        """)
-
-    if bool(order.get("cashout_completed")):
-        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
-
-    amount_text = format_amount_display(order["gift_amount"])
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Recibir dinero</title>
-        <style>
-            * {{ box-sizing: border-box; }}
-            html, body {{ margin: 0; min-height: 100%; background: #000; }}
-            body {{
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
-                color: white;
-                font-family: Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                padding: 24px;
-            }}
-            .card {{
-                width: 100%;
-                max-width: 760px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 40px 28px;
-                text-align: center;
-            }}
-            h1 {{
-                margin: 0 0 16px 0;
-                font-size: 38px;
-            }}
-            .lead {{
-                font-size: 17px;
-                color: rgba(255,255,255,0.82);
-                line-height: 1.7;
-                margin-bottom: 20px;
-            }}
-            .amount {{
-                font-size: 42px;
-                font-weight: bold;
-                margin-bottom: 24px;
-            }}
-            form {{
-                display: grid;
-                gap: 12px;
-                margin-top: 20px;
-            }}
-            input {{
-                width: 100%;
-                padding: 15px 16px;
-                border-radius: 14px;
-                border: 1px solid rgba(255,255,255,0.10);
-                background: rgba(255,255,255,0.06);
-                color: white;
-                font-size: 15px;
-                outline: none;
-            }}
-            input::placeholder {{
-                color: rgba(255,255,255,0.45);
-            }}
-            button, .ghost {{
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                font-weight: bold;
-                font-size: 15px;
-                cursor: pointer;
-                text-decoration: none;
-                text-align: center;
-                display: inline-block;
-            }}
-            button {{
-                background: white;
-                color: black;
-            }}
-            .ghost {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
-                margin-top: 12px;
-            }}
-            .soft {{
-                margin-top: 18px;
-                font-size: 13px;
-                color: rgba(255,255,255,0.5);
-                line-height: 1.7;
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Recibir tu dinero</h1>
-
-            <div class="lead">
-                Introduce tus datos para preparar el cobro.
-            </div>
-
-            <div class="amount">{amount_text}</div>
-
-            <form action="/datos-cobro/{safe_attr(recipient_token)}" method="post">
-                <input name="full_name" placeholder="Nombre completo" required>
-                <input name="email" type="email" placeholder="Email" required>
-                <input name="phone" placeholder="Teléfono" required>
-                <input name="iban" placeholder="IBAN" required>
-                <button type="submit">Continuar</button>
-            </form>
-
-            <a class="ghost" href="/cobrar/{safe_attr(recipient_token)}">Volver</a>
-
-            <div class="soft">
-                El cobro seguirá los tiempos habituales de bancos y proveedores de pago.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-
-@app.post("/datos-cobro/{recipient_token}")
-def datos_cobro_post(
-    recipient_token: str,
-    full_name: str = Form(...),
-    email: str = Form(...),
-    phone: str = Form(...),
-    iban: str = Form(...),
-):
-    order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not bool(order.get("experience_started")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
@@ -2148,21 +2133,50 @@ def datos_cobro_post(
     if not bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    update_order(
-        order["id"],
-        cashout_completed=1,
-        cashout_full_name=(full_name or "").strip(),
-        cashout_email=(email or "").strip(),
-        cashout_phone=normalize_phone(phone),
-        cashout_iban=(iban or "").strip(),
-    )
+    gift_amount = float(order.get("gift_amount") or 0)
 
-    return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+    if gift_amount <= 0:
+        update_order(
+            order["id"],
+            cashout_completed=1,
+            connect_onboarding_completed=1,
+        )
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    if not STRIPE_SECRET_KEY:
+        update_order(
+            order["id"],
+            cashout_completed=1,
+            connect_onboarding_completed=1,
+        )
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    link_url = create_connect_onboarding_link(order)
+    return RedirectResponse(url=link_url, status_code=303)
+
+
+@app.get("/connect/refresh/{recipient_token}")
+def connect_refresh(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+    link_url = create_connect_onboarding_link(order)
+    return RedirectResponse(url=link_url, status_code=303)
+
+
+@app.get("/connect/return/{recipient_token}")
+def connect_return(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+    ready = refresh_connect_status(order)
+
+    if ready:
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
 
 # =========================================================
-# GRACIAS COBRO / CIERRE FINAL DEL REGALADO
+# GRACIAS COBRO
 # =========================================================
+
 
 @app.get("/gracias-cobro/{recipient_token}", response_class=HTMLResponse)
 def gracias_cobro(recipient_token: str):
@@ -2171,7 +2185,41 @@ def gracias_cobro(recipient_token: str):
     if not bool(order.get("experience_started")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
-    return """
+    if not bool(order.get("experience_completed")):
+        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+
+    gift_amount = float(order.get("gift_amount") or 0)
+
+    if gift_amount > 0 and not bool(order.get("connect_onboarding_completed")):
+        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+
+    if gift_amount <= 0 and not bool(order.get("cashout_completed")):
+        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+
+    gift_video_url = order.get("gift_video_url") or DEFAULT_GIFT_VIDEO_URL
+
+    title = "Ya está"
+    lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
+    soft = (
+        "Stripe ya ha recibido tus datos. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
+        if gift_amount > 0
+        else "La experiencia ha quedado cerrada correctamente."
+    )
+
+    video_block = ""
+    if gift_video_url:
+        safe_gift_video = safe_attr(gift_video_url)
+        video_block = f"""
+            <div class="video-wrap">
+                <video controls playsinline preload="metadata">
+                    <source src="{safe_gift_video}" type="video/mp4">
+                    <source src="{safe_gift_video}" type="video/webm">
+                    Tu navegador no puede reproducir este vídeo.
+                </video>
+            </div>
+        """
+
+    return f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
@@ -2179,12 +2227,12 @@ def gracias_cobro(recipient_token: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            html, body {
+            html, body {{
                 margin: 0;
                 min-height: 100%;
                 background: #000;
-            }
-            body {
+            }}
+            body {{
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
@@ -2196,41 +2244,49 @@ def gracias_cobro(recipient_token: str):
                 justify-content: center;
                 padding: 24px;
                 text-align: center;
-            }
-            .card {
+            }}
+            .card {{
                 width: 100%;
                 max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
                 padding: 42px 30px;
-            }
-            h1 {
+            }}
+            h1 {{
                 margin: 0 0 18px 0;
                 font-size: 40px;
-            }
-            .lead {
-                color: rgba(255,255,255,0.84);
+            }}
+            .lead {{
+                color: rgba(255,255,255,0.92);
                 line-height: 1.8;
-                font-size: 20px;
-                margin: 0 0 12px 0;
-            }
-            .soft {
-                margin-top: 18px;
-                color: rgba(255,255,255,0.42);
+                font-size: 24px;
+                margin: 0 0 10px 0;
+                font-weight: bold;
+            }}
+            .soft {{
+                margin-top: 10px;
+                color: rgba(255,255,255,0.55);
                 font-size: 14px;
-            }
+                line-height: 1.7;
+            }}
+            .video-wrap {{
+                margin-top: 28px;
+            }}
+            video {{
+                width: 100%;
+                border-radius: 18px;
+                background: #111;
+                display: block;
+            }}
         </style>
     </head>
     <body>
         <div class="card">
-            <h1>Ya está</h1>
-            <div class="lead">
-                Este momento ya forma parte de ti
-            </div>
-            <div class="soft">
-                Tu solicitud de cobro ha quedado registrada
-            </div>
+            <h1>{safe_text(title)}</h1>
+            <div class="lead">{safe_text(lead)}</div>
+            <div class="soft">{safe_text(soft)}</div>
+            {video_block}
         </div>
     </body>
     </html>
@@ -2238,9 +2294,9 @@ def gracias_cobro(recipient_token: str):
 
 
 # =========================================================
-# REACCION
-# SOLO SE USA COMO PASARELA INTERNA, NO ENSEÑA VIDEO AL REGALADO
+# REACCION (NO SE ENSEÑA AL REGALADO)
 # =========================================================
+
 
 @app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
 def reaccion(recipient_token: str):
@@ -2259,15 +2315,13 @@ def reaccion(recipient_token: str):
         </html>
         """)
 
-    if not bool(order.get("cashout_completed")):
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
-
-    return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+    return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
 
 # =========================================================
 # SENDER PACK
 # =========================================================
+
 
 @app.get("/sender/{sender_token}", response_class=HTMLResponse)
 def sender_pack(sender_token: str):
@@ -2288,6 +2342,7 @@ def sender_pack(sender_token: str):
         """)
 
     safe_reaction = safe_attr(reaction_video_url)
+    gift_amount_text = format_amount_display(order.get("gift_amount") or 0)
 
     return f"""
     <!DOCTYPE html>
@@ -2324,9 +2379,15 @@ def sender_pack(sender_token: str):
                 padding: 28px;
             }}
             h1 {{
-                margin: 0 0 22px 0;
+                margin: 0 0 18px 0;
                 text-align: center;
                 font-size: 34px;
+            }}
+            .amount {{
+                text-align: center;
+                color: rgba(255,255,255,0.72);
+                margin-bottom: 18px;
+                font-size: 16px;
             }}
             video {{
                 width: 100%;
@@ -2370,6 +2431,8 @@ def sender_pack(sender_token: str):
         <div class="card">
             <h1>Lo que hiciste ya es para siempre</h1>
 
+            <div class="amount">Regalo enviado: {safe_text(gift_amount_text)}</div>
+
             <video playsinline controls preload="metadata" autoplay>
                 <source src="{safe_reaction}" type="video/webm">
                 <source src="{safe_reaction}" type="video/mp4">
@@ -2392,6 +2455,7 @@ def sender_pack(sender_token: str):
 # =========================================================
 # DEMO PROTEGIDA
 # =========================================================
+
 
 @app.get("/upload-demo/{order_id}")
 def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=None)):
@@ -2417,6 +2481,7 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
 # =========================================================
 # LEGAL
 # =========================================================
+
 
 @app.get("/condiciones", response_class=HTMLResponse)
 def condiciones():
@@ -2452,7 +2517,7 @@ def condiciones():
             <p>Los pagos y operaciones relacionadas con el envío o recepción de dinero se gestionan a través de proveedores externos como Stripe. ETERNA no almacena datos bancarios del usuario.</p>
 
             <h2>5. Tiempos de disponibilidad</h2>
-            <p>El envío, recepción o disponibilidad final del dinero puede estar sujeto a los tiempos habituales de procesamiento de bancos, entidades financieras y proveedores de pago. ETERNA no garantiza tiempos exactos de abono.</p>
+            <p>La preparación o disponibilidad del cobro puede estar sujeta a los tiempos habituales de verificación, procesamiento y liquidación de Stripe, bancos y proveedores de pago.</p>
 
             <h2>6. Responsabilidad</h2>
             <p>ETERNA no se hace responsable de retrasos, bloqueos, verificaciones adicionales, incidencias técnicas o demoras originadas por bancos, pasarelas de pago o terceros ajenos al control directo de la plataforma.</p>
@@ -2493,7 +2558,7 @@ def privacidad():
             <p>ETERNA puede tratar datos como nombre, teléfono, correo electrónico y contenido generado durante la experiencia, incluyendo vídeo y audio cuando el usuario lo acepta expresamente.</p>
 
             <h2>2. Finalidad</h2>
-            <p>Estos datos se utilizan únicamente para prestar el servicio, crear la experiencia, enviarla, gestionarla, permitir su visualización y, en su caso, procesar pagos o cobros.</p>
+            <p>Estos datos se utilizan únicamente para prestar el servicio, crear la experiencia, enviarla, gestionarla, permitir su visualización y, en su caso, coordinar procesos de pago o cobro con proveedores externos.</p>
 
             <h2>3. Base legal</h2>
             <p>La base jurídica del tratamiento es el consentimiento del usuario y la ejecución del servicio solicitado.</p>
@@ -2519,11 +2584,12 @@ def privacidad():
 # HEALTH
 # =========================================================
 
+
 @app.get("/health")
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V27 FULL FLOW CLEAN",
+        "app": "ETERNA V29 CLEAN LOCKED",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
