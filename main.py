@@ -15,7 +15,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V23 UNIQUE EXPERIENCE LOCKED")
+app = FastAPI(title="ETERNA V24 STABLE CORE")
 
 # =========================================================
 # CONFIG
@@ -79,6 +79,15 @@ def column_exists(table_name: str, column_name: str) -> bool:
     cols = cur.fetchall()
     conn.close()
     return any(col["name"] == column_name for col in cols)
+
+
+def add_column_if_missing(table_name: str, column_name: str, sql: str):
+    if not column_exists(table_name, column_name):
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute(sql)
+        conn.commit()
+        conn.close()
 
 
 def init_db():
@@ -159,19 +168,47 @@ def init_db():
     conn.commit()
     conn.close()
 
-    migrations = [
-        ("orders", "sender_notified", "ALTER TABLE orders ADD COLUMN sender_notified INTEGER NOT NULL DEFAULT 0"),
-        ("orders", "experience_started", "ALTER TABLE orders ADD COLUMN experience_started INTEGER NOT NULL DEFAULT 0"),
-        ("orders", "experience_completed", "ALTER TABLE orders ADD COLUMN experience_completed INTEGER NOT NULL DEFAULT 0"),
-    ]
-
-    conn = db_conn()
-    cur = conn.cursor()
-    for table_name, column_name, sql in migrations:
-        if not column_exists(table_name, column_name):
-            cur.execute(sql)
-    conn.commit()
-    conn.close()
+    # Migraciones seguras
+    add_column_if_missing(
+        "orders",
+        "sender_notified",
+        "ALTER TABLE orders ADD COLUMN sender_notified INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "experience_started",
+        "ALTER TABLE orders ADD COLUMN experience_started INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "experience_completed",
+        "ALTER TABLE orders ADD COLUMN experience_completed INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "reaction_video_public_url",
+        "ALTER TABLE orders ADD COLUMN reaction_video_public_url TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "gift_video_url",
+        "ALTER TABLE orders ADD COLUMN gift_video_url TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "reaction_video_local",
+        "ALTER TABLE orders ADD COLUMN reaction_video_local TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "stripe_session_id",
+        "ALTER TABLE orders ADD COLUMN stripe_session_id TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "stripe_payment_status",
+        "ALTER TABLE orders ADD COLUMN stripe_payment_status TEXT",
+    )
 
 
 init_db()
@@ -380,10 +417,6 @@ def recipient_closure_url_from_order(order: dict) -> str:
     return f"{PUBLIC_BASE_URL}/reaccion/{order['recipient_token']}"
 
 
-def bool_int(value) -> int:
-    return 1 if value else 0
-
-
 def get_assets_count() -> int:
     conn = db_conn()
     cur = conn.cursor()
@@ -403,7 +436,7 @@ def get_orders_count() -> int:
 
 
 # =========================================================
-# WHATSAPP READY (STUBS)
+# WHATSAPP STUBS
 # =========================================================
 
 def build_recipient_message(order: dict) -> str:
@@ -437,7 +470,7 @@ def send_whatsapp_sender(phone: str, link: str, message: str):
 
 
 # =========================================================
-# CREATE FORM
+# FORM
 # =========================================================
 
 def render_create_form() -> str:
@@ -643,18 +676,22 @@ def create_order_and_redirect(
             id, sender_id, recipient_id,
             phrase_1, phrase_2, phrase_3,
             gift_amount, gift_commission, total_amount,
-            paid, delivered_to_recipient, reaction_uploaded, cashout_completed, sender_notified, experience_started, experience_completed,
+            paid, delivered_to_recipient, reaction_uploaded, cashout_completed,
+            sender_notified, experience_started, experience_completed,
             stripe_session_id, stripe_payment_status,
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
-        (phrase_1 or "").strip(), (phrase_2 or "").strip(), (phrase_3 or "").strip(),
+        (phrase_1 or "").strip(),
+        (phrase_2 or "").strip(),
+        (phrase_3 or "").strip(),
         gift_amount, gift_commission, total_amount,
-        0, 0, 0, 0, 0, 0, 0,
+        0, 0, 0, 0,
+        0, 0, 0,
         None, None,
         recipient_token, sender_token,
         None, None, DEFAULT_GIFT_VIDEO_URL or None,
@@ -2738,7 +2775,7 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V23 UNIQUE EXPERIENCE LOCKED",
+        "app": "ETERNA V24 STABLE CORE",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
@@ -2756,7 +2793,6 @@ if __name__ == "__main__":
     import uvicorn
 
     port = int(os.environ.get("PORT", 10000))
-
     print(f"🚀 Starting server on port {port}")
 
     uvicorn.run(
