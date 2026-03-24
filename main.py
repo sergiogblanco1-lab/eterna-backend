@@ -16,7 +16,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V29 CLEAN LOCKED")
+app = FastAPI(title="ETERNA V30 CLEAN LOCKED TRANSFER")
 
 # =========================================================
 # CONFIG
@@ -135,6 +135,7 @@ def init_db():
         delivered_to_recipient INTEGER NOT NULL DEFAULT 0,
         reaction_uploaded INTEGER NOT NULL DEFAULT 0,
         cashout_completed INTEGER NOT NULL DEFAULT 0,
+        transfer_completed INTEGER NOT NULL DEFAULT 0,
         sender_notified INTEGER NOT NULL DEFAULT 0,
         experience_started INTEGER NOT NULL DEFAULT 0,
         experience_completed INTEGER NOT NULL DEFAULT 0,
@@ -142,7 +143,9 @@ def init_db():
 
         stripe_session_id TEXT,
         stripe_payment_status TEXT,
+        stripe_payment_intent_id TEXT,
         stripe_connected_account_id TEXT,
+        stripe_transfer_id TEXT,
 
         recipient_token TEXT NOT NULL UNIQUE,
         sender_token TEXT NOT NULL UNIQUE,
@@ -216,13 +219,28 @@ def init_db():
     )
     add_column_if_missing(
         "orders",
+        "stripe_payment_intent_id",
+        "ALTER TABLE orders ADD COLUMN stripe_payment_intent_id TEXT",
+    )
+    add_column_if_missing(
+        "orders",
         "stripe_connected_account_id",
         "ALTER TABLE orders ADD COLUMN stripe_connected_account_id TEXT",
     )
     add_column_if_missing(
         "orders",
+        "stripe_transfer_id",
+        "ALTER TABLE orders ADD COLUMN stripe_transfer_id TEXT",
+    )
+    add_column_if_missing(
+        "orders",
         "connect_onboarding_completed",
         "ALTER TABLE orders ADD COLUMN connect_onboarding_completed INTEGER NOT NULL DEFAULT 0",
+    )
+    add_column_if_missing(
+        "orders",
+        "transfer_completed",
+        "ALTER TABLE orders ADD COLUMN transfer_completed INTEGER NOT NULL DEFAULT 0",
     )
     add_column_if_missing(
         "orders",
@@ -578,10 +596,72 @@ def refresh_connect_status(order: dict) -> bool:
     update_order(
         order["id"],
         connect_onboarding_completed=1 if ready else 0,
-        cashout_completed=1 if ready else 0,
     )
 
     return ready
+
+
+def process_gift_transfer_for_order(order: dict) -> dict:
+    gift_amount = float(order.get("gift_amount") or 0)
+
+    if gift_amount <= 0:
+        update_order(
+            order["id"],
+            transfer_completed=1,
+            cashout_completed=1,
+        )
+        return {"status": "no_gift"}
+
+    if not STRIPE_SECRET_KEY:
+        update_order(
+            order["id"],
+            transfer_completed=1,
+            cashout_completed=1,
+        )
+        return {"status": "stripe_disabled_test_mode"}
+
+    if not bool(order.get("paid")):
+        return {"status": "not_paid"}
+
+    if not bool(order.get("connect_onboarding_completed")):
+        return {"status": "onboarding_not_ready"}
+
+    if order.get("stripe_transfer_id"):
+        if not bool(order.get("transfer_completed")) or not bool(order.get("cashout_completed")):
+            update_order(
+                order["id"],
+                transfer_completed=1,
+                cashout_completed=1,
+            )
+        return {"status": "already_transferred", "transfer_id": order.get("stripe_transfer_id")}
+
+    destination = (order.get("stripe_connected_account_id") or "").strip()
+    if not destination:
+        return {"status": "missing_destination"}
+
+    try:
+        transfer = stripe.Transfer.create(
+            amount=int(round(gift_amount * 100)),
+            currency=CURRENCY,
+            destination=destination,
+            metadata={
+                "order_id": order["id"],
+                "type": "eterna_gift_transfer",
+            },
+            transfer_group=f"ETERNA_ORDER_{order['id']}",
+        )
+
+        update_order(
+            order["id"],
+            stripe_transfer_id=transfer.id,
+            transfer_completed=1,
+            cashout_completed=1,
+        )
+
+        return {"status": "ok", "transfer_id": transfer.id}
+    except Exception as e:
+        print("Transfer error:", e)
+        return {"status": "error", "error": str(e)}
 
 
 # =========================================================
@@ -804,14 +884,14 @@ def create_order_and_redirect(
             id, sender_id, recipient_id,
             phrase_1, phrase_2, phrase_3,
             gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
-            paid, delivered_to_recipient, reaction_uploaded, cashout_completed,
+            paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
             sender_notified, experience_started, experience_completed, connect_onboarding_completed,
-            stripe_session_id, stripe_payment_status, stripe_connected_account_id,
+            stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id,
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
         (phrase_1 or "").strip(),
@@ -822,9 +902,9 @@ def create_order_and_redirect(
         fees["variable_fee"],
         fees["total_fee"],
         fees["total_amount"],
+        0, 0, 0, 0, 0,
         0, 0, 0, 0,
-        0, 0, 0, 0,
-        None, None, None,
+        None, None, None, None, None,
         recipient_token, sender_token,
         None, None, DEFAULT_GIFT_VIDEO_URL or None,
         created_at, created_at
@@ -1152,6 +1232,7 @@ async def stripe_webhook(request: Request):
                 paid=1,
                 stripe_payment_status="paid",
                 stripe_session_id=session.get("id"),
+                stripe_payment_intent_id=session.get("payment_intent"),
             )
 
             try:
@@ -1206,13 +1287,10 @@ def resumen(order_id: str):
         """
     else:
         status_line = "Ahora solo queda dejar que ocurra"
-        soft_line = "Cuando todo pase, volverá aquí."
+        soft_line = "Envíala por WhatsApp y cuando todo pase, volverá aquí."
         main_button = f"""
             <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
                 <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
-            </a>
-            <a href="{safe_attr(recipient_experience_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
-                <button class="primary">Abrir experiencia</button>
             </a>
         """
         extra_block = ""
@@ -2013,13 +2091,19 @@ def cobrar(recipient_token: str):
 
     gift_amount = float(order.get("gift_amount") or 0)
 
-    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
+    if gift_amount > 0 and bool(order.get("transfer_completed")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     if gift_amount <= 0 and bool(order.get("cashout_completed")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     amount_text = format_amount_display(order["gift_amount"])
+
+    button_href = f"/iniciar-cobro-real/{safe_attr(recipient_token)}"
+    button_text = "Cobrar"
+
+    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")) and not bool(order.get("transfer_completed")):
+        button_text = "Finalizar cobro"
 
     return f"""
     <!DOCTYPE html>
@@ -2102,8 +2186,8 @@ def cobrar(recipient_token: str):
 
             <div class="amount">{amount_text}</div>
 
-            <a class="btn" href="/iniciar-cobro-real/{safe_attr(recipient_token)}">
-                Cobrar
+            <a class="btn" href="{button_href}">
+                {button_text}
             </a>
 
             <div class="soft">
@@ -2138,6 +2222,7 @@ def iniciar_cobro_real(recipient_token: str):
     if gift_amount <= 0:
         update_order(
             order["id"],
+            transfer_completed=1,
             cashout_completed=1,
             connect_onboarding_completed=1,
         )
@@ -2146,10 +2231,17 @@ def iniciar_cobro_real(recipient_token: str):
     if not STRIPE_SECRET_KEY:
         update_order(
             order["id"],
+            transfer_completed=1,
             cashout_completed=1,
             connect_onboarding_completed=1,
         )
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    if bool(order.get("connect_onboarding_completed")):
+        result = process_gift_transfer_for_order(order)
+        if result.get("status") in {"ok", "already_transferred"}:
+            return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
     link_url = create_connect_onboarding_link(order)
     return RedirectResponse(url=link_url, status_code=303)
@@ -2167,7 +2259,13 @@ def connect_return(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
     ready = refresh_connect_status(order)
 
-    if ready:
+    if not ready:
+        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
+
+    refreshed_order = get_order_by_recipient_token_or_404(recipient_token)
+    result = process_gift_transfer_for_order(refreshed_order)
+
+    if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
@@ -2190,7 +2288,7 @@ def gracias_cobro(recipient_token: str):
 
     gift_amount = float(order.get("gift_amount") or 0)
 
-    if gift_amount > 0 and not bool(order.get("connect_onboarding_completed")):
+    if gift_amount > 0 and not bool(order.get("transfer_completed")):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
     if gift_amount <= 0 and not bool(order.get("cashout_completed")):
@@ -2201,7 +2299,7 @@ def gracias_cobro(recipient_token: str):
     title = "Ya está"
     lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
     soft = (
-        "Stripe ya ha recibido tus datos. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
+        "Stripe ya ha recibido tus datos y el cobro ha quedado preparado. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
         if gift_amount > 0
         else "La experiencia ha quedado cerrada correctamente."
     )
@@ -2589,7 +2687,7 @@ def privacidad():
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V29 CLEAN LOCKED",
+        "app": "ETERNA V30 CLEAN LOCKED TRANSFER",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
