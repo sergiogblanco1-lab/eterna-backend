@@ -15,7 +15,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V24 STABLE CORE")
+app = FastAPI(title="ETERNA V26 STABLE FULL FLOW")
 
 # =========================================================
 # CONFIG
@@ -36,14 +36,13 @@ COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 
 DEFAULT_GIFT_VIDEO_URL = os.getenv("DEFAULT_GIFT_VIDEO_URL", "").strip()
 
-# R2
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY", "").strip()
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY", "").strip()
 R2_BUCKET = os.getenv("R2_BUCKET", "").strip()
 R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 
-MAX_VIDEO_SIZE = 30 * 1024 * 1024  # 30 MB
+MAX_VIDEO_SIZE = 30 * 1024 * 1024
 ALLOWED_VIDEO_TYPES = {
     "video/webm",
     "video/mp4",
@@ -168,7 +167,6 @@ def init_db():
     conn.commit()
     conn.close()
 
-    # Migraciones seguras
     add_column_if_missing(
         "orders",
         "sender_notified",
@@ -413,10 +411,6 @@ def recipient_experience_url_from_order(order: dict) -> str:
     return f"{PUBLIC_BASE_URL}/pedido/{order['recipient_token']}"
 
 
-def recipient_closure_url_from_order(order: dict) -> str:
-    return f"{PUBLIC_BASE_URL}/reaccion/{order['recipient_token']}"
-
-
 def get_assets_count() -> int:
     conn = db_conn()
     cur = conn.cursor()
@@ -434,10 +428,6 @@ def get_orders_count() -> int:
     conn.close()
     return int(row["c"])
 
-
-# =========================================================
-# WHATSAPP STUBS
-# =========================================================
 
 def build_recipient_message(order: dict) -> str:
     return (
@@ -470,7 +460,7 @@ def send_whatsapp_sender(phone: str, link: str, message: str):
 
 
 # =========================================================
-# FORM
+# CREATE FORM
 # =========================================================
 
 def render_create_form() -> str:
@@ -1034,7 +1024,7 @@ async def stripe_webhook(request: Request):
 
 
 # =========================================================
-# POST PAGO
+# POST PAGO / RESUMEN
 # =========================================================
 
 @app.get("/post-pago/{order_id}")
@@ -1046,10 +1036,6 @@ def post_pago(order_id: str):
 
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
 
-
-# =========================================================
-# RESUMEN REGALANTE
-# =========================================================
 
 @app.get("/resumen/{order_id}", response_class=HTMLResponse)
 def resumen(order_id: str):
@@ -1072,26 +1058,6 @@ def resumen(order_id: str):
                 <div class="private-link-label">Enlace privado</div>
                 <div class="private-link-url">{safe_text(sender_pack_url)}</div>
             </div>
-
-            <div class="buttons secondary-buttons">
-                <button class="ghost" type="button" onclick="copySenderLink()">
-                    Copiar enlace
-                </button>
-            </div>
-
-            <script>
-                async function copySenderLink() {{
-                    const value = "{safe_attr(sender_pack_url)}";
-                    const msg = document.getElementById("copyMsg");
-
-                    try {{
-                        await navigator.clipboard.writeText(value);
-                        if (msg) msg.textContent = "Enlace copiado ❤️";
-                    }} catch (err) {{
-                        if (msg) msg.textContent = "No se pudo copiar ahora.";
-                    }}
-                }}
-            </script>
         """
     else:
         status_line = "Ahora solo queda dejar que ocurra"
@@ -1099,6 +1065,9 @@ def resumen(order_id: str):
         main_button = f"""
             <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
                 <button class="whatsapp">Enviar ETERNA por WhatsApp</button>
+            </a>
+            <a href="{safe_attr(recipient_experience_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
+                <button class="primary">Abrir experiencia</button>
             </a>
         """
         extra_block = ""
@@ -1164,9 +1133,6 @@ def resumen(order_id: str):
                 gap: 14px;
                 margin-top: 28px;
             }}
-            .secondary-buttons {{
-                margin-top: 14px;
-            }}
             button {{
                 width: 100%;
                 padding: 16px 22px;
@@ -1183,11 +1149,6 @@ def resumen(order_id: str):
             .primary {{
                 background: white;
                 color: black;
-            }}
-            .ghost {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
             }}
             a {{ text-decoration: none; }}
             .private-link-box {{
@@ -1244,9 +1205,7 @@ def resumen(order_id: str):
 
             {extra_block}
 
-            <div class="soft" id="copyMsg">
-                {safe_text(soft_line)}
-            </div>
+            <div class="soft">{safe_text(soft_line)}</div>
         </div>
     </body>
     </html>
@@ -1306,127 +1265,10 @@ def pedido(recipient_token: str):
     if bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
 
-    if bool(order.get("experience_started")):
-        return HTMLResponse(f"""
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="5">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>ETERNA</title>
-            <style>
-                html, body {{
-                    margin: 0;
-                    min-height: 100%;
-                    background: #000;
-                }}
-                body {{
-                    min-height: 100vh;
-                    background:
-                        radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
-                        linear-gradient(180deg, #050505 0%, #000000 100%);
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    text-align: center;
-                    padding: 24px;
-                }}
-                .card {{
-                    width: 100%;
-                    max-width: 720px;
-                    background: rgba(255,255,255,0.04);
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 28px;
-                    padding: 40px 28px;
-                }}
-                h1 {{
-                    margin: 0 0 18px 0;
-                    font-size: 38px;
-                    line-height: 1.2;
-                }}
-                .lead {{
-                    color: rgba(255,255,255,0.82);
-                    font-size: 18px;
-                    line-height: 1.8;
-                }}
-                .soft {{
-                    margin-top: 20px;
-                    color: rgba(255,255,255,0.45);
-                    font-size: 14px;
-                }}
-                .btn {{
-                    display: inline-block;
-                    margin-top: 24px;
-                    padding: 16px 22px;
-                    border-radius: 999px;
-                    background: white;
-                    color: black;
-                    text-decoration: none;
-                    font-weight: bold;
-                }}
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>Este momento ya fue abierto</h1>
-                <div class="lead">
-                    Estamos guardando lo que quedó de él.<br>
-                    En unos instantes podrás seguir aquí.
-                </div>
-                <a class="btn" href="/reaccion/{safe_attr(recipient_token)}">Continuar</a>
-                <div class="soft">ETERNA solo se vive una vez</div>
-            </div>
-        </body>
-        </html>
-        """)
-
     phrase_1 = safe_text(order["phrase_1"])
     phrase_2 = safe_text(order["phrase_2"])
     phrase_3 = safe_text(order["phrase_3"])
     gift_amount = format_amount_display(order["gift_amount"])
-    gift_video_url = (order.get("gift_video_url") or "").strip()
-
-    if gift_video_url:
-        safe_gift_video = safe_attr(gift_video_url)
-        emotional_block = f"""
-                {{
-                    html: `
-                        <div style="width:100%;max-width:860px;margin:0 auto;">
-                            <video
-                                id="eternaGiftVideo"
-                                autoplay
-                                playsinline
-                                webkit-playsinline
-                                preload="auto"
-                                style="width:100%;border-radius:18px;background:#111;display:block;">
-                                <source src="{safe_gift_video}" type="video/mp4">
-                                <source src="{safe_gift_video}" type="video/webm">
-                                Tu navegador no puede reproducir este vídeo.
-                            </video>
-                        </div>
-                    `,
-                    waitVideoEnd: true,
-                    fallbackDuration: 35000
-                }},
-        """
-    else:
-        emotional_block = f"""
-                {{
-                    html: "<h2>{phrase_1}</h2>",
-                    duration: 3200
-                }},
-                {{
-                    html: "<h2>{phrase_2}</h2>",
-                    duration: 3200
-                }},
-                {{
-                    html: "<h2>{phrase_3}</h2>",
-                    duration: 3200
-                }},
-        """
 
     return f"""
     <!DOCTYPE html>
@@ -1448,8 +1290,6 @@ def pedido(recipient_token: str):
                 color: white;
                 font-family: Arial, sans-serif;
                 text-align: center;
-                overflow-y: auto;
-                -webkit-overflow-scrolling: touch;
             }}
             .screen {{
                 min-height: 100vh;
@@ -1458,11 +1298,8 @@ def pedido(recipient_token: str):
                 align-items: center;
                 flex-direction: column;
                 padding: 24px;
-                background: #000;
             }}
-            .hidden {{
-                display: none;
-            }}
+            .hidden {{ display: none; }}
             .gate-card {{
                 width: 100%;
                 max-width: 700px;
@@ -1470,12 +1307,10 @@ def pedido(recipient_token: str):
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
                 padding: 40px 30px;
-                text-align: center;
             }}
             .gate-card h1 {{
                 font-size: 42px;
                 margin: 0 0 18px 0;
-                letter-spacing: 1px;
             }}
             .lead {{
                 max-width: 560px;
@@ -1522,22 +1357,9 @@ def pedido(recipient_token: str):
                 cursor: pointer;
                 margin-top: 22px;
                 font-size: 15px;
-                -webkit-appearance: none;
-                appearance: none;
                 opacity: 0.45;
-                transition: opacity 0.3s ease, transform 0.3s ease;
             }}
-            #startBtn.enabled {{
-                opacity: 1;
-                transform: translateY(0);
-            }}
-            #startBtn.locked {{
-                opacity: 0.4;
-                cursor: default;
-            }}
-            #experience {{
-                background: #000;
-            }}
+            #startBtn.enabled {{ opacity: 1; }}
             #content {{
                 width: 100%;
                 max-width: 920px;
@@ -1574,42 +1396,6 @@ def pedido(recipient_token: str):
                 margin-top: 20px;
                 color: rgba(255,255,255,0.6);
                 font-size: 14px;
-                line-height: 1.7;
-            }}
-            .error-box {{
-                width: 100%;
-                max-width: 660px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
-                padding: 30px 24px;
-            }}
-            .ghost-btn {{
-                display: inline-block;
-                margin-top: 18px;
-                padding: 14px 20px;
-                border-radius: 999px;
-                background: rgba(255,255,255,0.10);
-                color: white;
-                text-decoration: none;
-                border: 1px solid rgba(255,255,255,0.10);
-            }}
-            @media (max-width: 640px) {{
-                .gate-card h1 {{
-                    font-size: 32px;
-                }}
-                .lead, .single {{
-                    font-size: 16px;
-                }}
-                #content h2 {{
-                    font-size: 34px;
-                }}
-                #content p {{
-                    font-size: 16px;
-                }}
-                #content .amount {{
-                    font-size: 42px;
-                }}
             }}
         </style>
     </head>
@@ -1620,8 +1406,7 @@ def pedido(recipient_token: str):
                 <h1>Hay algo para ti</h1>
 
                 <div class="lead">
-                    Cuando estés listo, en un lugar especial para vivir tu ETERNA,
-                    pulsa y déjate llevar.
+                    Cuando estés listo, pulsa y déjate llevar.
                 </div>
 
                 <div class="single">
@@ -1629,8 +1414,12 @@ def pedido(recipient_token: str):
                 </div>
 
                 <label class="consent-row" for="consentCheck">
-                    <input type="checkbox" id="consentCheck">
-                    <span>Acepto vivir esta experiencia sabiendo que este momento quedará guardado.</span>
+                    <input type="checkbox" id="consentCheck" required>
+                    <span>
+                        Acepto vivir esta experiencia, la grabación de mi reacción y las
+                        <a href="/condiciones" target="_blank" style="color:white;">condiciones</a> y
+                        <a href="/privacidad" target="_blank" style="color:white;">política de privacidad</a>.
+                    </span>
                 </label>
 
                 <button id="startBtn" type="button" onclick="startExperience()" disabled>
@@ -1651,28 +1440,17 @@ def pedido(recipient_token: str):
             let mediaMimeType = "video/webm";
             let uploadStarted = false;
             let experienceStarted = false;
-            let audioCtx = null;
 
             document.addEventListener("DOMContentLoaded", () => {{
                 const consentCheck = document.getElementById("consentCheck");
                 const startBtn = document.getElementById("startBtn");
-                let ready = false;
 
                 function updateButton() {{
-                    const enabled = consentCheck.checked && ready && !experienceStarted;
+                    const enabled = consentCheck.checked && !experienceStarted;
                     startBtn.disabled = !enabled;
-                    if (enabled) {{
-                        startBtn.classList.add("enabled");
-                        startBtn.classList.remove("locked");
-                    }} else {{
-                        startBtn.classList.remove("enabled");
-                    }}
+                    if (enabled) startBtn.classList.add("enabled");
+                    else startBtn.classList.remove("enabled");
                 }}
-
-                setTimeout(() => {{
-                    ready = true;
-                    updateButton();
-                }}, 900);
 
                 consentCheck.addEventListener("change", updateButton);
                 updateButton();
@@ -1687,49 +1465,6 @@ def pedido(recipient_token: str):
                 if (el) el.textContent = text || "";
             }}
 
-            function initAudio() {{
-                if (!audioCtx) {{
-                    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-                }}
-                if (audioCtx.state === "suspended") {{
-                    audioCtx.resume();
-                }}
-            }}
-
-            function beat(time, strong = false) {{
-                if (!audioCtx) return;
-
-                const osc = audioCtx.createOscillator();
-                const gain = audioCtx.createGain();
-                const filter = audioCtx.createBiquadFilter();
-
-                osc.type = "sine";
-                osc.frequency.setValueAtTime(strong ? 58 : 48, time);
-                osc.frequency.exponentialRampToValueAtTime(strong ? 42 : 36, time + 0.12);
-
-                filter.type = "lowpass";
-                filter.frequency.setValueAtTime(160, time);
-
-                gain.gain.setValueAtTime(0.0001, time);
-                gain.gain.exponentialRampToValueAtTime(strong ? 0.18 : 0.11, time + 0.02);
-                gain.gain.exponentialRampToValueAtTime(0.0001, time + 0.18);
-
-                osc.connect(filter);
-                filter.connect(gain);
-                gain.connect(audioCtx.destination);
-
-                osc.start(time);
-                osc.stop(time + 0.22);
-            }}
-
-            async function playDoubleBeat(delayA = 0, delayB = 700) {{
-                initAudio();
-                const now = audioCtx.currentTime + 0.03;
-                beat(now + (delayA / 1000), true);
-                beat(now + (delayB / 1000), false);
-                await wait(delayB + 350);
-            }}
-
             async function showScene(scene) {{
                 const content = document.getElementById("content");
                 content.classList.remove("visible");
@@ -1737,67 +1472,7 @@ def pedido(recipient_token: str):
                 content.innerHTML = scene.html || "";
                 await wait(40);
                 content.classList.add("visible");
-
-                if (scene.onEnterBeat) {{
-                    await playDoubleBeat(0, 680);
-                }}
-
-                if (scene.waitVideoEnd) {{
-                    const video = document.getElementById("eternaGiftVideo");
-                    if (!video) {{
-                        await wait(scene.fallbackDuration || 30000);
-                        return;
-                    }}
-
-                    await new Promise((resolve) => {{
-                        let resolved = false;
-
-                        const done = () => {{
-                            if (resolved) return;
-                            resolved = true;
-                            cleanup();
-                            resolve();
-                        }};
-
-                        const cleanup = () => {{
-                            video.removeEventListener("ended", done);
-                            video.removeEventListener("error", done);
-                            video.removeEventListener("abort", done);
-                        }};
-
-                        video.addEventListener("ended", done, {{ once: true }});
-                        video.addEventListener("error", done, {{ once: true }});
-                        video.addEventListener("abort", done, {{ once: true }});
-
-                        const timeoutMs = scene.fallbackDuration || 35000;
-                        setTimeout(done, timeoutMs);
-
-                        try {{
-                            const playPromise = video.play();
-                            if (playPromise && typeof playPromise.catch === "function") {{
-                                playPromise.catch(() => {{}});
-                            }}
-                        }} catch (e) {{}}
-                    }});
-
-                    return;
-                }}
-
                 await wait(scene.duration || 2000);
-            }}
-
-            async function runCountdown() {{
-                const content = document.getElementById("content");
-                const steps = ["3", "2", "1"];
-
-                for (let step of steps) {{
-                    content.classList.remove("visible");
-                    await wait(150);
-                    content.innerHTML = "<h2>" + step + "</h2>";
-                    await wait(40);
-                    content.classList.add("visible");
-                    await wait(850);
-                }}
             }}
 
             async function lockExperienceStart() {{
@@ -1809,19 +1484,10 @@ def pedido(recipient_token: str):
                     body: formData
                 }});
 
-                if (!response.ok) {{
-                    throw new Error("No se pudo bloquear la experiencia");
-                }}
-
                 const data = await response.json();
-
                 if (data.status === "already_completed" || data.status === "already_started") {{
                     window.location.href = data.redirect_url || "/reaccion/{safe_attr(order['recipient_token'])}";
                     return false;
-                }}
-
-                if (data.status != "ok") {{
-                    throw new Error("Estado inválido");
                 }}
 
                 return true;
@@ -1846,7 +1512,6 @@ def pedido(recipient_token: str):
                     if (!response.ok) return null;
                     return await response.json();
                 }} catch (err) {{
-                    console.log("Error subiendo vídeo:", err);
                     return null;
                 }}
             }}
@@ -1857,13 +1522,7 @@ def pedido(recipient_token: str):
 
                 if (recorder && recorder.state !== "inactive") {{
                     await new Promise((resolve) => {{
-                        const oldOnStop = recorder.onstop;
-                        recorder.onstop = (event) => {{
-                            if (oldOnStop) {{
-                                try {{ oldOnStop(event); }} catch (e) {{}}
-                            }}
-                            resolve();
-                        }};
+                        recorder.onstop = () => resolve();
                         try {{
                             recorder.stop();
                         }} catch (e) {{
@@ -1881,22 +1540,6 @@ def pedido(recipient_token: str):
                 return await sendVideo();
             }}
 
-            function showFatalMessage() {{
-                const content = document.getElementById("content");
-                content.classList.remove("visible");
-                content.innerHTML = `
-                    <div class="error-box">
-                        <h2>No hemos podido guardar este momento</h2>
-                        <p>Este enlace ya fue abierto. En unos instantes podrás continuar.</p>
-                        <a class="ghost-btn" href="/reaccion/{safe_attr(order['recipient_token'])}">Continuar</a>
-                    </div>
-                `;
-                setTimeout(() => {{
-                    content.classList.add("visible");
-                }}, 60);
-                setStatus("");
-            }}
-
             async function finishFlow() {{
                 setStatus("Guardando este momento…");
                 const uploadResult = await stopRecordingAndUpload();
@@ -1906,48 +1549,17 @@ def pedido(recipient_token: str):
                     return;
                 }}
 
-                showFatalMessage();
+                window.location.href = "/reaccion/{safe_attr(order['recipient_token'])}";
             }}
 
             const scenes = [
+                {{ html: "<h2>…</h2>", duration: 1200 }},
+                {{ html: "<h2>{phrase_1}</h2>", duration: 2200 }},
+                {{ html: "<h2>{phrase_2}</h2>", duration: 2200 }},
+                {{ html: "<h2>{phrase_3}</h2>", duration: 2200 }},
                 {{
-                    html: "<h2>…</h2>",
-                    duration: 1200,
-                    onEnterBeat: true
-                }},
-                {{
-                    html: "<h2>Espera…</h2>",
-                    duration: 1600
-                }},
-                {{
-                    html: "<h2>Hay algo para ti</h2>",
-                    duration: 2200
-                }},
-                {{
-                    html: "<h2>Y solo ocurre ahora</h2>",
-                    duration: 2200
-                }},
-                {emotional_block}
-                {{
-                    html: "<h2>…</h2>",
-                    duration: 1600
-                }},
-                {{
-                    html: "<h2>Hay cosas que no se dicen rápido</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>Hay gestos que llegan despacio</h2>",
-                    duration: 2600
-                }},
-                {{
-                    html: "<h2>Y este también es para ti</h2>",
-                    duration: 2400
-                }},
-                {{
-                    html: "<h2>Para ti</h2><p>Alguien ha querido cuidarte de esta manera</p><div class='amount'>{safe_text(gift_amount)}</div>",
-                    duration: 5200,
-                    onEnterBeat: true
+                    html: "<h2>Esto también era para ti</h2><p>Alguien ha querido cuidarte de esta manera</p><div class='amount'>{gift_amount}</div>",
+                    duration: 5000
                 }}
             ];
 
@@ -1957,21 +1569,13 @@ def pedido(recipient_token: str):
 
                 const startBtn = document.getElementById("startBtn");
                 startBtn.disabled = true;
-                startBtn.classList.remove("enabled");
-                startBtn.classList.add("locked");
 
                 try {{
-                    initAudio();
-
                     const lockOk = await lockExperienceStart();
                     if (!lockOk) return;
 
                     const stream = await navigator.mediaDevices.getUserMedia({{
-                        video: {{
-                            width: 640,
-                            height: 480,
-                            facingMode: "user"
-                        }},
+                        video: {{ width: 640, height: 480, facingMode: "user" }},
                         audio: true
                     }});
 
@@ -1987,29 +1591,20 @@ def pedido(recipient_token: str):
                             videoBitsPerSecond: 900000,
                             audioBitsPerSecond: 64000
                         }};
-                        mediaMimeType = "video/webm";
                     }} else if (window.MediaRecorder && MediaRecorder.isTypeSupported("video/webm")) {{
                         options = {{
                             mimeType: "video/webm",
                             videoBitsPerSecond: 900000,
                             audioBitsPerSecond: 64000
                         }};
-                        mediaMimeType = "video/webm";
-                    }} else if (window.MediaRecorder) {{
-                        options = {{}};
-                        mediaMimeType = "video/webm";
                     }} else {{
-                        alert("Este dispositivo no puede grabar este momento.");
-                        stream.getTracks().forEach(track => track.stop());
-                        return;
+                        options = {{}};
                     }}
 
                     recorder = new MediaRecorder(stream, options);
 
                     recorder.ondataavailable = (e) => {{
-                        if (e.data && e.data.size > 0) {{
-                            chunks.push(e.data);
-                        }}
+                        if (e.data && e.data.size > 0) chunks.push(e.data);
                     }};
 
                     recorder.start(300);
@@ -2017,23 +1612,16 @@ def pedido(recipient_token: str):
                     document.getElementById("start").classList.add("hidden");
                     document.getElementById("experience").classList.remove("hidden");
 
-                    await runExperience();
+                    for (const scene of scenes) {{
+                        await showScene(scene);
+                    }}
+
+                    await finishFlow();
+
                 }} catch (e) {{
                     alert("Necesitamos acceso a cámara y micrófono para continuar.");
                     window.location.reload();
                 }}
-            }}
-
-            async function runExperience() {{
-                setStatus("");
-                await runCountdown();
-
-                for (const scene of scenes) {{
-                    await showScene(scene);
-                }}
-
-                await wait(1000);
-                await finishFlow();
             }}
         </script>
     </body>
@@ -2054,14 +1642,6 @@ async def upload_video(
 
     if not order["paid"]:
         raise HTTPException(status_code=403, detail="Pedido no pagado")
-
-    if bool(order.get("experience_completed")) and reaction_exists(order):
-        return JSONResponse({
-            "status": "already_completed",
-            "reaction_url": f"{PUBLIC_BASE_URL}/reaccion/{order['recipient_token']}",
-            "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{order['recipient_token']}",
-            "sender_pack_url": sender_pack_url_from_order(order),
-        })
 
     content_type = (video.content_type or "").lower().strip()
     filename = (video.filename or "").lower().strip()
@@ -2114,8 +1694,8 @@ async def upload_video(
                 if os.path.exists(filepath):
                     os.remove(filepath)
                 update_order(order["id"], reaction_video_local=None)
-            except Exception as e:
-                print("No se pudo borrar vídeo local:", e)
+            except Exception:
+                pass
         else:
             insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/{order['id']}", "local")
 
@@ -2158,7 +1738,7 @@ def get_video(order_id: str):
 
 
 # =========================================================
-# COBRAR
+# COBRAR / REACCION
 # =========================================================
 
 @app.get("/cobrar/{recipient_token}", response_class=HTMLResponse)
@@ -2174,6 +1754,9 @@ def cobrar(recipient_token: str):
     if not reaction_exists(order):
         return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
 
+    if bool(order.get("cashout_completed")):
+        return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
+
     amount_text = format_amount_display(order["gift_amount"])
 
     return f"""
@@ -2182,10 +1765,13 @@ def cobrar(recipient_token: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Cobrar regalo</title>
+        <title>ETERNA</title>
         <style>
-            * {{ box-sizing: border-box; }}
-            html, body {{ margin: 0; min-height: 100%; background: #000; }}
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
             body {{
                 min-height: 100vh;
                 background:
@@ -2197,6 +1783,7 @@ def cobrar(recipient_token: str):
                 justify-content: center;
                 align-items: center;
                 padding: 24px;
+                text-align: center;
             }}
             .card {{
                 width: 100%;
@@ -2205,108 +1792,72 @@ def cobrar(recipient_token: str):
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
                 padding: 40px 28px;
-                text-align: center;
-            }}
-            .eyebrow {{
-                font-size: 12px;
-                letter-spacing: 0.22em;
-                text-transform: uppercase;
-                color: rgba(255,255,255,0.50);
-                margin-bottom: 14px;
             }}
             h1 {{
                 margin: 0 0 16px 0;
                 font-size: 40px;
-                line-height: 1.15;
             }}
             .lead {{
-                max-width: 520px;
-                margin: 0 auto;
-                color: rgba(255,255,255,0.84);
                 font-size: 18px;
+                color: rgba(255,255,255,0.85);
                 line-height: 1.8;
             }}
-            .money-box {{
+            .amount {{
                 margin-top: 24px;
-                padding: 24px 20px;
-                border-radius: 22px;
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.08);
-            }}
-            .money-label {{
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1.2px;
-                color: rgba(255,255,255,0.50);
-                margin-bottom: 8px;
-            }}
-            .money-value {{
-                font-size: 42px;
+                font-size: 48px;
                 font-weight: bold;
-                line-height: 1;
-                margin-bottom: 10px;
-            }}
-            .actions {{
-                display: grid;
-                gap: 12px;
-                margin-top: 24px;
             }}
             .btn {{
-                display: inline-block;
-                width: 100%;
-                padding: 16px 22px;
+                margin-top: 28px;
+                padding: 16px 24px;
                 border-radius: 999px;
                 border: 0;
+                background: white;
+                color: black;
                 font-weight: bold;
-                font-size: 15px;
                 cursor: pointer;
+                font-size: 15px;
+                width: 100%;
+                display: block;
                 text-decoration: none;
                 text-align: center;
             }}
-            .btn-primary {{
-                background: white;
-                color: black;
-            }}
             .btn-secondary {{
+                margin-top: 12px;
                 background: rgba(255,255,255,0.10);
                 color: white;
                 border: 1px solid rgba(255,255,255,0.10);
             }}
             .soft {{
-                margin-top: 20px;
-                color: rgba(255,255,255,0.46);
-                font-size: 14px;
+                margin-top: 18px;
+                font-size: 13px;
+                color: rgba(255,255,255,0.5);
                 line-height: 1.7;
             }}
         </style>
     </head>
     <body>
         <div class="card">
-            <div class="eyebrow">ETERNA</div>
-
-            <h1>Esto también era para ti</h1>
+            <h1>Esto ya es tuyo</h1>
 
             <div class="lead">
-                Y lo que sentiste… ya no se pierde
+                Alguien ha querido cuidarte de esta manera
             </div>
 
-            <div class="money-box">
-                <div class="money-label">Regalo</div>
-                <div class="money-value">{amount_text}</div>
-            </div>
+            <div class="amount">{amount_text}</div>
 
-            <div class="actions">
-                <a class="btn btn-primary" href="/cobro-completado/{safe_attr(recipient_token)}">
-                    Recibirlo
-                </a>
+            <a class="btn" href="/cobro-completado/{safe_attr(recipient_token)}">
+                Recibirlo
+            </a>
 
-                <a class="btn btn-secondary" href="/reaccion/{safe_attr(recipient_token)}">
-                    Ver cierre
-                </a>
-            </div>
+            <a class="btn btn-secondary" href="/reaccion/{safe_attr(recipient_token)}">
+                Ver cierre
+            </a>
 
             <div class="soft">
-                …
+                El envío del dinero puede tardar según los tiempos habituales de bancos y proveedores de pago.
+                Al continuar aceptas las
+                <a href="/condiciones" target="_blank" style="color:white;">condiciones</a>.
             </div>
         </div>
     </body>
@@ -2321,10 +1872,6 @@ def cobro_completado(recipient_token: str):
     return RedirectResponse(url=f"/reaccion/{recipient_token}", status_code=303)
 
 
-# =========================================================
-# CIERRE DEL REGALADO
-# =========================================================
-
 @app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
 def reaccion(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
@@ -2337,33 +1884,11 @@ def reaccion(recipient_token: str):
     )
 
     if not bool(order.get("experience_completed")) or not reaction_video_url:
-        return HTMLResponse(f"""
+        return HTMLResponse("""
         <!DOCTYPE html>
         <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="5">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>ETERNA</title>
-            <style>
-                body {{
-                    margin: 0;
-                    min-height: 100vh;
-                    background: #000;
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 24px;
-                    text-align: center;
-                }}
-            </style>
-        </head>
-        <body>
-            <div>
-                <h1>Estamos guardando este momento…</h1>
-            </div>
+        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div><h1>Estamos guardando este momento…</h1></div>
         </body>
         </html>
         """)
@@ -2371,24 +1896,10 @@ def reaccion(recipient_token: str):
     if not order.get("cashout_completed"):
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    gift_video_url = (order.get("gift_video_url") or "").strip()
     safe_reaction_video_url = safe_attr(reaction_video_url)
     share_text = "No sé cómo explicarte esto... solo míralo ❤️"
     full_share_text = share_text + "\\n\\n" + reaction_video_url
     whatsapp_fallback = f"https://wa.me/?text={urllib.parse.quote(full_share_text)}"
-
-    gift_block = ""
-    if gift_video_url:
-        safe_gift_video_url = safe_attr(gift_video_url)
-        gift_block = f"""
-        <div class="video-wrap">
-            <video controls playsinline preload="metadata">
-                <source src="{safe_gift_video_url}" type="video/mp4">
-                <source src="{safe_gift_video_url}" type="video/webm">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
-        </div>
-        """
 
     return f"""
     <!DOCTYPE html>
@@ -2427,16 +1938,12 @@ def reaccion(recipient_token: str):
             h1 {{
                 margin: 0 0 18px 0;
                 font-size: 40px;
-                letter-spacing: 1px;
             }}
             .lead {{
                 color: rgba(255,255,255,0.84);
                 line-height: 1.8;
                 font-size: 20px;
-                margin: 0;
-            }}
-            .video-wrap {{
-                margin-top: 26px;
+                margin: 0 0 24px 0;
             }}
             video {{
                 width: 100%;
@@ -2466,27 +1973,19 @@ def reaccion(recipient_token: str):
                 margin-top: 24px;
                 color: rgba(255,255,255,0.42);
                 font-size: 14px;
-                line-height: 1.7;
             }}
         </style>
     </head>
     <body>
         <div class="card">
             <h1>Este momento ya es tuyo</h1>
+            <div class="lead">Y también de quien lo creó</div>
 
-            <div class="lead">
-                Y también de quien lo creó
-            </div>
-
-            {gift_block}
-
-            <div class="video-wrap">
-                <video controls playsinline preload="metadata">
-                    <source src="{safe_reaction_video_url}" type="video/webm">
-                    <source src="{safe_reaction_video_url}" type="video/mp4">
-                    Tu navegador no puede reproducir este vídeo.
-                </video>
-            </div>
+            <video controls playsinline preload="metadata">
+                <source src="{safe_reaction_video_url}" type="video/webm">
+                <source src="{safe_reaction_video_url}" type="video/mp4">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
 
             <div class="actions">
                 <button class="btn primary" type="button" onclick="shareReactionVideo()">
@@ -2517,9 +2016,7 @@ def reaccion(recipient_token: str):
                         return;
                     }}
                 }} catch (err) {{
-                    if (String(err).toLowerCase().includes("abort")) {{
-                        return;
-                    }}
+                    if (String(err).toLowerCase().includes("abort")) return;
                 }}
 
                 try {{
@@ -2529,13 +2026,9 @@ def reaccion(recipient_token: str):
 
                 try {{
                     await navigator.clipboard.writeText(fullText);
-                    if (msg) {{
-                        msg.textContent = "Enlace copiado ❤️";
-                    }}
+                    if (msg) msg.textContent = "Enlace copiado ❤️";
                 }} catch (err) {{
-                    if (msg) {{
-                        msg.textContent = "No se pudo compartir ahora.";
-                    }}
+                    if (msg) msg.textContent = "No se pudo compartir ahora.";
                 }}
             }}
         </script>
@@ -2552,7 +2045,6 @@ def reaccion(recipient_token: str):
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
-    gift_video_url = (order.get("gift_video_url") or "").strip()
     reaction_video_url = order.get("reaction_video_public_url") or (
         f"/video/{order['id']}" if reaction_exists(order) else None
     )
@@ -2561,48 +2053,13 @@ def sender_pack(sender_token: str):
         return HTMLResponse("""
         <!DOCTYPE html>
         <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta http-equiv="refresh" content="5">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>ETERNA</title>
-            <style>
-                body {
-                    margin: 0;
-                    min-height: 100vh;
-                    background: #000;
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    padding: 24px;
-                    text-align: center;
-                }
-            </style>
-        </head>
-        <body>
-            <div>
-                <h1>…</h1>
-            </div>
+        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div><h1>…</h1></div>
         </body>
         </html>
         """)
 
-    safe_gift = safe_attr(gift_video_url or "")
     safe_reaction = safe_attr(reaction_video_url)
-
-    gift_video_block = ""
-    if gift_video_url:
-        gift_video_block = f"""
-                <div class="video-block">
-                    <video id="giftVideo" playsinline controls preload="metadata">
-                        <source src="{safe_gift}" type="video/mp4">
-                        <source src="{safe_gift}" type="video/webm">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
-        """
 
     return f"""
     <!DOCTYPE html>
@@ -2642,13 +2099,6 @@ def sender_pack(sender_token: str):
                 margin: 0 0 22px 0;
                 text-align: center;
                 font-size: 34px;
-            }}
-            .video-stack {{
-                display: grid;
-                gap: 16px;
-            }}
-            .video-block {{
-                width: 100%;
             }}
             video {{
                 width: 100%;
@@ -2692,17 +2142,11 @@ def sender_pack(sender_token: str):
         <div class="card">
             <h1>Lo que hiciste ya es para siempre</h1>
 
-            <div class="video-stack">
-                {gift_video_block}
-
-                <div class="video-block">
-                    <video id="reactionVideo" playsinline controls preload="metadata" autoplay>
-                        <source src="{safe_reaction}" type="video/webm">
-                        <source src="{safe_reaction}" type="video/mp4">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
-            </div>
+            <video playsinline controls preload="metadata" autoplay>
+                <source src="{safe_reaction}" type="video/webm">
+                <source src="{safe_reaction}" type="video/mp4">
+                Tu navegador no puede reproducir este vídeo.
+            </video>
 
             <div class="buttons">
                 <a class="btn ghost" href="/">Crear otra ETERNA</a>
@@ -2712,31 +2156,6 @@ def sender_pack(sender_token: str):
                 Lo que creaste… volvió a ti
             </div>
         </div>
-
-        <script>
-            const giftVideo = document.getElementById("giftVideo");
-            const reactionVideo = document.getElementById("reactionVideo");
-
-            function syncPlay() {{
-                if (giftVideo) {{
-                    try {{ giftVideo.currentTime = 0; }} catch (e) {{}}
-                }}
-                if (reactionVideo) {{
-                    try {{ reactionVideo.currentTime = 0; }} catch (e) {{}}
-                }}
-
-                if (giftVideo) {{
-                    giftVideo.play().catch(() => {{}});
-                }}
-                if (reactionVideo) {{
-                    reactionVideo.play().catch(() => {{}});
-                }}
-            }}
-
-            window.addEventListener("load", () => {{
-                syncPlay();
-            }});
-        </script>
     </body>
     </html>
     """
@@ -2768,6 +2187,107 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
 
 
 # =========================================================
+# LEGAL
+# =========================================================
+
+@app.get("/condiciones", response_class=HTMLResponse)
+def condiciones():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Condiciones de uso — ETERNA</title>
+        <style>
+            html, body { margin: 0; background: #000; color: white; font-family: Arial, sans-serif; }
+            .container { max-width: 860px; margin: 0 auto; padding: 40px 22px 60px; line-height: 1.75; }
+            h1 { font-size: 30px; margin-bottom: 24px; }
+            h2 { margin-top: 26px; font-size: 18px; color: rgba(255,255,255,0.92); }
+            p { font-size: 14px; color: rgba(255,255,255,0.72); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Condiciones de uso — ETERNA</h1>
+
+            <h2>1. Naturaleza del servicio</h2>
+            <p>ETERNA es una experiencia emocional digital única. No constituye un servicio financiero, sino una experiencia digital que puede integrar contenido audiovisual, grabación de reacción y gestión de importes a través de proveedores externos.</p>
+
+            <h2>2. Experiencia única</h2>
+            <p>La experiencia solo puede vivirse una vez. Una vez iniciada, no puede repetirse, reiniciarse ni reproducirse como experiencia original.</p>
+
+            <h2>3. Grabación y consentimiento</h2>
+            <p>Al iniciar la experiencia, el usuario acepta expresamente la captura de imagen y audio mediante cámara y micrófono con el fin de generar el contenido final asociado a ETERNA. Este contenido podrá ser compartido con la persona que creó la experiencia.</p>
+
+            <h2>4. Pagos y gestión del importe</h2>
+            <p>Los pagos y operaciones relacionadas con el envío o recepción de dinero se gestionan a través de proveedores externos como Stripe. ETERNA no almacena datos bancarios del usuario.</p>
+
+            <h2>5. Tiempos de disponibilidad</h2>
+            <p>El envío, recepción o disponibilidad final del dinero puede estar sujeto a los tiempos habituales de procesamiento de bancos, entidades financieras y proveedores de pago. ETERNA no garantiza tiempos exactos de abono.</p>
+
+            <h2>6. Responsabilidad</h2>
+            <p>ETERNA no se hace responsable de retrasos, bloqueos, verificaciones adicionales, incidencias técnicas o demoras originadas por bancos, pasarelas de pago o terceros ajenos al control directo de la plataforma.</p>
+
+            <h2>7. Uso aceptado</h2>
+            <p>El usuario se compromete a utilizar ETERNA de forma lícita, legítima y respetuosa. Queda prohibido cualquier uso fraudulento, abusivo o contrario a la ley.</p>
+
+            <h2>8. Aceptación</h2>
+            <p>Al acceder, iniciar, vivir o completar la experiencia, así como al aceptar cualquier acción relacionada con grabación o cobro, el usuario declara haber leído y aceptado estas condiciones.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+
+@app.get("/privacidad", response_class=HTMLResponse)
+def privacidad():
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Política de privacidad — ETERNA</title>
+        <style>
+            html, body { margin: 0; background: #000; color: white; font-family: Arial, sans-serif; }
+            .container { max-width: 860px; margin: 0 auto; padding: 40px 22px 60px; line-height: 1.75; }
+            h1 { font-size: 30px; margin-bottom: 24px; }
+            h2 { margin-top: 26px; font-size: 18px; color: rgba(255,255,255,0.92); }
+            p { font-size: 14px; color: rgba(255,255,255,0.72); }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>Política de privacidad — ETERNA</h1>
+
+            <h2>1. Datos tratados</h2>
+            <p>ETERNA puede tratar datos como nombre, teléfono, correo electrónico y contenido generado durante la experiencia, incluyendo vídeo y audio cuando el usuario lo acepta expresamente.</p>
+
+            <h2>2. Finalidad</h2>
+            <p>Estos datos se utilizan únicamente para prestar el servicio, crear la experiencia, enviarla, gestionarla, permitir su visualización y, en su caso, procesar pagos o cobros.</p>
+
+            <h2>3. Base legal</h2>
+            <p>La base jurídica del tratamiento es el consentimiento del usuario y la ejecución del servicio solicitado.</p>
+
+            <h2>4. Conservación</h2>
+            <p>Los datos se conservarán solo durante el tiempo necesario para prestar el servicio y atender posibles obligaciones legales o incidencias técnicas.</p>
+
+            <h2>5. Terceros</h2>
+            <p>Algunos datos pueden ser tratados por proveedores tecnológicos necesarios para la prestación del servicio, como servicios de alojamiento, almacenamiento o pasarelas de pago como Stripe.</p>
+
+            <h2>6. Derechos</h2>
+            <p>El usuario podrá solicitar acceso, rectificación o eliminación de sus datos cuando proceda, conforme a la normativa aplicable.</p>
+
+            <h2>7. Seguridad</h2>
+            <p>ETERNA adopta medidas razonables para proteger la información tratada y limitar el acceso a los datos únicamente a lo necesario para la prestación del servicio.</p>
+        </div>
+    </body>
+    </html>
+    """
+
+
+# =========================================================
 # HEALTH
 # =========================================================
 
@@ -2775,7 +2295,7 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V24 STABLE CORE",
+        "app": "ETERNA V26 STABLE FULL FLOW",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
