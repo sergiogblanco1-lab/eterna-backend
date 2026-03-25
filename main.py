@@ -5,6 +5,8 @@ import os
 import secrets
 import sqlite3
 import urllib.parse
+import urllib.request
+import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -13,10 +15,10 @@ from typing import Optional
 import boto3
 import stripe
 from botocore.client import Config
-from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, PlainTextResponse
 
-app = FastAPI(title="ETERNA V35 CLEAN MANUAL PREVIEW FIXED")
+app = FastAPI(title="ETERNA V36 WHATSAPP AUTOMATED")
 
 
 # =========================================================
@@ -46,6 +48,13 @@ R2_SECRET_KEY = os.getenv("R2_SECRET_KEY", "").strip()
 R2_BUCKET = os.getenv("R2_BUCKET", "").strip()
 R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
+
+WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
+WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
+WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
+WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip()
+WHATSAPP_TEMPLATE_TO_RECIPIENT = os.getenv("WHATSAPP_TEMPLATE_TO_RECIPIENT", "").strip()
+WHATSAPP_TEMPLATE_TO_SENDER = os.getenv("WHATSAPP_TEMPLATE_TO_SENDER", "").strip()
 
 MAX_VIDEO_SIZE = 30 * 1024 * 1024
 ALLOWED_VIDEO_TYPES = {
@@ -300,6 +309,26 @@ def init_db():
         "orders",
         "stripe_gift_refund_id",
         "ALTER TABLE orders ADD COLUMN stripe_gift_refund_id TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "recipient_whatsapp_sent_at",
+        "ALTER TABLE orders ADD COLUMN recipient_whatsapp_sent_at TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "sender_whatsapp_sent_at",
+        "ALTER TABLE orders ADD COLUMN sender_whatsapp_sent_at TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "recipient_whatsapp_message_id",
+        "ALTER TABLE orders ADD COLUMN recipient_whatsapp_message_id TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "sender_whatsapp_message_id",
+        "ALTER TABLE orders ADD COLUMN sender_whatsapp_message_id TEXT",
     )
 
 
@@ -596,6 +625,150 @@ def calculate_fees(gift_amount: float) -> dict:
         "total_fee": total_fee,
         "total_amount": total_amount,
     }
+
+
+def whatsapp_enabled() -> bool:
+    return bool(WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID)
+
+
+def whatsapp_api_url() -> str:
+    return f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
+
+
+def send_whatsapp_payload(payload: dict) -> Optional[str]:
+    if not whatsapp_enabled():
+        log_info("WhatsApp skipped", "not configured")
+        return None
+
+    body = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        whatsapp_api_url(),
+        data=body,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
+            "Content-Type": "application/json",
+        },
+    )
+
+    try:
+        with urllib.request.urlopen(req, timeout=20) as response:
+            raw = response.read().decode("utf-8")
+            data = json.loads(raw)
+            message_id = (
+                (data.get("messages") or [{}])[0].get("id")
+                if isinstance(data, dict)
+                else None
+            )
+            log_info("WhatsApp sent", data)
+            return message_id
+    except urllib.error.HTTPError as e:
+        raw = e.read().decode("utf-8", errors="ignore")
+        log_error("WhatsApp HTTP error", Exception(raw))
+        return None
+    except Exception as e:
+        log_error("WhatsApp send error", e)
+        return None
+
+
+def send_whatsapp_text(phone: str, message: str) -> Optional[str]:
+    normalized = normalize_phone(phone)
+    if not normalized:
+        log_info("WhatsApp skipped", "invalid phone")
+        return None
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": normalized,
+        "type": "text",
+        "text": {
+            "preview_url": False,
+            "body": message,
+        },
+    }
+    return send_whatsapp_payload(payload)
+
+
+def send_whatsapp_template_single_var(phone: str, template_name: str, variable_value: str) -> Optional[str]:
+    normalized = normalize_phone(phone)
+    if not normalized or not template_name:
+        return None
+
+    payload = {
+        "messaging_product": "whatsapp",
+        "to": normalized,
+        "type": "template",
+        "template": {
+            "name": template_name,
+            "language": {"code": "es"},
+            "components": [
+                {
+                    "type": "body",
+                    "parameters": [
+                        {"type": "text", "text": variable_value},
+                    ],
+                }
+            ],
+        },
+    }
+    return send_whatsapp_payload(payload)
+
+
+def try_send_recipient_whatsapp(order: dict) -> Optional[str]:
+    if order.get("recipient_whatsapp_sent_at"):
+        return order.get("recipient_whatsapp_message_id")
+
+    message_id = None
+
+    if WHATSAPP_TEMPLATE_TO_RECIPIENT:
+        message_id = send_whatsapp_template_single_var(
+            order.get("recipient_phone", ""),
+            WHATSAPP_TEMPLATE_TO_RECIPIENT,
+            recipient_experience_url_from_order(order),
+        )
+
+    if not message_id:
+        message_id = send_whatsapp_text(
+            order.get("recipient_phone", ""),
+            build_recipient_message(order),
+        )
+
+    if message_id:
+        update_order(
+            order["id"],
+            recipient_whatsapp_sent_at=now_iso(),
+            recipient_whatsapp_message_id=message_id,
+        )
+    return message_id
+
+
+def try_send_sender_whatsapp(order: dict) -> Optional[str]:
+    if order.get("sender_whatsapp_sent_at"):
+        return order.get("sender_whatsapp_message_id")
+
+    message_id = None
+
+    if WHATSAPP_TEMPLATE_TO_SENDER:
+        message_id = send_whatsapp_template_single_var(
+            order.get("sender_phone", ""),
+            WHATSAPP_TEMPLATE_TO_SENDER,
+            sender_pack_url_from_order(order),
+        )
+
+    if not message_id:
+        message_id = send_whatsapp_text(
+            order.get("sender_phone", ""),
+            build_sender_ready_message(order),
+        )
+
+    if message_id:
+        update_order(
+            order["id"],
+            sender_whatsapp_sent_at=now_iso(),
+            sender_whatsapp_message_id=message_id,
+            sender_notified=1,
+        )
+    return message_id
 
 
 def try_acquire_transfer_lock(order_id: str) -> bool:
@@ -1161,7 +1334,7 @@ def create_order_and_redirect(
     ))
     recipient_id = cur.lastrowid
 
-    placeholders = ", ".join(["?"] * 36)
+    placeholders = ", ".join(["?"] * 40)
 
     cur.execute(f"""
         INSERT INTO orders (
@@ -1175,6 +1348,8 @@ def create_order_and_redirect(
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
             gift_refund_deadline_at,
+            recipient_whatsapp_sent_at, sender_whatsapp_sent_at,
+            recipient_whatsapp_message_id, sender_whatsapp_message_id,
             created_at, updated_at
         )
         VALUES ({placeholders})
@@ -1193,6 +1368,8 @@ def create_order_and_redirect(
         recipient_token, sender_token,
         None, None, DEFAULT_GIFT_VIDEO_URL or None,
         None,
+        None, None,
+        None, None,
         created_at, created_at
     ))
 
@@ -1206,6 +1383,8 @@ def create_order_and_redirect(
             stripe_payment_status="test_no_stripe",
             gift_refund_deadline_at=gift_refund_deadline_iso(),
         )
+        order = get_order_by_id(order_id)
+        try_send_recipient_whatsapp(order)
         return RedirectResponse(url=f"/post-pago/{order_id}", status_code=303)
 
     try:
@@ -1526,6 +1705,35 @@ async def stripe_webhook(request: Request):
                 gift_refund_deadline_at=existing.get("gift_refund_deadline_at") or gift_refund_deadline_iso(),
             )
 
+            try:
+                updated = get_order_by_id(order_id)
+                try_send_recipient_whatsapp(updated)
+            except Exception as e:
+                log_error("Recipient WhatsApp after payment", e)
+
+    return {"received": True}
+
+
+# =========================================================
+# WHATSAPP WEBHOOK
+# =========================================================
+
+@app.get("/whatsapp/webhook")
+def whatsapp_webhook_verify(
+    hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
+    hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
+    hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
+):
+    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN and hub_challenge:
+        return PlainTextResponse(hub_challenge)
+
+    raise HTTPException(status_code=403, detail="Verificación WhatsApp fallida")
+
+
+@app.post("/whatsapp/webhook")
+async def whatsapp_webhook_receive(request: Request):
+    payload = await request.json()
+    log_info("WhatsApp webhook payload", payload)
     return {"received": True}
 
 
@@ -2325,6 +2533,11 @@ async def upload_video(
             insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}", "local")
 
         updated_order = get_order_by_id(order["id"])
+
+        try:
+            try_send_sender_whatsapp(updated_order)
+        except Exception as e:
+            log_error("Sender WhatsApp after reaction", e)
 
         return JSONResponse({
             "status": "ok",
@@ -3606,10 +3819,11 @@ def privacidad():
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V35 CLEAN MANUAL PREVIEW FIXED",
+        "app": "ETERNA V36 WHATSAPP AUTOMATED",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
+        "whatsapp_configured": whatsapp_enabled(),
         "public_base_url": PUBLIC_BASE_URL,
         "gift_refund_days": GIFT_REFUND_DAYS,
         "orders": get_orders_count(),
@@ -3631,6 +3845,7 @@ def healthz():
             "db": "ok",
             "stripe": "configured" if STRIPE_SECRET_KEY else "disabled",
             "r2": "configured" if r2_enabled() else "disabled",
+            "whatsapp": "configured" if whatsapp_enabled() else "disabled",
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"healthz failed: {e}")
