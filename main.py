@@ -16,7 +16,7 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V35 CLEAN MANUAL PREVIEW")
+app = FastAPI(title="ETERNA V35 CLEAN MANUAL PREVIEW FIXED")
 
 
 # =========================================================
@@ -33,71 +33,7 @@ PUBLIC_BASE_URL = os.getenv(
 ).strip().rstrip("/")
 
 BASE_PRICE = float(os.getenv("ETERNA_BASE_PRICE", "29"))
-cur.execute("""
-    INSERT INTO orders (
-        id, sender_id, recipient_id,
-        phrase_1, phrase_2, phrase_3,
-        gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
-        paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
-        transfer_in_progress, sender_notified, experience_started, experience_completed, connect_onboarding_completed,
-        gift_refunded,
-        stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id, stripe_gift_refund_id,
-        recipient_token, sender_token,
-        reaction_video_local, reaction_video_public_url, gift_video_url,
-        gift_refund_deadline_at,
-        created_at, updated_at
-    )
-  placeholders = ", ".join(["?"] * 36)
-
-cur.execute(f"""
-INSERT INTO orders (
-    id, sender_id, recipient_id,
-    phrase_1, phrase_2, phrase_3,
-    gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
-    paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
-    transfer_in_progress, sender_notified, experience_started, experience_completed, connect_onboarding_completed,
-    gift_refunded,
-    stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id, stripe_gift_refund_id,
-    recipient_token, sender_token,
-    reaction_video_local, reaction_video_public_url, gift_video_url,
-    gift_refund_deadline_at,
-    created_at, updated_at
-)
-VALUES ({placeholders})
-""", (
-    order_id, sender_id, recipient_id,
-    phrase_1, phrase_2, phrase_3,
-    fees["gift_amount"],
-    fees["fixed_fee"],
-    fees["variable_fee"],
-    fees["total_fee"],
-    fees["total_amount"],
-    0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0,
-    0,
-    None, None, None, None, None, None,
-    recipient_token, sender_token,
-    None, None, DEFAULT_GIFT_VIDEO_URL or None,
-    None,
-    created_at, created_at
-))
-""", (
-    order_id, sender_id, recipient_id,
-    phrase_1, phrase_2, phrase_3,
-    fees["gift_amount"],
-    fees["fixed_fee"],
-    fees["variable_fee"],
-    fees["total_fee"],
-    fees["total_amount"],
-    0, 0, 0, 0, 0,
-    0, 0, 0, 0, 0,
-    0,
-    None, None, None, None, None, None,
-    recipient_token, sender_token,
-    None, None, DEFAULT_GIFT_VIDEO_URL or None,
-    None,
-    created_at, created_at
-))
+CURRENCY = os.getenv("ETERNA_CURRENCY", "eur").strip().lower()
 
 GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 FIXED_PLATFORM_FEE = float(os.getenv("ETERNA_FIXED_FEE", "2"))
@@ -645,20 +581,6 @@ def build_sender_ready_message(order: dict) -> str:
         "Aquí:\n"
         f"{sender_pack_url_from_order(order)}"
     )
-
-
-def send_whatsapp_recipient(phone: str, link: str, message: str):
-    print("WA RECIPIENT READY")
-    print("PHONE:", phone)
-    print("LINK:", link)
-    print("MESSAGE:", message)
-
-
-def send_whatsapp_sender(phone: str, link: str, message: str):
-    print("WA SENDER READY")
-    print("PHONE:", phone)
-    print("LINK:", link)
-    print("MESSAGE:", message)
 
 
 def calculate_fees(gift_amount: float) -> dict:
@@ -1239,7 +1161,9 @@ def create_order_and_redirect(
     ))
     recipient_id = cur.lastrowid
 
-    cur.execute("""
+    placeholders = ", ".join(["?"] * 36)
+
+    cur.execute(f"""
         INSERT INTO orders (
             id, sender_id, recipient_id,
             phrase_1, phrase_2, phrase_3,
@@ -1253,7 +1177,7 @@ def create_order_and_redirect(
             gift_refund_deadline_at,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES ({placeholders})
     """, (
         order_id, sender_id, recipient_id,
         phrase_1, phrase_2, phrase_3,
@@ -3682,7 +3606,7 @@ def privacidad():
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V35 CLEAN MANUAL PREVIEW",
+        "app": "ETERNA V35 CLEAN MANUAL PREVIEW FIXED",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
