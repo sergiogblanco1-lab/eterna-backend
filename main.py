@@ -3274,6 +3274,8 @@ def reaccion(recipient_token: str):
     return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
 
 
+
+
 # =========================================================
 # SENDER PACK
 # =========================================================
@@ -3282,10 +3284,64 @@ def reaccion(recipient_token: str):
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
-video_url = (
-    order.get("reaction_video_public_url")
-    or f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}"
-)
+    # URL del vídeo (prioriza el público si existe)
+    video_url = (
+        order.get("reaction_video_public_url")
+        or f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}"
+    )
+
+    # HTML simple (puedes mejorar diseño luego)
+    return HTMLResponse(f"""
+    <html>
+    <head>
+        <title>Tu ETERNA</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <style>
+            body {{
+                background: black;
+                color: white;
+                font-family: Arial, sans-serif;
+                text-align: center;
+                padding: 20px;
+            }}
+            video {{
+                width: 100%;
+                max-width: 400px;
+                border-radius: 12px;
+                margin-top: 20px;
+            }}
+            button {{
+                margin-top: 20px;
+                padding: 12px 20px;
+                font-size: 16px;
+                border-radius: 8px;
+                border: none;
+                background: white;
+                color: black;
+                cursor: pointer;
+            }}
+        </style>
+    </head>
+    <body>
+
+        <h2>Lo que creaste… volvió a ti 💙</h2>
+
+        <video controls autoplay>
+            <source src="{video_url}" type="video/mp4">
+        </video>
+
+        <br>
+
+        <button onclick="navigator.share({{
+            title: 'ETERNA',
+            url: '{video_url}'
+        }})">
+            Compartir
+        </button>
+
+    </body>
+    </html>
+    """)
         # =========================================================
 # STRIPE WEBHOOK (CON SMS AUTOMÁTICO)
 # =========================================================
