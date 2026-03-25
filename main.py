@@ -3282,8 +3282,9 @@ def reaccion(recipient_token: str):
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
-    video_url = order.get("reaction_video_public_url") or (
-        f"/video/sender/{order['sender_token']}" if reaction_exists
+video_url = order.get("reaction_video_public_url") or (
+    f"{PUBLIC_BASE_URL}/video/..."
+)
         # =========================================================
 # STRIPE WEBHOOK (CON SMS AUTOMÁTICO)
 # =========================================================
