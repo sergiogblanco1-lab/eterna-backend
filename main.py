@@ -392,13 +392,6 @@ def normalize_phone(p: str) -> str:
     return digits
 
 
-def whatsapp_link(phone: str, message: str) -> str:
-    normalized = normalize_phone(phone)
-    if not normalized:
-        return "#"
-    return f"https://wa.me/{normalized}?text={urllib.parse.quote(message)}"
-
-
 def new_order_id() -> str:
     return uuid.uuid4().hex[:12]
 
@@ -1236,7 +1229,7 @@ def render_create_form() -> str:
                 </div>
 
                 <div class="hint">
-                    Ejemplo: si regalas 100€, pagarás 100€ + {money(FIXED_PLATFORM_FEE)}€ + 5% .
+                    Ejemplo: si regalas 100€, pagarás 100€ + {money(FIXED_PLATFORM_FEE)}€ + 5%.
                 </div>
 
                 <div class="buttons">
