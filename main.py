@@ -47,19 +47,40 @@ cur.execute("""
         gift_refund_deadline_at,
         created_at, updated_at
     )
-    VALUES (
-        ?, ?, ?,
-        ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
-        ?,
-        ?, ?, ?, ?, ?, ?,
-        ?, ?,
-        ?, ?, ?,
-        ?,
-        ?, ?
-    )
+  placeholders = ", ".join(["?"] * 36)
+
+cur.execute(f"""
+INSERT INTO orders (
+    id, sender_id, recipient_id,
+    phrase_1, phrase_2, phrase_3,
+    gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
+    paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
+    transfer_in_progress, sender_notified, experience_started, experience_completed, connect_onboarding_completed,
+    gift_refunded,
+    stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id, stripe_gift_refund_id,
+    recipient_token, sender_token,
+    reaction_video_local, reaction_video_public_url, gift_video_url,
+    gift_refund_deadline_at,
+    created_at, updated_at
+)
+VALUES ({placeholders})
+""", (
+    order_id, sender_id, recipient_id,
+    phrase_1, phrase_2, phrase_3,
+    fees["gift_amount"],
+    fees["fixed_fee"],
+    fees["variable_fee"],
+    fees["total_fee"],
+    fees["total_amount"],
+    0, 0, 0, 0, 0,
+    0, 0, 0, 0, 0,
+    0,
+    None, None, None, None, None, None,
+    recipient_token, sender_token,
+    None, None, DEFAULT_GIFT_VIDEO_URL or None,
+    None,
+    created_at, created_at
+))
 """, (
     order_id, sender_id, recipient_id,
     phrase_1, phrase_2, phrase_3,
