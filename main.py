@@ -5,8 +5,6 @@ import os
 import secrets
 import sqlite3
 import urllib.parse
-import urllib.request
-import urllib.error
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,10 +13,11 @@ from typing import Optional
 import boto3
 import stripe
 from botocore.client import Config
-from fastapi import FastAPI, File, Form, Header, HTTPException, Query, Request, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse, PlainTextResponse
+from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from twilio.rest import Client
 
-app = FastAPI(title="ETERNA V36 WHATSAPP AUTOMATED")
+app = FastAPI(title="ETERNA MASTER TWILIO CLEAN")
 
 
 # =========================================================
@@ -49,12 +48,9 @@ R2_BUCKET = os.getenv("R2_BUCKET", "").strip()
 R2_ENDPOINT = os.getenv("R2_ENDPOINT", "").strip().rstrip("/")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL", "").strip().rstrip("/")
 
-WHATSAPP_ACCESS_TOKEN = os.getenv("WHATSAPP_ACCESS_TOKEN", "").strip()
-WHATSAPP_PHONE_NUMBER_ID = os.getenv("WHATSAPP_PHONE_NUMBER_ID", "").strip()
-WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "").strip()
-WHATSAPP_API_VERSION = os.getenv("WHATSAPP_API_VERSION", "v23.0").strip()
-WHATSAPP_TEMPLATE_TO_RECIPIENT = os.getenv("WHATSAPP_TEMPLATE_TO_RECIPIENT", "").strip()
-WHATSAPP_TEMPLATE_TO_SENDER = os.getenv("WHATSAPP_TEMPLATE_TO_SENDER", "").strip()
+TWILIO_ACCOUNT_SID = os.getenv("TWILIO_ACCOUNT_SID", "").strip()
+TWILIO_AUTH_TOKEN = os.getenv("TWILIO_AUTH_TOKEN", "").strip()
+TWILIO_FROM_NUMBER = os.getenv("TWILIO_FROM_NUMBER", "").strip()
 
 MAX_VIDEO_SIZE = 30 * 1024 * 1024
 ALLOWED_VIDEO_TYPES = {
@@ -187,6 +183,11 @@ def init_db():
 
         gift_refund_deadline_at TEXT,
 
+        recipient_sms_sent_at TEXT,
+        sender_sms_sent_at TEXT,
+        recipient_sms_sid TEXT,
+        sender_sms_sid TEXT,
+
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
 
@@ -312,23 +313,23 @@ def init_db():
     )
     add_column_if_missing(
         "orders",
-        "recipient_whatsapp_sent_at",
-        "ALTER TABLE orders ADD COLUMN recipient_whatsapp_sent_at TEXT",
+        "recipient_sms_sent_at",
+        "ALTER TABLE orders ADD COLUMN recipient_sms_sent_at TEXT",
     )
     add_column_if_missing(
         "orders",
-        "sender_whatsapp_sent_at",
-        "ALTER TABLE orders ADD COLUMN sender_whatsapp_sent_at TEXT",
+        "sender_sms_sent_at",
+        "ALTER TABLE orders ADD COLUMN sender_sms_sent_at TEXT",
     )
     add_column_if_missing(
         "orders",
-        "recipient_whatsapp_message_id",
-        "ALTER TABLE orders ADD COLUMN recipient_whatsapp_message_id TEXT",
+        "recipient_sms_sid",
+        "ALTER TABLE orders ADD COLUMN recipient_sms_sid TEXT",
     )
     add_column_if_missing(
         "orders",
-        "sender_whatsapp_message_id",
-        "ALTER TABLE orders ADD COLUMN sender_whatsapp_message_id TEXT",
+        "sender_sms_sid",
+        "ALTER TABLE orders ADD COLUMN sender_sms_sid TEXT",
     )
 
 
@@ -598,17 +599,17 @@ def get_orders_count() -> int:
 
 def build_recipient_message(order: dict) -> str:
     return (
-        "Hay algo para ti ❤️\n\n"
-        "Cuando estés listo, entra aquí:\n"
-        f"{recipient_experience_url_from_order(order)}"
+        "ETERNA 💙\n\n"
+        "Tienes algo que ver...\n\n"
+        f"👉 {recipient_experience_url_from_order(order)}"
     )
 
 
 def build_sender_ready_message(order: dict) -> str:
     return (
-        "Lo que creaste… volvió a ti ❤️\n\n"
-        "Aquí:\n"
-        f"{sender_pack_url_from_order(order)}"
+        "Tu ETERNA ha vuelto 💙\n\n"
+        "Mira lo que provocaste...\n\n"
+        f"👉 {sender_pack_url_from_order(order)}"
     )
 
 
@@ -627,148 +628,83 @@ def calculate_fees(gift_amount: float) -> dict:
     }
 
 
-def whatsapp_enabled() -> bool:
-    return bool(WHATSAPP_ACCESS_TOKEN and WHATSAPP_PHONE_NUMBER_ID)
+def twilio_enabled() -> bool:
+    return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER)
 
 
-def whatsapp_api_url() -> str:
-    return f"https://graph.facebook.com/{WHATSAPP_API_VERSION}/{WHATSAPP_PHONE_NUMBER_ID}/messages"
-
-
-def send_whatsapp_payload(payload: dict) -> Optional[str]:
-    if not whatsapp_enabled():
-        log_info("WhatsApp skipped", "not configured")
-        return None
-
-    body = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        whatsapp_api_url(),
-        data=body,
-        method="POST",
-        headers={
-            "Authorization": f"Bearer {WHATSAPP_ACCESS_TOKEN}",
-            "Content-Type": "application/json",
-        },
-    )
-
-    try:
-        with urllib.request.urlopen(req, timeout=20) as response:
-            raw = response.read().decode("utf-8")
-            data = json.loads(raw)
-            message_id = (
-                (data.get("messages") or [{}])[0].get("id")
-                if isinstance(data, dict)
-                else None
-            )
-            log_info("WhatsApp sent", data)
-            return message_id
-    except urllib.error.HTTPError as e:
-        raw = e.read().decode("utf-8", errors="ignore")
-        log_error("WhatsApp HTTP error", Exception(raw))
-        return None
-    except Exception as e:
-        log_error("WhatsApp send error", e)
-        return None
-
-
-def send_whatsapp_text(phone: str, message: str) -> Optional[str]:
+def to_e164(phone: str) -> str:
     normalized = normalize_phone(phone)
     if not normalized:
-        log_info("WhatsApp skipped", "invalid phone")
+        return ""
+    return f"+{normalized}"
+
+
+def send_sms(phone: str, message: str) -> Optional[str]:
+    to_phone = to_e164(phone)
+
+    if not to_phone:
+        log_info("SMS skipped", "invalid phone")
         return None
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": normalized,
-        "type": "text",
-        "text": {
-            "preview_url": False,
-            "body": message,
-        },
-    }
-    return send_whatsapp_payload(payload)
-
-
-def send_whatsapp_template_single_var(phone: str, template_name: str, variable_value: str) -> Optional[str]:
-    normalized = normalize_phone(phone)
-    if not normalized or not template_name:
+    if not twilio_enabled():
+        log_info("SMS skipped", "twilio not configured")
         return None
 
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": normalized,
-        "type": "template",
-        "template": {
-            "name": template_name,
-            "language": {"code": "es"},
-            "components": [
-                {
-                    "type": "body",
-                    "parameters": [
-                        {"type": "text", "text": variable_value},
-                    ],
-                }
-            ],
-        },
-    }
-    return send_whatsapp_payload(payload)
-
-
-def try_send_recipient_whatsapp(order: dict) -> Optional[str]:
-    if order.get("recipient_whatsapp_sent_at"):
-        return order.get("recipient_whatsapp_message_id")
-
-    message_id = None
-
-    if WHATSAPP_TEMPLATE_TO_RECIPIENT:
-        message_id = send_whatsapp_template_single_var(
-            order.get("recipient_phone", ""),
-            WHATSAPP_TEMPLATE_TO_RECIPIENT,
-            recipient_experience_url_from_order(order),
+    try:
+        client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
+        sms = client.messages.create(
+            body=message,
+            from_=TWILIO_FROM_NUMBER,
+            to=to_phone,
         )
+        log_info("SMS sent", {
+            "to": to_phone,
+            "sid": sms.sid,
+            "status": sms.status,
+        })
+        return sms.sid
+    except Exception as e:
+        log_error("Twilio SMS error", e)
+        return None
 
-    if not message_id:
-        message_id = send_whatsapp_text(
-            order.get("recipient_phone", ""),
-            build_recipient_message(order),
-        )
 
-    if message_id:
+def try_send_recipient_sms(order: dict) -> Optional[str]:
+    if order.get("recipient_sms_sent_at"):
+        return order.get("recipient_sms_sid")
+
+    sms_sid = send_sms(
+        order.get("recipient_phone", ""),
+        build_recipient_message(order),
+    )
+
+    if sms_sid:
         update_order(
             order["id"],
-            recipient_whatsapp_sent_at=now_iso(),
-            recipient_whatsapp_message_id=message_id,
-        )
-    return message_id
-
-
-def try_send_sender_whatsapp(order: dict) -> Optional[str]:
-    if order.get("sender_whatsapp_sent_at"):
-        return order.get("sender_whatsapp_message_id")
-
-    message_id = None
-
-    if WHATSAPP_TEMPLATE_TO_SENDER:
-        message_id = send_whatsapp_template_single_var(
-            order.get("sender_phone", ""),
-            WHATSAPP_TEMPLATE_TO_SENDER,
-            sender_pack_url_from_order(order),
+            recipient_sms_sent_at=now_iso(),
+            recipient_sms_sid=sms_sid,
         )
 
-    if not message_id:
-        message_id = send_whatsapp_text(
-            order.get("sender_phone", ""),
-            build_sender_ready_message(order),
-        )
+    return sms_sid
 
-    if message_id:
+
+def try_send_sender_sms(order: dict) -> Optional[str]:
+    if order.get("sender_sms_sent_at"):
+        return order.get("sender_sms_sid")
+
+    sms_sid = send_sms(
+        order.get("sender_phone", ""),
+        build_sender_ready_message(order),
+    )
+
+    if sms_sid:
         update_order(
             order["id"],
-            sender_whatsapp_sent_at=now_iso(),
-            sender_whatsapp_message_id=message_id,
+            sender_sms_sent_at=now_iso(),
+            sender_sms_sid=sms_sid,
             sender_notified=1,
         )
-    return message_id
+
+    return sms_sid
 
 
 def try_acquire_transfer_lock(order_id: str) -> bool:
@@ -1204,11 +1140,11 @@ def render_create_form() -> str:
                 <div class="section-title">Tus datos</div>
                 <input name="customer_name" placeholder="Tu nombre" required>
                 <input name="customer_email" type="email" placeholder="Tu email">
-                <input name="customer_phone" placeholder="Tu teléfono / WhatsApp" required>
+                <input name="customer_phone" placeholder="Tu teléfono / SMS" required>
 
                 <div class="section-title">Persona que recibe</div>
                 <input name="recipient_name" placeholder="Nombre de la persona" required>
-                <input name="recipient_phone" placeholder="Teléfono / WhatsApp de la persona" required>
+                <input name="recipient_phone" placeholder="Teléfono / SMS de la persona" required>
 
                 <div class="section-title">Las 3 frases</div>
                 <input name="phrase_1" placeholder="Frase 1" required maxlength="160">
@@ -1348,8 +1284,8 @@ def create_order_and_redirect(
             recipient_token, sender_token,
             reaction_video_local, reaction_video_public_url, gift_video_url,
             gift_refund_deadline_at,
-            recipient_whatsapp_sent_at, sender_whatsapp_sent_at,
-            recipient_whatsapp_message_id, sender_whatsapp_message_id,
+            recipient_sms_sent_at, sender_sms_sent_at,
+            recipient_sms_sid, sender_sms_sid,
             created_at, updated_at
         )
         VALUES ({placeholders})
@@ -1384,7 +1320,7 @@ def create_order_and_redirect(
             gift_refund_deadline_at=gift_refund_deadline_iso(),
         )
         order = get_order_by_id(order_id)
-        try_send_recipient_whatsapp(order)
+        try_send_recipient_sms(order)
         return RedirectResponse(url=f"/post-pago/{order_id}", status_code=303)
 
     try:
@@ -1707,33 +1643,10 @@ async def stripe_webhook(request: Request):
 
             try:
                 updated = get_order_by_id(order_id)
-                try_send_recipient_whatsapp(updated)
+                try_send_recipient_sms(updated)
             except Exception as e:
-                log_error("Recipient WhatsApp after payment", e)
+                log_error("Recipient SMS after payment", e)
 
-    return {"received": True}
-
-
-# =========================================================
-# WHATSAPP WEBHOOK
-# =========================================================
-
-@app.get("/whatsapp/webhook")
-def whatsapp_webhook_verify(
-    hub_mode: Optional[str] = Query(default=None, alias="hub.mode"),
-    hub_verify_token: Optional[str] = Query(default=None, alias="hub.verify_token"),
-    hub_challenge: Optional[str] = Query(default=None, alias="hub.challenge"),
-):
-    if hub_mode == "subscribe" and hub_verify_token == WHATSAPP_VERIFY_TOKEN and hub_challenge:
-        return PlainTextResponse(hub_challenge)
-
-    raise HTTPException(status_code=403, detail="Verificación WhatsApp fallida")
-
-
-@app.post("/whatsapp/webhook")
-async def whatsapp_webhook_receive(request: Request):
-    payload = await request.json()
-    log_info("WhatsApp webhook payload", payload)
     return {"received": True}
 
 
@@ -1758,10 +1671,7 @@ def resumen(order_id: str):
     sender_pack_url = sender_pack_url_from_order(order)
     reaction_ready = reaction_exists(order)
 
-    recipient_whatsapp = whatsapp_link(
-        order["recipient_phone"],
-        build_recipient_message(order)
-    )
+    recipient_sms_message = build_recipient_message(order)
 
     if reaction_ready:
         status_line = "Lo que creaste… volvió a ti"
@@ -1779,20 +1689,21 @@ def resumen(order_id: str):
         """
         estado_texto = "Volvió a ti"
     else:
+        sms_url = f"sms:{safe_attr(to_e164(order['recipient_phone']))}?&body={safe_attr(recipient_sms_message)}"
         status_line = "Tu ETERNA está lista"
-        soft_line = "Ahora solo queda enviarla por WhatsApp para que la otra persona la viva."
+        soft_line = "Si Twilio está configurado, el SMS se enviará automáticamente tras el pago."
         main_button = f"""
-            <a href="{safe_attr(recipient_whatsapp)}" target="_blank" rel="noopener noreferrer">
-                <button class="primary">Enviar por WhatsApp</button>
+            <a href="{sms_url}">
+                <button class="primary">Abrir SMS manual</button>
             </a>
         """
         extra_block = f"""
             <div class="private-link-box">
-                <div class="private-link-label">Enlace que se va a enviar</div>
+                <div class="private-link-label">Enlace de la experiencia</div>
                 <div class="private-link-url">{safe_text(recipient_experience_url_from_order(order))}</div>
             </div>
         """
-        estado_texto = "Pendiente de envío"
+        estado_texto = "Pendiente de vivir"
 
     return f"""
     <!DOCTYPE html>
@@ -2535,9 +2446,9 @@ async def upload_video(
         updated_order = get_order_by_id(order["id"])
 
         try:
-            try_send_sender_whatsapp(updated_order)
+            try_send_sender_sms(updated_order)
         except Exception as e:
-            log_error("Sender WhatsApp after reaction", e)
+            log_error("Sender SMS after reaction", e)
 
         return JSONResponse({
             "status": "ok",
@@ -2611,11 +2522,7 @@ def preview_emocion(recipient_token: str):
         order["phrase_3"],
     ])
 
-    sender_whatsapp = whatsapp_link(
-        order["sender_phone"],
-        build_sender_ready_message(order)
-    )
-
+    sender_sms_url = f"sms:{safe_attr(to_e164(order['sender_phone']))}?&body={safe_attr(build_sender_ready_message(order))}"
     sender_pack_url = sender_pack_url_from_order(order)
 
     return f"""
@@ -2743,8 +2650,8 @@ def preview_emocion(recipient_token: str):
             }}
 
             .primary {{
-                background: #25D366;
-                color: white;
+                background: white;
+                color: black;
             }}
 
             .ghost {{
@@ -2788,8 +2695,8 @@ def preview_emocion(recipient_token: str):
 
             <div class="actions">
                 <div class="buttons">
-                    <a class="btn primary" href="{safe_attr(sender_whatsapp)}" target="_blank" rel="noopener noreferrer">
-                        Enviar emoción al regalante por WhatsApp
+                    <a class="btn primary" href="{sender_sms_url}">
+                        Abrir SMS al regalante
                     </a>
 
                     <a class="btn ghost" href="{safe_attr(sender_pack_url)}" target="_blank" rel="noopener noreferrer">
@@ -2802,7 +2709,7 @@ def preview_emocion(recipient_token: str):
                 </div>
 
                 <div class="soft">
-                    Primero revisas el compacto. Si está bien, lo envías al regalante.
+                    Primero revisas el compacto. Si está bien, Twilio también enviará el SMS automático al regalante.
                 </div>
             </div>
         </div>
@@ -3102,14 +3009,11 @@ def connect_return(recipient_token: str):
 
     ready = refresh_connect_status(order)
 
-    if not ready:
-        return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+    if ready:
+        result = process_gift_transfer_for_order(order)
 
-    refreshed_order = get_order_by_recipient_token_or_404(recipient_token)
-    result = process_gift_transfer_for_order(refreshed_order)
-
-    if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
-        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+        if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
+            return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
 
@@ -3379,490 +3283,174 @@ def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
     video_url = order.get("reaction_video_public_url") or (
-        f"/video/sender/{order['sender_token']}" if reaction_exists(order) else None
-    )
-
-    if not video_url:
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <head>
-            <meta charset="UTF-8">
-            <meta name="viewport" content="width=device-width, initial-scale=1.0">
-            <title>ETERNA</title>
-            <style>
-                html, body {
-                    margin: 0;
-                    min-height: 100%;
-                    background: #000;
-                }
-                body {
-                    min-height: 100vh;
-                    background:
-                        radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
-                        linear-gradient(180deg, #050505 0%, #000000 100%);
-                    color: white;
-                    font-family: Arial, sans-serif;
-                    display: flex;
-                    align-items: center;
-                    justify-content: center;
-                    text-align: center;
-                    padding: 24px;
-                }
-                .card {
-                    width: 100%;
-                    max-width: 760px;
-                    background: rgba(255,255,255,0.04);
-                    border: 1px solid rgba(255,255,255,0.08);
-                    border-radius: 24px;
-                    padding: 40px 28px;
-                }
-                h1 {
-                    margin: 0;
-                    font-size: 34px;
-                }
-                .soft {
-                    margin-top: 14px;
-                    color: rgba(255,255,255,0.55);
-                    font-size: 15px;
-                }
-            </style>
-        </head>
-        <body>
-            <div class="card">
-                <h1>Preparando emoción…</h1>
-                <div class="soft">En cuanto esté lista, aparecerá aquí.</div>
-            </div>
-        </body>
-        </html>
-        """)
-
-    video_type = guess_media_type_from_url(video_url)
-    phrases_json = json.dumps([
-        order["phrase_1"],
-        order["phrase_2"],
-        order["phrase_3"],
-    ])
-
-    gift_amount_text = format_amount_display(order.get("gift_amount") or 0)
-
-    return f"""
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Sender Pack ETERNA</title>
-        <style>
-            * {{
-                box-sizing: border-box;
-            }}
-
-            html, body {{
-                margin: 0;
-                min-height: 100%;
-                background: #000;
-            }}
-
-            body {{
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
-                color: white;
-                font-family: Arial, sans-serif;
-            }}
-
-            .wrap {{
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
-            }}
-
-            .top {{
-                flex: 1;
-                min-height: 50vh;
-                background: #000;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                overflow: hidden;
-            }}
-
-            .bottom {{
-                flex: 1;
-                min-height: 50vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                text-align: center;
-                padding: 28px;
-                background:
-                    linear-gradient(180deg, rgba(255,255,255,0.02) 0%, rgba(255,255,255,0.00) 100%);
-                border-top: 1px solid rgba(255,255,255,0.08);
-            }}
-
-            .video-box {{
-                width: 100%;
-                height: 100%;
-            }}
-
-            video {{
-                width: 100%;
-                height: 100%;
-                object-fit: cover;
-                display: block;
-                background: #111;
-            }}
-
-            .text-box {{
-                width: 100%;
-                max-width: 900px;
-            }}
-
-            .eyebrow {{
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1.6px;
-                color: rgba(255,255,255,0.45);
-                margin-bottom: 18px;
-            }}
-
-            .phrase {{
-                font-size: 32px;
-                line-height: 1.45;
-                font-weight: 600;
-                opacity: 0;
-                transform: translateY(10px);
-                transition: opacity 0.35s ease, transform 0.35s ease;
-                min-height: 96px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }}
-
-            .phrase.visible {{
-                opacity: 1;
-                transform: translateY(0);
-            }}
-
-            .amount {{
-                margin-top: 18px;
-                font-size: 16px;
-                color: rgba(255,255,255,0.60);
-            }}
-
-            .footer {{
-                margin-top: 18px;
-                font-size: 13px;
-                color: rgba(255,255,255,0.38);
-            }}
-
-            @media (max-width: 768px) {{
-                .top {{
-                    min-height: 46vh;
-                }}
-
-                .bottom {{
-                    min-height: 54vh;
-                    padding: 24px 20px;
-                }}
-
-                .phrase {{
-                    font-size: 24px;
-                    min-height: 88px;
-                }}
-            }}
-        </style>
-    </head>
-    <body>
-        <div class="wrap">
-            <div class="top">
-                <div class="video-box">
-                    <video id="video" playsinline controls autoplay preload="metadata">
-                        <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
-            </div>
-
-            <div class="bottom">
-                <div class="text-box">
-                    <div class="eyebrow">Lo que creaste… volvió a ti</div>
-                    <div id="phrase" class="phrase"></div>
-                    <div class="amount">Regalo enviado: {safe_text(gift_amount_text)}</div>
-                    <div class="footer">Arriba: su reacción · Abajo: lo que recibió</div>
-                </div>
-            </div>
-        </div>
-
-        <script>
-            const phrases = {phrases_json};
-            const phraseEl = document.getElementById("phrase");
-            const video = document.getElementById("video");
-
-            const phraseWindows = [
-                {{ start: 0, end: 3, text: phrases[0] || "" }},
-                {{ start: 3, end: 6, text: phrases[1] || "" }},
-                {{ start: 6, end: 999999, text: phrases[2] || "" }}
-            ];
-
-            let rafId = null;
-            let currentPhraseText = null;
-
-            function setPhrase(text) {{
-                if (currentPhraseText === text) return;
-                currentPhraseText = text;
-                phraseEl.classList.remove("visible");
-                window.setTimeout(() => {{
-                    phraseEl.textContent = text || "";
-                    if (text) {{
-                        phraseEl.classList.add("visible");
-                    }}
-                }}, 120);
-            }}
-
-            function getPhraseForTime(t) {{
-                for (const w of phraseWindows) {{
-                    if (t >= w.start && t < w.end) return w.text;
-                }}
-                return phrases[phrases.length - 1] || "";
-            }}
-
-            function syncPhraseToVideo() {{
-                setPhrase(getPhraseForTime(video.currentTime || 0));
-            }}
-
-            function stopLoop() {{
-                if (rafId) {{
-                    cancelAnimationFrame(rafId);
-                    rafId = null;
-                }}
-            }}
-
-            function startLoop() {{
-                stopLoop();
-                function tick() {{
-                    if (!video.paused && !video.ended) {{
-                        syncPhraseToVideo();
-                        rafId = requestAnimationFrame(tick);
-                    }}
-                }}
-                tick();
-            }}
-
-            video.addEventListener("loadedmetadata", syncPhraseToVideo);
-            video.addEventListener("play", () => {{
-                syncPhraseToVideo();
-                startLoop();
-            }});
-            video.addEventListener("pause", () => {{
-                stopLoop();
-                syncPhraseToVideo();
-            }});
-            video.addEventListener("seeking", syncPhraseToVideo);
-            video.addEventListener("timeupdate", syncPhraseToVideo);
-            video.addEventListener("ended", () => {{
-                stopLoop();
-                syncPhraseToVideo();
-            }});
-        </script>
-    </body>
-    </html>
-    """
-
-
-# =========================================================
-# DEMO PROTEGIDA
+        f"/video/sender/{order['sender_token']}" if reaction_exists
+        # =========================================================
+# STRIPE WEBHOOK (CON SMS AUTOMÁTICO)
 # =========================================================
 
-@app.get("/upload-demo/{order_id}")
-def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=None)):
-    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="No autorizado")
+@app.post("/stripe/webhook")
+async def stripe_webhook(request: Request):
+    payload = await request.body()
+    sig_header = request.headers.get("stripe-signature", "")
 
-    order = get_order_by_id(order_id)
+    if not STRIPE_WEBHOOK_SECRET and STRIPE_SECRET_KEY:
+        raise HTTPException(status_code=400, detail="Webhook secret no configurado")
 
-    demo_url = "https://samplelib.com/lib/preview/mp4/sample-5s.mp4"
-    update_order(
-        order["id"],
-        reaction_video_public_url=demo_url,
-        reaction_uploaded=1,
-        experience_started=1,
-        experience_completed=1,
-    )
-    insert_asset(order["id"], "reaction_video", demo_url, "demo")
-
-    updated = get_order_by_id(order_id)
-    return RedirectResponse(url=f"/preview-emocion/{updated['recipient_token']}", status_code=303)
-
-
-# =========================================================
-# REFUNDS ADMIN
-# =========================================================
-
-@app.post("/admin/process-expired-refunds")
-def admin_process_expired_refunds(x_admin_token: Optional[str] = Header(default=None)):
-    if not ADMIN_TOKEN or x_admin_token != ADMIN_TOKEN:
-        raise HTTPException(status_code=403, detail="No autorizado")
-
-    result = process_expired_gift_refunds()
-    return result
-
-
-# =========================================================
-# LEGAL
-# =========================================================
-
-@app.get("/condiciones", response_class=HTMLResponse)
-def condiciones():
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Condiciones de uso — ETERNA</title>
-        <style>
-            html, body { margin: 0; background: #000; color: white; font-family: Arial, sans-serif; }
-            .container { max-width: 860px; margin: 0 auto; padding: 40px 22px 60px; line-height: 1.75; }
-            h1 { font-size: 30px; margin-bottom: 24px; }
-            h2 { margin-top: 26px; font-size: 18px; color: rgba(255,255,255,0.92); }
-            p { font-size: 14px; color: rgba(255,255,255,0.72); }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Condiciones de uso — ETERNA</h1>
-
-            <h2>1. Naturaleza del servicio</h2>
-            <p>ETERNA es una experiencia emocional digital única. No constituye un servicio financiero, sino una experiencia digital que puede integrar contenido audiovisual, grabación de reacción y gestión de importes a través de proveedores externos.</p>
-
-            <h2>2. Experiencia única</h2>
-            <p>La experiencia solo puede vivirse una vez. Una vez iniciada, no puede repetirse, reiniciarse ni reproducirse como experiencia original.</p>
-
-            <h2>3. Grabación y consentimiento</h2>
-            <p>Al iniciar la experiencia, el usuario acepta expresamente la captura de imagen y audio mediante cámara y micrófono con el fin de generar el contenido final asociado a ETERNA. Este contenido podrá ser compartido con la persona que creó la experiencia.</p>
-
-            <h2>4. Pagos y gestión del importe</h2>
-            <p>Los pagos y operaciones relacionadas con el envío o recepción de dinero se gestionan a través de proveedores externos como Stripe. ETERNA no almacena datos bancarios del usuario.</p>
-
-            <h2>5. Tiempos de disponibilidad</h2>
-            <p>La preparación o disponibilidad del cobro puede estar sujeta a los tiempos habituales de verificación, procesamiento y liquidación de Stripe, bancos y proveedores de pago.</p>
-
-            <h2>6. Responsabilidad</h2>
-            <p>ETERNA no se hace responsable de retrasos, bloqueos, verificaciones adicionales, incidencias técnicas o demoras originadas por bancos, pasarelas de pago o terceros ajenos al control directo de la plataforma.</p>
-
-            <h2>7. Uso aceptado</h2>
-            <p>El usuario se compromete a utilizar ETERNA de forma lícita, legítima y respetuosa. Queda prohibido cualquier uso fraudulento, abusivo o contrario a la ley.</p>
-
-            <h2>8. Aceptación</h2>
-            <p>Al acceder, iniciar, vivir o completar la experiencia, así como al aceptar cualquier acción relacionada con grabación o cobro, el usuario declara haber leído y aceptado estas condiciones.</p>
-        </div>
-    </body>
-    </html>
-    """
-
-
-@app.get("/privacidad", response_class=HTMLResponse)
-def privacidad():
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Política de privacidad — ETERNA</title>
-        <style>
-            html, body { margin: 0; background: #000; color: white; font-family: Arial, sans-serif; }
-            .container { max-width: 860px; margin: 0 auto; padding: 40px 22px 60px; line-height: 1.75; }
-            h1 { font-size: 30px; margin-bottom: 24px; }
-            h2 { margin-top: 26px; font-size: 18px; color: rgba(255,255,255,0.92); }
-            p { font-size: 14px; color: rgba(255,255,255,0.72); }
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <h1>Política de privacidad — ETERNA</h1>
-
-            <h2>1. Datos tratados</h2>
-            <p>ETERNA puede tratar datos como nombre, teléfono, correo electrónico y contenido generado durante la experiencia, incluyendo vídeo y audio cuando el usuario lo acepta expresamente.</p>
-
-            <h2>2. Finalidad</h2>
-            <p>Estos datos se utilizan únicamente para prestar el servicio, crear la experiencia, enviarla, gestionarla, permitir su visualización y, en su caso, coordinar procesos de pago o cobro con proveedores externos.</p>
-
-            <h2>3. Base legal</h2>
-            <p>La base jurídica del tratamiento es el consentimiento del usuario y la ejecución del servicio solicitado.</p>
-
-            <h2>4. Conservación</h2>
-            <p>Los datos se conservarán solo durante el tiempo necesario para prestar el servicio y atender posibles obligaciones legales o incidencias técnicas.</p>
-
-            <h2>5. Terceros</h2>
-            <p>Algunos datos pueden ser tratados por proveedores tecnológicos necesarios para la prestación del servicio, como servicios de alojamiento, almacenamiento o pasarelas de pago como Stripe.</p>
-
-            <h2>6. Derechos</h2>
-            <p>El usuario podrá solicitar acceso, rectificación o eliminación de sus datos cuando proceda, conforme a la normativa aplicable.</p>
-
-            <h2>7. Seguridad</h2>
-            <p>ETERNA adopta medidas razonables para proteger la información tratada y limitar el acceso a los datos únicamente a lo necesario para la prestación del servicio.</p>
-        </div>
-    </body>
-    </html>
-    """
-
-
-# =========================================================
-# HEALTH
-# =========================================================
-
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "app": "ETERNA V36 WHATSAPP AUTOMATED",
-        "stripe_configured": bool(STRIPE_SECRET_KEY),
-        "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
-        "r2_configured": r2_enabled(),
-        "whatsapp_configured": whatsapp_enabled(),
-        "public_base_url": PUBLIC_BASE_URL,
-        "gift_refund_days": GIFT_REFUND_DAYS,
-        "orders": get_orders_count(),
-        "assets": get_assets_count(),
-    }
-
-
-@app.get("/healthz")
-def healthz():
     try:
-        conn = db_conn()
-        cur = conn.cursor()
-        cur.execute("SELECT 1 AS ok")
-        row = cur.fetchone()
-        conn.close()
-
-        return {
-            "ok": bool(row["ok"] == 1),
-            "db": "ok",
-            "stripe": "configured" if STRIPE_SECRET_KEY else "disabled",
-            "r2": "configured" if r2_enabled() else "disabled",
-            "whatsapp": "configured" if whatsapp_enabled() else "disabled",
-        }
+        if STRIPE_WEBHOOK_SECRET:
+            event = stripe.Webhook.construct_event(
+                payload=payload,
+                sig_header=sig_header,
+                secret=STRIPE_WEBHOOK_SECRET,
+            )
+        else:
+            event = json.loads(payload.decode("utf-8"))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"healthz failed: {e}")
+        raise HTTPException(status_code=400, detail=f"Webhook inválido: {e}")
+
+    event_type = event.get("type")
+
+    # =====================================================
+    # PAGO COMPLETADO → SMS AL REGALADO
+    # =====================================================
+    if event_type == "checkout.session.completed":
+        session = event["data"]["object"]
+
+        order_id = (
+            session.get("metadata", {}).get("order_id")
+            or session.get("client_reference_id")
+        )
+
+        if order_id:
+            try:
+                existing = get_order_by_id(order_id)
+            except HTTPException:
+                return {"received": True}
+
+            # marcar como pagado
+            update_order(
+                order_id,
+                paid=1,
+                stripe_payment_status="paid",
+                stripe_session_id=session.get("id"),
+                stripe_payment_intent_id=session.get("payment_intent"),
+                gift_refund_deadline_at=existing.get("gift_refund_deadline_at") or gift_refund_deadline_iso(),
+            )
+
+            # enviar SMS al regalado
+            try:
+                updated = get_order_by_id(order_id)
+                try_send_recipient_sms(updated)
+            except Exception as e:
+                log_error("Recipient SMS after payment", e)
+
+    return {"received": True}
 
 
 # =========================================================
-# RUN
+# SUBIDA DE VIDEO → SMS AL REGALANTE
 # =========================================================
 
-if __name__ == "__main__":
-    import uvicorn
+@app.post("/upload-video")
+async def upload_video(
+    recipient_token: str = Form(...),
+    video: UploadFile = File(...),
+):
+    order = get_order_by_recipient_token_or_404(recipient_token)
 
-    port = int(os.environ.get("PORT", 10000))
-    print(f"🚀 Starting server on port {port}")
+    if not order["paid"]:
+        raise HTTPException(status_code=403, detail="Pedido no pagado")
 
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=port,
-    )
+    if bool(order.get("reaction_uploaded")) or reaction_exists(order):
+        return JSONResponse({
+            "status": "already_uploaded",
+            "preview_url": f"{PUBLIC_BASE_URL}/preview-emocion/{order['recipient_token']}",
+            "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{order['recipient_token']}",
+            "sender_pack_url": sender_pack_url_from_order(order),
+            "public_video_url": order.get("reaction_video_public_url"),
+        })
+
+    content_type = (video.content_type or "").lower().strip()
+    filename = (video.filename or "").lower().strip()
+
+    is_allowed_type = content_type in ALLOWED_VIDEO_TYPES
+    is_allowed_name = filename.endswith(".webm") or filename.endswith(".mp4")
+
+    if not is_allowed_type and not is_allowed_name:
+        raise HTTPException(status_code=400, detail="Formato de vídeo no permitido")
+
+    video_extension = detect_video_extension(video)
+    filepath = reaction_video_path(order["id"], video_extension)
+    final_content_type = "video/mp4" if video_extension == "mp4" else "video/webm"
+
+    total_size = 0
+
+    try:
+        with open(filepath, "wb") as f:
+            while True:
+                chunk = await video.read(1024 * 1024)
+                if not chunk:
+                    break
+
+                total_size += len(chunk)
+                if total_size > MAX_VIDEO_SIZE:
+                    f.close()
+                    if os.path.exists(filepath):
+                        os.remove(filepath)
+                    raise HTTPException(status_code=400, detail="Vídeo demasiado grande")
+
+                f.write(chunk)
+
+        if not os.path.exists(filepath) or os.path.getsize(filepath) == 0:
+            raise HTTPException(status_code=400, detail="Vídeo vacío")
+
+        public_video_url = None
+
+        try:
+            public_video_url = upload_video_to_r2(
+                filepath,
+                f"{order['id']}.{video_extension}",
+                final_content_type,
+            )
+        except Exception as e:
+            log_error("Error subiendo a R2", e)
+
+        # guardar en DB
+        update_order(
+            order["id"],
+            reaction_video_local=filepath,
+            reaction_video_public_url=public_video_url,
+            reaction_uploaded=1,
+            experience_completed=1,
+        )
+
+        if public_video_url:
+            insert_asset(order["id"], "reaction_video", public_video_url, "r2")
+        else:
+            insert_asset(
+                order["id"],
+                "reaction_video",
+                f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}",
+                "local",
+            )
+
+        # =====================================================
+        # SMS AL REGALANTE (AQUÍ ESTÁ LA MAGIA)
+        # =====================================================
+        updated_order = get_order_by_id(order["id"])
+
+        try:
+            try_send_sender_sms(updated_order)
+        except Exception as e:
+            log_error("Sender SMS after reaction", e)
+
+        return JSONResponse({
+            "status": "ok",
+            "preview_url": f"{PUBLIC_BASE_URL}/preview-emocion/{updated_order['recipient_token']}",
+            "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{updated_order['recipient_token']}",
+            "sender_pack_url": sender_pack_url_from_order(updated_order),
+            "public_video_url": updated_order.get("reaction_video_public_url"),
+        })
+
+    finally:
+        await video.close()
