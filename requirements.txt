@@ -3,3 +3,4 @@ uvicorn
 stripe
 boto3
 python-multipart
+twilio==8.10.0
