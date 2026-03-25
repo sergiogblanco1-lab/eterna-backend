@@ -1338,7 +1338,7 @@ def create_order_and_redirect(
     ))
     recipient_id = cur.lastrowid
 
-    placeholders = ", ".join(["?"] * 41)
+    placeholders = ", ".join(["?"] * 40)
 
     cur.execute(f"""
         INSERT INTO orders (
