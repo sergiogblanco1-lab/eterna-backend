@@ -16,7 +16,8 @@ from botocore.client import Config
 from fastapi import FastAPI, File, Form, Header, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
 
-app = FastAPI(title="ETERNA V34 MANUAL PREVIEW")
+app = FastAPI(title="ETERNA V35 CLEAN MANUAL PREVIEW")
+
 
 # =========================================================
 # CONFIG
@@ -63,6 +64,7 @@ DB_PATH = DATA_FOLDER / "eterna.db"
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
 
 # =========================================================
 # LOG
@@ -303,6 +305,7 @@ def init_db():
 
 init_db()
 
+
 # =========================================================
 # HELPERS
 # =========================================================
@@ -393,6 +396,15 @@ def reaction_video_path(order_id: str, extension: str = "webm") -> str:
 def guess_media_type_from_path(path: str) -> str:
     media_type, _ = mimetypes.guess_type(path)
     return media_type or "application/octet-stream"
+
+
+def guess_media_type_from_url(url: str) -> str:
+    raw = (url or "").split("?")[0].lower()
+    if raw.endswith(".webm"):
+        return "video/webm"
+    if raw.endswith(".mp4"):
+        return "video/mp4"
+    return "video/mp4"
 
 
 def r2_enabled() -> bool:
@@ -673,6 +685,7 @@ def try_start_experience(order_id: str) -> str:
         return "already_started"
     return "blocked"
 
+
 # =========================================================
 # STRIPE CONNECT HELPERS
 # =========================================================
@@ -902,6 +915,7 @@ def process_expired_gift_refunds() -> dict:
         "skipped": skipped,
         "errors": errors,
     }
+
 
 # =========================================================
 # CREATE FORM
@@ -1175,7 +1189,7 @@ def create_order_and_redirect(
             gift_refund_deadline_at,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     """, (
         order_id, sender_id, recipient_id,
         phrase_1, phrase_2, phrase_3,
@@ -1236,6 +1250,7 @@ def create_order_and_redirect(
         return RedirectResponse(url=session.url, status_code=303)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error creando checkout Stripe: {e}")
+
 
 # =========================================================
 # HOME / CREAR
@@ -1384,6 +1399,7 @@ def crear_eterna_legacy(
         gift_amount=gift_amount,
     )
 
+
 # =========================================================
 # CHECKOUT / WEBHOOK STRIPE
 # =========================================================
@@ -1522,10 +1538,8 @@ async def stripe_webhook(request: Request):
                 gift_refund_deadline_at=existing.get("gift_refund_deadline_at") or gift_refund_deadline_iso(),
             )
 
-            # WhatsApp manual en fase de prueba.
-            # No enviamos automáticamente hasta integrar Meta API real.
-
     return {"received": True}
+
 
 # =========================================================
 # POST PAGO / RESUMEN
@@ -1720,6 +1734,7 @@ def resumen(order_id: str):
     </html>
     """
 
+
 # =========================================================
 # START EXPERIENCE LOCK
 # =========================================================
@@ -1745,6 +1760,7 @@ def start_experience(recipient_token: str = Form(...)):
         })
 
     return JSONResponse({"status": "ok"})
+
 
 # =========================================================
 # BLOQUEO SEGUNDA ENTRADA
@@ -1812,6 +1828,7 @@ def bloqueado(recipient_token: str):
     </body>
     </html>
     """
+
 
 # =========================================================
 # EXPERIENCIA DEL REGALADO
@@ -2081,7 +2098,7 @@ def pedido(recipient_token: str):
                     if (!chunks.length) return null;
 
                     const ext = mediaMimeType.includes("mp4") ? "mp4" : "webm";
-                    const blob = new Blob(chunks, {{ type: mediaMimeType }});
+                    const blob = new Blob(chunks, {{ type: ext === "mp4" ? "video/mp4" : "video/webm" }});
                     if (!blob || blob.size === 0) return null;
 
                     const formData = new FormData();
@@ -2239,6 +2256,7 @@ def pedido(recipient_token: str):
     </html>
     """
 
+
 # =========================================================
 # SUBIR VIDEO
 # =========================================================
@@ -2315,12 +2333,6 @@ async def upload_video(
 
         if public_video_url:
             insert_asset(order["id"], "reaction_video", public_video_url, "r2")
-            try:
-                if os.path.exists(filepath):
-                    os.remove(filepath)
-                update_order(order["id"], reaction_video_local=None)
-            except Exception:
-                pass
         else:
             insert_asset(order["id"], "reaction_video", f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}", "local")
 
@@ -2336,6 +2348,7 @@ async def upload_video(
     finally:
         await video.close()
 
+
 # =========================================================
 # VIDEO FILE PRIVADO
 # =========================================================
@@ -2350,6 +2363,19 @@ def get_video_for_sender(sender_token: str):
 
     media_type = guess_media_type_from_path(filepath)
     return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
+
+
+@app.get("/video/reaction/{recipient_token}")
+def get_video_for_recipient_preview(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+
+    filepath = order.get("reaction_video_local")
+    if not filepath or not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
+
+    media_type = guess_media_type_from_path(filepath)
+    return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
+
 
 # =========================================================
 # PREVIEW ANTES DE ENVIAR AL REGALANTE
@@ -2375,8 +2401,8 @@ def preview_emocion(recipient_token: str):
         </html>
         """)
 
-    video_url = order.get("reaction_video_public_url") or f"/video/sender/{order['sender_token']}"
-    safe_video_url = safe_attr(video_url)
+    video_url = order.get("reaction_video_public_url") or f"/video/reaction/{order['recipient_token']}"
+    video_type = guess_media_type_from_url(video_url)
 
     phrases_json = json.dumps([
         order["phrase_1"],
@@ -2483,7 +2509,7 @@ def preview_emocion(recipient_token: str):
                 font-weight: 600;
                 opacity: 0;
                 transform: translateY(10px);
-                transition: opacity 0.9s ease, transform 0.9s ease;
+                transition: opacity 0.35s ease, transform 0.35s ease;
                 min-height: 96px;
                 display: flex;
                 align-items: center;
@@ -2546,8 +2572,7 @@ def preview_emocion(recipient_token: str):
             <div class="top">
                 <div class="video-box">
                     <video id="video" playsinline controls autoplay preload="metadata">
-                        <source src="{safe_video_url}" type="video/webm">
-                        <source src="{safe_video_url}" type="video/mp4">
+                        <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
                         Tu navegador no puede reproducir este vídeo.
                     </video>
                 </div>
@@ -2586,49 +2611,76 @@ def preview_emocion(recipient_token: str):
             const phraseEl = document.getElementById("phrase");
             const video = document.getElementById("video");
 
-            let phraseIndex = 0;
-            let phraseTimer = null;
-            let started = false;
+            const phraseWindows = [
+                {{ start: 0, end: 3, text: phrases[0] || "" }},
+                {{ start: 3, end: 6, text: phrases[1] || "" }},
+                {{ start: 6, end: 999999, text: phrases[2] || "" }}
+            ];
 
-            function renderPhrase(index) {{
-                if (index >= phrases.length) return;
+            let rafId = null;
+            let currentPhraseText = null;
 
+            function setPhrase(text) {{
+                if (currentPhraseText === text) return;
+                currentPhraseText = text;
                 phraseEl.classList.remove("visible");
-
-                setTimeout(() => {{
-                    phraseEl.textContent = phrases[index] || "";
-                    phraseEl.classList.add("visible");
-                }}, 220);
-            }}
-
-            function startPhraseSequence() {{
-                if (started) return;
-                started = true;
-
-                renderPhrase(phraseIndex);
-                phraseIndex += 1;
-
-                phraseTimer = setInterval(() => {{
-                    if (phraseIndex >= phrases.length) {{
-                        clearInterval(phraseTimer);
-                        return;
+                window.setTimeout(() => {{
+                    phraseEl.textContent = text || "";
+                    if (text) {{
+                        phraseEl.classList.add("visible");
                     }}
-                    renderPhrase(phraseIndex);
-                    phraseIndex += 1;
-                }}, 3000);
+                }}, 120);
             }}
 
-            video.addEventListener("play", startPhraseSequence, {{ once: true }});
-
-            video.addEventListener("ended", () => {{
-                if (phraseTimer) {{
-                    clearInterval(phraseTimer);
+            function getPhraseForTime(t) {{
+                for (const w of phraseWindows) {{
+                    if (t >= w.start && t < w.end) return w.text;
                 }}
+                return phrases[phrases.length - 1] || "";
+            }}
+
+            function syncPhraseToVideo() {{
+                setPhrase(getPhraseForTime(video.currentTime || 0));
+            }}
+
+            function stopLoop() {{
+                if (rafId) {{
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }}
+            }}
+
+            function startLoop() {{
+                stopLoop();
+                function tick() {{
+                    if (!video.paused && !video.ended) {{
+                        syncPhraseToVideo();
+                        rafId = requestAnimationFrame(tick);
+                    }}
+                }}
+                tick();
+            }}
+
+            video.addEventListener("loadedmetadata", syncPhraseToVideo);
+            video.addEventListener("play", () => {{
+                syncPhraseToVideo();
+                startLoop();
+            }});
+            video.addEventListener("pause", () => {{
+                stopLoop();
+                syncPhraseToVideo();
+            }});
+            video.addEventListener("seeking", syncPhraseToVideo);
+            video.addEventListener("timeupdate", syncPhraseToVideo);
+            video.addEventListener("ended", () => {{
+                stopLoop();
+                syncPhraseToVideo();
             }});
         </script>
     </body>
     </html>
     """
+
 
 # =========================================================
 # COBRAR
@@ -2770,6 +2822,7 @@ def cobrar(recipient_token: str):
     </html>
     """
 
+
 # =========================================================
 # STRIPE CONNECT ONBOARDING
 # =========================================================
@@ -2858,6 +2911,7 @@ def connect_return(recipient_token: str):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
     return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+
 
 # =========================================================
 # VERIFICANDO COBRO
@@ -2963,6 +3017,7 @@ def verificando_cobro(recipient_token: str):
     </html>
     """
 
+
 # =========================================================
 # GRACIAS COBRO
 # =========================================================
@@ -3006,12 +3061,11 @@ def gracias_cobro(recipient_token: str):
 
     video_block = ""
     if gift_video_url:
-        safe_gift_video = safe_attr(gift_video_url)
+        video_type = guess_media_type_from_url(gift_video_url)
         video_block = f"""
             <div class="video-wrap">
                 <video controls playsinline preload="metadata">
-                    <source src="{safe_gift_video}" type="video/mp4">
-                    <source src="{safe_gift_video}" type="video/webm">
+                    <source src="{safe_attr(gift_video_url)}" type="{safe_attr(video_type)}">
                     Tu navegador no puede reproducir este vídeo.
                 </video>
             </div>
@@ -3090,8 +3144,9 @@ def gracias_cobro(recipient_token: str):
     </html>
     """
 
+
 # =========================================================
-# REACCION (NO SE ENSEÑA AL REGALADO)
+# REACCION
 # =========================================================
 
 @app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
@@ -3112,6 +3167,7 @@ def reaccion(recipient_token: str):
         """)
 
     return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+
 
 # =========================================================
 # SENDER PACK
@@ -3180,13 +3236,13 @@ def sender_pack(sender_token: str):
         </html>
         """)
 
+    video_type = guess_media_type_from_url(video_url)
     phrases_json = json.dumps([
         order["phrase_1"],
         order["phrase_2"],
         order["phrase_3"],
     ])
 
-    safe_video_url = safe_attr(video_url)
     gift_amount_text = format_amount_display(order.get("gift_amount") or 0)
 
     return f"""
@@ -3277,7 +3333,7 @@ def sender_pack(sender_token: str):
                 font-weight: 600;
                 opacity: 0;
                 transform: translateY(10px);
-                transition: opacity 0.9s ease, transform 0.9s ease;
+                transition: opacity 0.35s ease, transform 0.35s ease;
                 min-height: 96px;
                 display: flex;
                 align-items: center;
@@ -3323,8 +3379,7 @@ def sender_pack(sender_token: str):
             <div class="top">
                 <div class="video-box">
                     <video id="video" playsinline controls autoplay preload="metadata">
-                        <source src="{safe_video_url}" type="video/webm">
-                        <source src="{safe_video_url}" type="video/mp4">
+                        <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
                         Tu navegador no puede reproducir este vídeo.
                     </video>
                 </div>
@@ -3345,49 +3400,76 @@ def sender_pack(sender_token: str):
             const phraseEl = document.getElementById("phrase");
             const video = document.getElementById("video");
 
-            let phraseIndex = 0;
-            let phraseTimer = null;
-            let started = false;
+            const phraseWindows = [
+                {{ start: 0, end: 3, text: phrases[0] || "" }},
+                {{ start: 3, end: 6, text: phrases[1] || "" }},
+                {{ start: 6, end: 999999, text: phrases[2] || "" }}
+            ];
 
-            function renderPhrase(index) {{
-                if (index >= phrases.length) return;
+            let rafId = null;
+            let currentPhraseText = null;
 
+            function setPhrase(text) {{
+                if (currentPhraseText === text) return;
+                currentPhraseText = text;
                 phraseEl.classList.remove("visible");
-
-                setTimeout(() => {{
-                    phraseEl.textContent = phrases[index] || "";
-                    phraseEl.classList.add("visible");
-                }}, 220);
-            }}
-
-            function startPhraseSequence() {{
-                if (started) return;
-                started = true;
-
-                renderPhrase(phraseIndex);
-                phraseIndex += 1;
-
-                phraseTimer = setInterval(() => {{
-                    if (phraseIndex >= phrases.length) {{
-                        clearInterval(phraseTimer);
-                        return;
+                window.setTimeout(() => {{
+                    phraseEl.textContent = text || "";
+                    if (text) {{
+                        phraseEl.classList.add("visible");
                     }}
-                    renderPhrase(phraseIndex);
-                    phraseIndex += 1;
-                }}, 3000);
+                }}, 120);
             }}
 
-            video.addEventListener("play", startPhraseSequence, {{ once: true }});
-
-            video.addEventListener("ended", () => {{
-                if (phraseTimer) {{
-                    clearInterval(phraseTimer);
+            function getPhraseForTime(t) {{
+                for (const w of phraseWindows) {{
+                    if (t >= w.start && t < w.end) return w.text;
                 }}
+                return phrases[phrases.length - 1] || "";
+            }}
+
+            function syncPhraseToVideo() {{
+                setPhrase(getPhraseForTime(video.currentTime || 0));
+            }}
+
+            function stopLoop() {{
+                if (rafId) {{
+                    cancelAnimationFrame(rafId);
+                    rafId = null;
+                }}
+            }}
+
+            function startLoop() {{
+                stopLoop();
+                function tick() {{
+                    if (!video.paused && !video.ended) {{
+                        syncPhraseToVideo();
+                        rafId = requestAnimationFrame(tick);
+                    }}
+                }}
+                tick();
+            }}
+
+            video.addEventListener("loadedmetadata", syncPhraseToVideo);
+            video.addEventListener("play", () => {{
+                syncPhraseToVideo();
+                startLoop();
+            }});
+            video.addEventListener("pause", () => {{
+                stopLoop();
+                syncPhraseToVideo();
+            }});
+            video.addEventListener("seeking", syncPhraseToVideo);
+            video.addEventListener("timeupdate", syncPhraseToVideo);
+            video.addEventListener("ended", () => {{
+                stopLoop();
+                syncPhraseToVideo();
             }});
         </script>
     </body>
     </html>
     """
+
 
 # =========================================================
 # DEMO PROTEGIDA
@@ -3413,6 +3495,7 @@ def upload_demo(order_id: str, x_admin_token: Optional[str] = Header(default=Non
     updated = get_order_by_id(order_id)
     return RedirectResponse(url=f"/preview-emocion/{updated['recipient_token']}", status_code=303)
 
+
 # =========================================================
 # REFUNDS ADMIN
 # =========================================================
@@ -3424,6 +3507,7 @@ def admin_process_expired_refunds(x_admin_token: Optional[str] = Header(default=
 
     result = process_expired_gift_refunds()
     return result
+
 
 # =========================================================
 # LEGAL
@@ -3525,6 +3609,7 @@ def privacidad():
     </html>
     """
 
+
 # =========================================================
 # HEALTH
 # =========================================================
@@ -3533,7 +3618,7 @@ def privacidad():
 def health():
     return {
         "status": "ok",
-        "app": "ETERNA V34 MANUAL PREVIEW",
+        "app": "ETERNA V35 CLEAN MANUAL PREVIEW",
         "stripe_configured": bool(STRIPE_SECRET_KEY),
         "stripe_webhook_configured": bool(STRIPE_WEBHOOK_SECRET),
         "r2_configured": r2_enabled(),
@@ -3546,7 +3631,22 @@ def health():
 
 @app.get("/healthz")
 def healthz():
-    return {"ok": True}
+    try:
+        conn = db_conn()
+        cur = conn.cursor()
+        cur.execute("SELECT 1 AS ok")
+        row = cur.fetchone()
+        conn.close()
+
+        return {
+            "ok": bool(row["ok"] == 1),
+            "db": "ok",
+            "stripe": "configured" if STRIPE_SECRET_KEY else "disabled",
+            "r2": "configured" if r2_enabled() else "disabled",
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"healthz failed: {e}")
+
 
 # =========================================================
 # RUN
