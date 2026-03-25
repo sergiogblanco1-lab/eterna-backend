@@ -4,7 +4,6 @@ import mimetypes
 import os
 import secrets
 import sqlite3
-import urllib.parse
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -15,9 +14,10 @@ import stripe
 from botocore.client import Config
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, RedirectResponse
+from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
 
-app = FastAPI(title="ETERNA FINAL MASTER AUTO SMS")
+app = FastAPI(title="ETERNA MAGIC FINAL")
 
 
 # =========================================================
@@ -65,10 +65,15 @@ DATA_FOLDER.mkdir(parents=True, exist_ok=True)
 VIDEO_FOLDER = Path("videos")
 VIDEO_FOLDER.mkdir(parents=True, exist_ok=True)
 
+STATIC_FOLDER = Path("static")
+STATIC_FOLDER.mkdir(parents=True, exist_ok=True)
+
 DB_PATH = DATA_FOLDER / "eterna.db"
 
 if STRIPE_SECRET_KEY:
     stripe.api_key = STRIPE_SECRET_KEY
+
+app.mount("/static", StaticFiles(directory=str(STATIC_FOLDER)), name="static")
 
 
 # =========================================================
@@ -403,7 +408,6 @@ def new_token() -> str:
 def detect_video_extension(upload: UploadFile) -> str:
     content_type = (upload.content_type or "").lower().strip()
     filename = (upload.filename or "").lower().strip()
-
     if filename.endswith(".mp4") or content_type == "video/mp4":
         return "mp4"
     return "webm"
@@ -437,7 +441,6 @@ def r2_enabled() -> bool:
 def get_r2_client():
     if not r2_enabled():
         return None
-
     return boto3.client(
         "s3",
         endpoint_url=R2_ENDPOINT,
@@ -545,7 +548,6 @@ def get_order_by_sender_token_or_404(token: str):
 def update_order(order_id: str, **fields):
     if not fields:
         return
-
     fields["updated_at"] = now_iso()
     columns = ", ".join([f"{k} = ?" for k in fields.keys()])
     values = list(fields.values()) + [order_id]
@@ -574,17 +576,17 @@ def recipient_experience_url_from_order(order: dict) -> str:
 
 def build_recipient_message(order: dict) -> str:
     return (
-        "ETERNA 💙\n\n"
+        "ETERNA\n\n"
         "Tienes algo que ver...\n\n"
-        f"👉 {recipient_experience_url_from_order(order)}"
+        f"{recipient_experience_url_from_order(order)}"
     )
 
 
 def build_sender_ready_message(order: dict) -> str:
     return (
-        "Tu ETERNA ha vuelto 💙\n\n"
+        "Lo que creaste volvió a ti.\n\n"
         "Mira lo que provocaste...\n\n"
-        f"👉 {sender_pack_url_from_order(order)}"
+        f"{sender_pack_url_from_order(order)}"
     )
 
 
@@ -601,6 +603,72 @@ def calculate_fees(gift_amount: float) -> dict:
         "total_fee": total_fee,
         "total_amount": total_amount,
     }
+
+
+def get_phrases_by_type(message_type: str):
+    templates = {
+        "amor": [
+            "No sé en qué momento pasó…",
+            "Pero ahora no imagino mi vida sin ti",
+            "Y eso lo cambia todo",
+        ],
+        "agradecimiento": [
+            "Nunca te lo digo suficiente",
+            "Pero has estado en todo lo importante",
+            "Gracias por no fallar nunca",
+        ],
+        "cumpleanos": [
+            "Hoy todo el mundo te felicita",
+            "Pero hay algo que quiero que sepas",
+            "Tu vida importa más de lo que imaginas",
+        ],
+        "sorpresa": [
+            "Pensabas que hoy era un día normal…",
+            "Pero alguien ha estado pensando en ti",
+            "Mucho más de lo que imaginas",
+        ],
+        "amistad": [
+            "No todo el mundo deja huella",
+            "Pero tú sí",
+            "Y eso no se olvida",
+        ],
+        "distancia": [
+            "Aunque no estemos cerca",
+            "Hay cosas que no cambian",
+            "Como lo que siento por ti",
+        ],
+        "familia": [
+            "Hay cosas que das por hecho",
+            "Hasta que te das cuenta de lo importantes que son",
+            "Y tú eres una de ellas",
+        ],
+        "regalo": [
+            "Esto no era solo un vídeo",
+            "Era una forma de decirte algo",
+            "Y también hay algo para ti…",
+        ],
+        "minimal": [
+            "Esto es para ti",
+            "Sin motivo",
+            "O quizás sí",
+        ],
+        "intenso": [
+            "Hay cosas que no se dicen",
+            "Pero se sienten cada día",
+            "Y tú eres una de ellas",
+        ],
+        "creemos_en_ti": [
+            "Sabemos que no ha sido fácil",
+            "Pero nunca dejaste de seguir adelante",
+            "Y eso lo cambia todo",
+        ],
+        "valoramos": [
+            "Sabemos todo lo que has dado",
+            "Incluso cuando nadie estaba mirando",
+            "Y lo valoramos más de lo que imaginas",
+        ],
+    }
+    return templates.get(message_type, templates["sorpresa"])
 
 
 def twilio_enabled() -> bool:
@@ -647,10 +715,7 @@ def try_send_recipient_sms(order: dict) -> Optional[str]:
     if order.get("recipient_sms_sent_at"):
         return order.get("recipient_sms_sid")
 
-    sms_sid = send_sms(
-        order.get("recipient_phone", ""),
-        build_recipient_message(order),
-    )
+    sms_sid = send_sms(order.get("recipient_phone", ""), build_recipient_message(order))
 
     if sms_sid:
         update_order(
@@ -666,10 +731,7 @@ def try_send_sender_sms(order: dict) -> Optional[str]:
     if order.get("sender_sms_sent_at"):
         return order.get("sender_sms_sid")
 
-    sms_sid = send_sms(
-        order.get("sender_phone", ""),
-        build_sender_ready_message(order),
-    )
+    sms_sid = send_sms(order.get("sender_phone", ""), build_sender_ready_message(order))
 
     if sms_sid:
         update_order(
@@ -771,22 +833,18 @@ def get_or_create_connected_account(order: dict) -> str:
     account = stripe.Account.create(
         type="express",
         country="ES",
-        capabilities={
-            "transfers": {"requested": True},
-        },
+        capabilities={"transfers": {"requested": True}},
         metadata={
             "order_id": order["id"],
             "recipient_name": order.get("recipient_name", ""),
         },
     )
-
     update_order(order["id"], stripe_connected_account_id=account.id)
     return account.id
 
 
 def create_connect_onboarding_link(order: dict) -> str:
     account_id = get_or_create_connected_account(order)
-
     link = stripe.AccountLink.create(
         account=account_id,
         refresh_url=f"{PUBLIC_BASE_URL}/connect/refresh/{order['recipient_token']}",
@@ -802,16 +860,11 @@ def refresh_connect_status(order: dict) -> bool:
         return False
 
     acct = stripe.Account.retrieve(account_id)
-
     ready = bool(acct.get("details_submitted")) and (
         acct.get("capabilities", {}).get("transfers") == "active"
     )
 
-    update_order(
-        order["id"],
-        connect_onboarding_completed=1 if ready else 0,
-    )
-
+    update_order(order["id"], connect_onboarding_completed=1 if ready else 0)
     return ready
 
 
@@ -828,6 +881,7 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             transfer_completed=1,
             cashout_completed=1,
             transfer_in_progress=0,
+            connect_onboarding_completed=1,
         )
         return {"status": "no_gift"}
 
@@ -836,8 +890,8 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             order["id"],
             transfer_completed=1,
             cashout_completed=1,
-            connect_onboarding_completed=1,
             transfer_in_progress=0,
+            connect_onboarding_completed=1,
         )
         return {"status": "stripe_disabled_test_mode"}
 
@@ -851,13 +905,12 @@ def process_gift_transfer_for_order(order: dict) -> dict:
         return {"status": "onboarding_not_ready"}
 
     if order.get("stripe_transfer_id"):
-        if not bool(order.get("transfer_completed")) or not bool(order.get("cashout_completed")):
-            update_order(
-                order["id"],
-                transfer_completed=1,
-                cashout_completed=1,
-                transfer_in_progress=0,
-            )
+        update_order(
+            order["id"],
+            transfer_completed=1,
+            cashout_completed=1,
+            transfer_in_progress=0,
+        )
         return {"status": "already_transferred", "transfer_id": order.get("stripe_transfer_id")}
 
     destination = (order.get("stripe_connected_account_id") or "").strip()
@@ -870,9 +923,7 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             return {"status": "already_transferred", "transfer_id": refreshed.get("stripe_transfer_id")}
         if bool(refreshed.get("gift_refunded")):
             return {"status": "gift_already_refunded"}
-        if bool(refreshed.get("transfer_in_progress")):
-            return {"status": "transfer_in_progress"}
-        return {"status": "lock_not_acquired"}
+        return {"status": "transfer_in_progress"}
 
     try:
         transfer = stripe.Transfer.create(
@@ -893,7 +944,6 @@ def process_gift_transfer_for_order(order: dict) -> dict:
             cashout_completed=1,
             transfer_in_progress=0,
         )
-
         return {"status": "ok", "transfer_id": transfer.id}
     except Exception as e:
         log_error("Transfer error", e)
@@ -936,20 +986,11 @@ def process_expired_gift_refunds() -> dict:
             skipped += 1
             continue
 
-        if order.get("stripe_transfer_id"):
-            skipped += 1
-            continue
-
         payment_intent_id = (order.get("stripe_payment_intent_id") or "").strip()
         gift_amount = float(order.get("gift_amount") or 0)
 
-        if gift_amount <= 0:
-            update_order(order["id"], gift_refunded=1)
-            skipped += 1
-            continue
-
         try:
-            if STRIPE_SECRET_KEY and payment_intent_id:
+            if STRIPE_SECRET_KEY and payment_intent_id and gift_amount > 0:
                 refund = stripe.Refund.create(
                     payment_intent=payment_intent_id,
                     amount=int(round(gift_amount * 100)),
@@ -973,7 +1014,6 @@ def process_expired_gift_refunds() -> dict:
                     transfer_in_progress=0,
                     cashout_completed=0,
                 )
-
             refunded += 1
         except Exception as e:
             log_error(f"Gift refund error {order['id']}", e)
@@ -1013,19 +1053,12 @@ def condiciones():
                 max-width: 900px;
                 margin: 0 auto;
             }
-            h1 {
-                margin-top: 0;
-            }
-            p, li {
-                color: rgba(255,255,255,0.84);
-            }
         </style>
     </head>
     <body>
         <div class="wrap">
             <h1>Condiciones</h1>
-            <p>Al continuar aceptas vivir una experiencia privada y permitir la grabación de tu reacción para devolver ese momento al remitente.</p>
-            <p>El uso de ETERNA implica un uso personal, emocional y no fraudulento del servicio.</p>
+            <p>Al continuar aceptas vivir una experiencia privada y que tu reacción pueda ser grabada y compartida con quien creó este momento.</p>
         </div>
     </body>
     </html>
@@ -1054,19 +1087,12 @@ def privacidad():
                 max-width: 900px;
                 margin: 0 auto;
             }
-            h1 {
-                margin-top: 0;
-            }
-            p, li {
-                color: rgba(255,255,255,0.84);
-            }
         </style>
     </head>
     <body>
         <div class="wrap">
-            <h1>Política de privacidad</h1>
+            <h1>Privacidad</h1>
             <p>ETERNA procesa los datos mínimos necesarios para crear, entregar y cerrar la experiencia.</p>
-            <p>Las grabaciones y datos se usan exclusivamente para completar el flujo privado entre remitente y destinatario.</p>
         </div>
     </body>
     </html>
@@ -1091,91 +1117,113 @@ def render_create_form() -> str:
             body {{
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
                 padding: 24px;
             }}
-            .card {{
+            .wrap {{
                 width: 100%;
                 max-width: 760px;
+                margin: 0 auto;
+            }}
+            .card {{
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
+                border-radius: 28px;
                 padding: 28px;
             }}
             h1 {{
-                margin: 0 0 10px 0;
-                font-size: 38px;
-                letter-spacing: 2px;
+                margin: 0 0 12px 0;
+                font-size: 36px;
                 text-align: center;
+                letter-spacing: 2px;
             }}
             .subtitle {{
                 text-align: center;
-                color: rgba(255,255,255,0.75);
-                margin-bottom: 26px;
-                line-height: 1.5;
+                color: rgba(255,255,255,0.7);
+                line-height: 1.7;
+                margin-bottom: 24px;
             }}
             .section-title {{
-                margin: 20px 0 10px 0;
-                font-size: 14px;
+                margin: 22px 0 10px 0;
+                font-size: 13px;
+                letter-spacing: 1.4px;
                 text-transform: uppercase;
-                letter-spacing: 1.5px;
-                color: rgba(255,255,255,0.65);
+                color: rgba(255,255,255,0.55);
             }}
             input {{
                 width: 100%;
-                padding: 14px 16px;
+                padding: 15px 16px;
                 margin: 8px 0;
-                border-radius: 14px;
+                border-radius: 16px;
                 border: 1px solid rgba(255,255,255,0.10);
-                background: rgba(255,255,255,0.06);
+                background: rgba(255,255,255,0.05);
                 color: white;
                 outline: none;
                 font-size: 15px;
             }}
             input::placeholder {{
-                color: rgba(255,255,255,0.45);
+                color: rgba(255,255,255,0.4);
             }}
-            .hint {{
-                margin-top: 8px;
-                font-size: 13px;
-                color: rgba(255,255,255,0.5);
-                line-height: 1.6;
-            }}
-            .buttons {{
+            .emotion-grid {{
                 display: grid;
-                gap: 12px;
-                margin-top: 22px;
+                grid-template-columns: repeat(2, 1fr);
+                gap: 14px;
+                margin-top: 12px;
             }}
-            button, .ghost {{
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                font-weight: bold;
-                font-size: 15px;
+            .emotion-card {{
+                padding: 18px 18px;
+                border-radius: 20px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
                 cursor: pointer;
-                text-decoration: none;
-                text-align: center;
-                display: inline-block;
+                transition: all 0.25s ease;
             }}
-            button {{
-                background: white;
-                color: black;
+            .emotion-card:hover {{
+                background: rgba(255,255,255,0.06);
             }}
-            button[disabled] {{
-                opacity: 0.7;
-                cursor: not-allowed;
+            .emotion-card.selected {{
+                border: 1px solid rgba(255,255,255,0.32);
+                background: rgba(255,255,255,0.08);
             }}
-            .ghost {{
-                background: rgba(255,255,255,0.10);
-                color: white;
-                border: 1px solid rgba(255,255,255,0.10);
+            .emotion-title {{
+                font-size: 16px;
+                font-weight: 600;
+                margin-bottom: 6px;
+            }}
+            .emotion-sub {{
+                font-size: 13px;
+                color: rgba(255,255,255,0.55);
+                line-height: 1.45;
+            }}
+            .mode-box {{
+                margin-top: 14px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 18px;
+                padding: 12px 14px;
+            }}
+            .radio-row {{
+                display: flex;
+                align-items: center;
+                gap: 10px;
+                margin: 10px 0;
+                color: rgba(255,255,255,0.88);
+                font-size: 14px;
+            }}
+            .radio-row input {{
+                width: auto;
+                margin: 0;
+            }}
+            .recommended {{
+                opacity: 0.5;
+                font-size: 12px;
+                margin-left: 4px;
+            }}
+            .phrases-manual.hidden {{
+                display: none;
             }}
             .price-box {{
                 margin-top: 12px;
@@ -1187,67 +1235,184 @@ def render_create_form() -> str:
                 line-height: 1.8;
                 color: rgba(255,255,255,0.82);
             }}
+            .hint {{
+                margin-top: 10px;
+                font-size: 13px;
+                line-height: 1.7;
+                color: rgba(255,255,255,0.45);
+            }}
+            .buttons {{
+                display: grid;
+                gap: 12px;
+                margin-top: 24px;
+            }}
+            .btn, button {{
+                width: 100%;
+                padding: 17px 22px;
+                border-radius: 999px;
+                border: 0;
+                font-weight: bold;
+                font-size: 15px;
+                text-decoration: none;
+                text-align: center;
+                cursor: pointer;
+            }}
+            button {{
+                background: white;
+                color: black;
+            }}
+            .ghost {{
+                display: inline-block;
+                background: rgba(255,255,255,0.10);
+                color: white;
+                border: 1px solid rgba(255,255,255,0.10);
+            }}
+            @media (max-width: 680px) {{
+                .emotion-grid {{
+                    grid-template-columns: 1fr;
+                }}
+                body {{
+                    padding: 16px;
+                }}
+                .card {{
+                    padding: 22px;
+                }}
+            }}
         </style>
     </head>
     <body>
-        <div class="card">
-            <h1>CREAR ETERNA</h1>
+        <div class="wrap">
+            <div class="card">
+                <h1>CREAR ETERNA</h1>
+                <div class="subtitle">
+                    Hay momentos que merecen quedarse para siempre
+                </div>
 
-            <div class="subtitle">
-                Hay momentos que merecen quedarse para siempre
+                <form action="/crear" method="post" id="createForm">
+                    <div class="section-title">Tus datos</div>
+                    <input name="customer_name" placeholder="Tu nombre" required>
+                    <input name="customer_email" type="email" placeholder="Tu email">
+                    <input name="customer_phone" placeholder="Tu teléfono / SMS" required>
+
+                    <div class="section-title">Persona que recibe</div>
+                    <input name="recipient_name" placeholder="Nombre de la persona" required>
+                    <input name="recipient_phone" placeholder="Teléfono / SMS de la persona" required>
+
+                    <div class="section-title">Elige la emoción</div>
+
+                    <div class="emotion-grid">
+                        <div class="emotion-card" data-type="amor">
+                            <div class="emotion-title">Amor</div>
+                            <div class="emotion-sub">Cuando lo que sientes ya no cabe dentro</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="agradecimiento">
+                            <div class="emotion-title">Agradecimiento</div>
+                            <div class="emotion-sub">Para quien ha estado siempre</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="cumpleanos">
+                            <div class="emotion-title">Cumpleaños</div>
+                            <div class="emotion-sub">Un momento que merece quedarse</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="sorpresa">
+                            <div class="emotion-title">Sorpresa</div>
+                            <div class="emotion-sub">Cuando quieres tocar el corazón sin avisar</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="creemos_en_ti">
+                            <div class="emotion-title">Creemos en ti</div>
+                            <div class="emotion-sub">Para recordar lo que vale</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="valoramos">
+                            <div class="emotion-title">Valoramos lo que haces</div>
+                            <div class="emotion-sub">Para reconocer lo que otros no siempre ven</div>
+                        </div>
+                    </div>
+
+                    <input type="hidden" name="message_type" id="messageType" required>
+
+                    <div class="mode-box">
+                        <div class="radio-row">
+                            <input type="radio" id="mode_auto" name="phrase_mode" value="auto" checked>
+                            <label for="mode_auto">
+                                Que ETERNA lo haga por mí
+                                <span class="recommended">(recomendado)</span>
+                            </label>
+                        </div>
+
+                        <div class="radio-row">
+                            <input type="radio" id="mode_manual" name="phrase_mode" value="manual">
+                            <label for="mode_manual">Quiero escribir mis frases</label>
+                        </div>
+                    </div>
+
+                    <div class="phrases-manual hidden" id="manualPhrases">
+                        <div class="section-title">Tus 3 frases</div>
+                        <input name="phrase_1" placeholder="Frase 1" maxlength="160">
+                        <input name="phrase_2" placeholder="Frase 2" maxlength="160">
+                        <input name="phrase_3" placeholder="Frase 3" maxlength="160">
+                    </div>
+
+                    <div class="section-title">Dinero a regalar</div>
+                    <input
+                        name="gift_amount"
+                        placeholder="Dinero a regalar (€)"
+                        type="number"
+                        step="0.01"
+                        min="0"
+                        value="0"
+                        required
+                    >
+
+                    <div class="price-box">
+                        Precio base ETERNA: {money(BASE_PRICE)}€<br>
+                        Comisión regalo: {money(FIXED_PLATFORM_FEE)}€ + {(GIFT_COMMISSION_RATE * 100):.0f}% del importe regalado
+                    </div>
+
+                    <div class="hint">
+                        ETERNA puede escribir el mensaje por ti, con la delicadeza que este momento merece.
+                    </div>
+
+                    <div class="buttons">
+                        <button type="submit" id="submitBtn">CONTINUAR</button>
+                        <a class="btn ghost" href="/">Volver</a>
+                    </div>
+                </form>
             </div>
-
-            <form action="/crear" method="post" id="createForm">
-                <div class="section-title">Tus datos</div>
-                <input name="customer_name" placeholder="Tu nombre" required>
-                <input name="customer_email" type="email" placeholder="Tu email">
-                <input name="customer_phone" placeholder="Tu teléfono / SMS" required>
-
-                <div class="section-title">Persona que recibe</div>
-                <input name="recipient_name" placeholder="Nombre de la persona" required>
-                <input name="recipient_phone" placeholder="Teléfono / SMS de la persona" required>
-
-                <div class="section-title">Las 3 frases</div>
-                <input name="phrase_1" placeholder="Frase 1" required maxlength="160">
-                <input name="phrase_2" placeholder="Frase 2" required maxlength="160">
-                <input name="phrase_3" placeholder="Frase 3" required maxlength="160">
-
-                <div class="section-title">Dinero a regalar</div>
-                <input
-                    name="gift_amount"
-                    placeholder="Dinero a regalar (€)"
-                    type="number"
-                    step="0.01"
-                    min="0"
-                    value="0"
-                    required
-                >
-
-                <div class="price-box">
-                    Precio base ETERNA: {money(BASE_PRICE)}€<br>
-                    Comisión regalo: {money(FIXED_PLATFORM_FEE)}€ + {(GIFT_COMMISSION_RATE * 100):.0f}% del importe regalado
-                </div>
-
-                <div class="hint">
-                    Ejemplo: si regalas 100€, pagarás 100€ + {money(FIXED_PLATFORM_FEE)}€ + 5%.
-                </div>
-
-                <div class="buttons">
-                    <button type="submit" id="submitBtn">CONTINUAR</button>
-                    <a class="ghost" href="/">Volver</a>
-                </div>
-            </form>
         </div>
 
         <script>
-            document.addEventListener("DOMContentLoaded", function () {{
-                const form = document.getElementById("createForm");
-                const button = document.getElementById("submitBtn");
+            const cards = document.querySelectorAll(".emotion-card");
+            const input = document.getElementById("messageType");
+            const autoRadio = document.getElementById("mode_auto");
+            const manualRadio = document.getElementById("mode_manual");
+            const manualPhrases = document.getElementById("manualPhrases");
+            const form = document.getElementById("createForm");
+            const button = document.getElementById("submitBtn");
 
-                form.addEventListener("submit", function () {{
-                    button.disabled = true;
-                    button.textContent = "Procesando...";
+            cards.forEach(card => {{
+                card.addEventListener("click", () => {{
+                    cards.forEach(c => c.classList.remove("selected"));
+                    card.classList.add("selected");
+                    input.value = card.dataset.type;
                 }});
+            }});
+
+            function updatePhraseMode() {{
+                if (manualRadio.checked) manualPhrases.classList.remove("hidden");
+                else manualPhrases.classList.add("hidden");
+            }}
+
+            autoRadio.addEventListener("change", updatePhraseMode);
+            manualRadio.addEventListener("change", updatePhraseMode);
+            updatePhraseMode();
+
+            form.addEventListener("submit", function () {{
+                button.disabled = true;
+                button.textContent = "Procesando...";
             }});
         </script>
     </body>
@@ -1261,6 +1426,8 @@ def create_order_and_redirect(
     customer_phone: str,
     recipient_name: str,
     recipient_phone: str,
+    message_type: str,
+    phrase_mode: str,
     phrase_1: str,
     phrase_2: str,
     phrase_3: str,
@@ -1269,6 +1436,8 @@ def create_order_and_redirect(
     customer_name = (customer_name or "").strip()
     customer_email = (customer_email or "").strip()
     recipient_name = (recipient_name or "").strip()
+    message_type = (message_type or "").strip()
+    phrase_mode = (phrase_mode or "auto").strip()
 
     phrase_1 = (phrase_1 or "").strip()
     phrase_2 = (phrase_2 or "").strip()
@@ -1280,8 +1449,14 @@ def create_order_and_redirect(
     if not recipient_name:
         raise HTTPException(status_code=400, detail="El nombre del destinatario es obligatorio")
 
-    if not phrase_1 or not phrase_2 or not phrase_3:
-        raise HTTPException(status_code=400, detail="Las 3 frases son obligatorias")
+    if not message_type:
+        raise HTTPException(status_code=400, detail="Debes elegir una emoción")
+
+    if phrase_mode == "auto":
+        phrase_1, phrase_2, phrase_3 = get_phrases_by_type(message_type)
+    else:
+        if not phrase_1 or not phrase_2 or not phrase_3:
+            raise HTTPException(status_code=400, detail="Las 3 frases son obligatorias")
 
     if len(phrase_1) > 160 or len(phrase_2) > 160 or len(phrase_3) > 160:
         raise HTTPException(status_code=400, detail="Las frases son demasiado largas")
@@ -1435,7 +1610,7 @@ def home():
             body {
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
@@ -1470,24 +1645,16 @@ def home():
                 font-size: 15px;
                 line-height: 1.7;
             }
-            .buttons {
-                display: grid;
-                gap: 14px;
-                margin-top: 30px;
-            }
             .btn {
+                margin-top: 30px;
                 width: 100%;
+                display: inline-block;
                 padding: 18px 24px;
                 border-radius: 999px;
-                border: 0;
-                font-weight: bold;
-                font-size: 16px;
-                cursor: pointer;
-                text-decoration: none;
-                text-align: center;
-                display: inline-block;
                 background: white;
                 color: black;
+                font-weight: bold;
+                text-decoration: none;
             }
         </style>
     </head>
@@ -1500,9 +1667,7 @@ def home():
             <div class="soft">
                 No es un vídeo. Es un momento.
             </div>
-            <div class="buttons">
-                <a class="btn" href="/crear">CREAR MI ETERNA</a>
-            </div>
+            <a class="btn" href="/crear">CREAR MI ETERNA</a>
         </div>
     </body>
     </html>
@@ -1521,9 +1686,11 @@ def crear_post(
     customer_phone: str = Form(...),
     recipient_name: str = Form(...),
     recipient_phone: str = Form(...),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
+    message_type: str = Form(...),
+    phrase_mode: str = Form("auto"),
+    phrase_1: str = Form(""),
+    phrase_2: str = Form(""),
+    phrase_3: str = Form(""),
     gift_amount: float = Form(0),
 ):
     return create_order_and_redirect(
@@ -1532,6 +1699,8 @@ def crear_post(
         customer_phone=customer_phone,
         recipient_name=recipient_name,
         recipient_phone=recipient_phone,
+        message_type=message_type,
+        phrase_mode=phrase_mode,
         phrase_1=phrase_1,
         phrase_2=phrase_2,
         phrase_3=phrase_3,
@@ -1546,9 +1715,11 @@ def crear_eterna_legacy(
     customer_phone: str = Form(...),
     recipient_name: str = Form(...),
     recipient_phone: str = Form(...),
-    phrase_1: str = Form(...),
-    phrase_2: str = Form(...),
-    phrase_3: str = Form(...),
+    message_type: str = Form(...),
+    phrase_mode: str = Form("auto"),
+    phrase_1: str = Form(""),
+    phrase_2: str = Form(""),
+    phrase_3: str = Form(""),
     gift_amount: float = Form(0),
 ):
     return create_order_and_redirect(
@@ -1557,6 +1728,8 @@ def crear_eterna_legacy(
         customer_phone=customer_phone,
         recipient_name=recipient_name,
         recipient_phone=recipient_phone,
+        message_type=message_type,
+        phrase_mode=phrase_mode,
         phrase_1=phrase_1,
         phrase_2=phrase_2,
         phrase_3=phrase_3,
@@ -1573,19 +1746,12 @@ def checkout_exito(order_id: str):
     order = get_order_by_id(order_id)
     is_paid = bool(order["paid"])
 
-    refresh = '<meta http-equiv="refresh" content="9">' if not is_paid else ""
+    refresh = '<meta http-equiv="refresh" content="6">' if not is_paid else ""
     redirect_script = f"""
         setTimeout(function() {{
             window.location.href = "/post-pago/{safe_attr(order_id)}";
-        }}, 8000);
+        }}, 5000);
     """ if is_paid else ""
-
-    fallback_link = f"""
-        <div class="soft">
-            Si esta página no avanza sola,
-            <a href="/post-pago/{safe_attr(order_id)}" style="color:white;">pulsa aquí</a>
-        </div>
-    """
 
     return f"""
     <!DOCTYPE html>
@@ -1604,7 +1770,7 @@ def checkout_exito(order_id: str):
             body {{
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
@@ -1616,30 +1782,15 @@ def checkout_exito(order_id: str):
             }}
             .card {{
                 max-width: 680px;
-                opacity: 0;
-                transform: translateY(10px);
-                animation: fadeIn 1.6s ease forwards;
             }}
             h1 {{
                 font-size: 42px;
                 margin-bottom: 18px;
-                letter-spacing: 2px;
             }}
             .text {{
                 font-size: 20px;
                 line-height: 1.8;
                 color: rgba(255,255,255,0.85);
-            }}
-            .soft {{
-                margin-top: 24px;
-                font-size: 14px;
-                color: rgba(255,255,255,0.4);
-            }}
-            @keyframes fadeIn {{
-                to {{
-                    opacity: 1;
-                    transform: translateY(0);
-                }}
             }}
         </style>
     </head>
@@ -1650,12 +1801,8 @@ def checkout_exito(order_id: str):
                 En unos instantes,<br>
                 alguien va a vivir algo que no espera
             </div>
-            {fallback_link}
         </div>
-
-        <script>
-            {redirect_script}
-        </script>
+        <script>{redirect_script}</script>
     </body>
     </html>
     """
@@ -1718,34 +1865,24 @@ async def stripe_webhook(request: Request):
 @app.get("/post-pago/{order_id}")
 def post_pago(order_id: str):
     order = get_order_by_id(order_id)
-
     if not order["paid"]:
         return RedirectResponse(url=f"/checkout-exito/{order_id}", status_code=303)
-
     return RedirectResponse(url=f"/resumen/{order_id}", status_code=303)
 
 
 @app.get("/resumen/{order_id}", response_class=HTMLResponse)
 def resumen(order_id: str):
     order = get_order_by_id(order_id)
-
-    sender_pack_url = sender_pack_url_from_order(order)
     reaction_ready = reaction_exists(order)
     sms_sent = bool(order.get("recipient_sms_sent_at"))
 
     if reaction_ready:
         status_line = "Lo que creaste… volvió a ti"
-        soft_line = "Tu enlace privado ya está listo."
+        soft_line = "Tu pack ya está listo."
         main_button = f"""
-            <a href="{safe_attr(sender_pack_url)}" target="_blank" rel="noopener noreferrer">
+            <a href="{safe_attr(sender_pack_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
                 <button class="primary">Abrir mi ETERNA</button>
             </a>
-        """
-        extra_block = f"""
-            <div class="private-link-box">
-                <div class="private-link-label">Enlace privado</div>
-                <div class="private-link-url">{safe_text(sender_pack_url)}</div>
-            </div>
         """
         estado_texto = "Volvió a ti"
     else:
@@ -1755,15 +1892,7 @@ def resumen(order_id: str):
             if sms_sent else
             "El SMS se enviará automáticamente tras el pago si Twilio está configurado."
         )
-        main_button = """
-            <button class="primary" disabled>Esperando a que lo viva</button>
-        """
-        extra_block = f"""
-            <div class="private-link-box">
-                <div class="private-link-label">Enlace de la experiencia</div>
-                <div class="private-link-url">{safe_text(recipient_experience_url_from_order(order))}</div>
-            </div>
-        """
+        main_button = '<button class="primary" disabled>Esperando a que lo viva</button>'
         estado_texto = "Pendiente de vivir"
 
     return f"""
@@ -1780,7 +1909,7 @@ def resumen(order_id: str):
             body {{
                 min-height: 100vh;
                 background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 30%),
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
@@ -1798,21 +1927,17 @@ def resumen(order_id: str):
                 padding: 32px 28px;
                 text-align: center;
             }}
-            .stats {{
-                display: grid;
-                gap: 12px;
-                margin-top: 24px;
-            }}
             .stat {{
                 background: rgba(255,255,255,0.05);
                 border: 1px solid rgba(255,255,255,0.06);
                 border-radius: 16px;
                 padding: 16px;
+                margin-top: 12px;
             }}
             .label {{
                 font-size: 12px;
-                text-transform: uppercase;
                 letter-spacing: 1.2px;
+                text-transform: uppercase;
                 color: rgba(255,255,255,0.5);
             }}
             .value {{
@@ -1821,9 +1946,7 @@ def resumen(order_id: str):
                 margin-top: 6px;
             }}
             .buttons {{
-                display: grid;
-                gap: 14px;
-                margin-top: 28px;
+                margin-top: 24px;
             }}
             button {{
                 width: 100%;
@@ -1832,7 +1955,6 @@ def resumen(order_id: str):
                 border: 0;
                 font-weight: bold;
                 font-size: 15px;
-                cursor: pointer;
             }}
             .primary {{
                 background: white;
@@ -1840,30 +1962,8 @@ def resumen(order_id: str):
             }}
             .primary[disabled] {{
                 opacity: 0.7;
-                cursor: not-allowed;
             }}
             a {{ text-decoration: none; }}
-            .private-link-box {{
-                margin-top: 18px;
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 16px;
-                padding: 16px;
-                text-align: left;
-                word-break: break-word;
-            }}
-            .private-link-label {{
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1.2px;
-                color: rgba(255,255,255,0.5);
-                margin-bottom: 8px;
-            }}
-            .private-link-url {{
-                color: rgba(255,255,255,0.88);
-                font-size: 14px;
-                line-height: 1.6;
-            }}
             .soft {{
                 margin-top: 14px;
                 color: rgba(255,255,255,0.45);
@@ -1875,30 +1975,24 @@ def resumen(order_id: str):
         <div class="card">
             <h1>{safe_text(status_line)}</h1>
 
-            <div class="stats">
-                <div class="stat">
-                    <div class="label">Regalo</div>
-                    <div class="value">{money(order["gift_amount"])}€</div>
-                </div>
-                <div class="stat">
-                    <div class="label">Comisión</div>
-                    <div class="value">{money(order["platform_total_fee"])}€</div>
-                </div>
-                <div class="stat">
-                    <div class="label">Total</div>
-                    <div class="value">{money(order["total_amount"])}€</div>
-                </div>
-                <div class="stat">
-                    <div class="label">Estado</div>
-                    <div class="value">{safe_text(estado_texto)}</div>
-                </div>
+            <div class="stat">
+                <div class="label">Regalo</div>
+                <div class="value">{money(order["gift_amount"])}€</div>
+            </div>
+
+            <div class="stat">
+                <div class="label">Comisión</div>
+                <div class="value">{money(order["platform_total_fee"])}€</div>
+            </div>
+
+            <div class="stat">
+                <div class="label">Estado</div>
+                <div class="value">{safe_text(estado_texto)}</div>
             </div>
 
             <div class="buttons">
                 {main_button}
             </div>
-
-            {extra_block}
 
             <div class="soft">{safe_text(soft_line)}</div>
         </div>
@@ -1908,102 +2002,7 @@ def resumen(order_id: str):
 
 
 # =========================================================
-# START EXPERIENCE LOCK
-# =========================================================
-
-@app.post("/start-experience")
-def start_experience(recipient_token: str = Form(...)):
-    order = get_order_by_recipient_token_or_404(recipient_token)
-    result = try_start_experience(order["id"])
-
-    if result == "not_paid":
-        raise HTTPException(status_code=403, detail="Pedido no pagado")
-
-    if result == "already_completed":
-        return JSONResponse({
-            "status": "already_completed",
-            "redirect_url": f"/preview-emocion/{recipient_token}",
-        })
-
-    if result in {"already_started", "blocked"}:
-        return JSONResponse({
-            "status": "already_started",
-            "redirect_url": f"/bloqueado/{recipient_token}",
-        })
-
-    return JSONResponse({"status": "ok"})
-
-
-# =========================================================
-# BLOQUEO SEGUNDA ENTRADA
-# =========================================================
-
-@app.get("/bloqueado/{recipient_token}", response_class=HTMLResponse)
-def bloqueado(recipient_token: str):
-    order = get_order_by_recipient_token_or_404(recipient_token)
-
-    if bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
-
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
-        <style>
-            html, body {
-                margin: 0;
-                min-height: 100%;
-                background: #000;
-            }
-            body {
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
-                color: white;
-                font-family: Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                padding: 24px;
-                text-align: center;
-            }
-            .card {
-                width: 100%;
-                max-width: 760px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 40px 28px;
-            }
-            h1 {
-                margin: 0 0 16px 0;
-                font-size: 38px;
-            }
-            .lead {
-                font-size: 18px;
-                color: rgba(255,255,255,0.82);
-                line-height: 1.8;
-            }
-        </style>
-    </head>
-    <body>
-        <div class="card">
-            <h1>Esta ETERNA ya empezó</h1>
-            <div class="lead">
-                Esta experiencia solo puede vivirse una vez.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
-
-
-# =========================================================
-# EXPERIENCIA DEL REGALADO
+# PRELUDIO / MAGIA
 # =========================================================
 
 @app.get("/pedido/{recipient_token}", response_class=HTMLResponse)
@@ -2019,6 +2018,179 @@ def pedido(recipient_token: str):
         </body>
         </html>
         """)
+
+    if bool(order.get("experience_completed")):
+        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                text-align: center;
+                padding: 24px;
+            }}
+            .card {{
+                width: 100%;
+                max-width: 720px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 40px 28px;
+            }}
+            h1 {{
+                font-size: 40px;
+                margin: 0 0 14px 0;
+            }}
+            .line {{
+                font-size: 18px;
+                line-height: 1.9;
+                color: rgba(255,255,255,0.82);
+                margin-top: 10px;
+            }}
+            .soft {{
+                font-size: 14px;
+                line-height: 1.8;
+                color: rgba(255,255,255,0.55);
+                margin-top: 24px;
+            }}
+            .btn {{
+                width: 100%;
+                margin-top: 28px;
+                padding: 17px 22px;
+                border-radius: 999px;
+                border: 0;
+                background: white;
+                color: black;
+                font-weight: bold;
+                font-size: 15px;
+                cursor: pointer;
+            }}
+            .shhh {{
+                font-size: 22px;
+                margin-bottom: 12px;
+                opacity: 0.86;
+            }}
+            .magic {{
+                margin-top: 18px;
+                font-size: 24px;
+                letter-spacing: 0.4px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <div class="shhh">Shhh…</div>
+            <h1>Hay algo para ti</h1>
+            <div class="line">Busca un lugar tranquilo.</div>
+            <div class="line">A solas. Sin distracciones.</div>
+            <div class="magic">Esto no es un vídeo. Es magia.</div>
+            <div class="line">Este momento se vive una sola vez.</div>
+
+            <div class="soft">
+                Al continuar, aceptas vivir esta experiencia y que tu reacción pueda ser grabada
+                y compartida con quien creó este momento.
+            </div>
+
+            <button class="btn" onclick="goHeartbeat()">Vivirlo</button>
+        </div>
+
+        <script>
+            function goHeartbeat() {{
+                window.location.href = "/latido/{safe_attr(recipient_token)}";
+            }}
+        </script>
+    </body>
+    </html>
+    """
+
+
+@app.get("/latido/{recipient_token}", response_class=HTMLResponse)
+def latido_page(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+    if not order["paid"]:
+        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
+
+    return f"""
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            html, body {{
+                margin: 0;
+                min-height: 100%;
+                background: #000;
+            }}
+            body {{
+                min-height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                background: #000;
+                color: white;
+                font-family: Arial, sans-serif;
+                text-align: center;
+            }}
+            .text {{
+                opacity: 0.4;
+                letter-spacing: 1px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div class="text">…</div>
+
+        <audio id="heart" preload="auto">
+            <source src="/static/heartbeat.mp3" type="audio/mpeg">
+        </audio>
+
+        <script>
+            const heart = document.getElementById("heart");
+            try {{
+                heart.volume = 1.0;
+                heart.play().catch(() => {{}});
+            }} catch (e) {{}}
+
+            setTimeout(() => {{
+                window.location.href = "/experiencia/{safe_attr(recipient_token)}";
+            }}, 3600);
+        </script>
+    </body>
+    </html>
+    """
+
+
+# =========================================================
+# EXPERIENCE
+# =========================================================
+
+@app.get("/experiencia/{recipient_token}", response_class=HTMLResponse)
+def experiencia(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if not order["paid"]:
+        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
@@ -2057,77 +2229,13 @@ def pedido(recipient_token: str):
                 flex-direction: column;
                 padding: 24px;
             }}
-            .hidden {{ display: none; }}
-            .gate-card {{
-                width: 100%;
-                max-width: 700px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 28px;
-                padding: 40px 30px;
-            }}
-            .gate-card h1 {{
-                font-size: 42px;
-                margin: 0 0 18px 0;
-            }}
-            .lead {{
-                max-width: 560px;
-                margin: 0 auto;
-                color: rgba(255,255,255,0.82);
-                font-size: 18px;
-                line-height: 1.9;
-            }}
-            .single {{
-                margin-top: 26px;
-                font-size: 24px;
-                font-weight: bold;
-                letter-spacing: 1px;
-                color: white;
-                opacity: 0;
-                animation: fadeIn 1.5s ease forwards, pulse 2.5s ease-in-out infinite;
-            }}
-            .consent-row {{
-                margin-top: 28px;
-                display: flex;
-                align-items: flex-start;
-                justify-content: center;
-                gap: 12px;
-                color: rgba(255,255,255,0.88);
-                font-size: 14px;
-                line-height: 1.7;
-                cursor: pointer;
-                user-select: none;
-                text-align: left;
-            }}
-            .consent-row input {{
-                width: 22px;
-                height: 22px;
-                margin-top: 2px;
-                accent-color: #ffffff;
-                cursor: pointer;
-                flex: 0 0 auto;
-            }}
-            #startBtn {{
-                width: 100%;
-                padding: 16px 24px;
-                border-radius: 999px;
-                border: 0;
-                background: white;
-                color: black;
-                font-weight: bold;
-                cursor: pointer;
-                margin-top: 22px;
-                font-size: 15px;
-                opacity: 0.45;
-            }}
-            #startBtn.enabled {{ opacity: 1; }}
             #content {{
                 width: 100%;
                 max-width: 920px;
                 padding: 24px;
                 opacity: 0;
                 transform: translateY(12px);
-                transition: opacity 0.9s ease, transform 0.9s ease;
+                transition: opacity 0.7s ease, transform 0.7s ease;
             }}
             #content.visible {{
                 opacity: 1;
@@ -2158,49 +2266,18 @@ def pedido(recipient_token: str):
                 color: rgba(255,255,255,0.6);
                 font-size: 14px;
             }}
-            @keyframes fadeIn {{
-                to {{
-                    opacity: 1;
-                    transform: translateY(0);
+            @media (max-width: 768px) {{
+                #content h2 {{
+                    font-size: 30px;
                 }}
-            }}
-            @keyframes pulse {{
-                0% {{ opacity: 0.8; transform: scale(1); }}
-                50% {{ opacity: 1; transform: scale(1.02); }}
-                100% {{ opacity: 0.8; transform: scale(1); }}
+                #content .amount {{
+                    font-size: 42px;
+                }}
             }}
         </style>
     </head>
     <body>
-
-        <div id="start" class="screen">
-            <div class="gate-card">
-                <h1>Hay algo para ti</h1>
-
-                <div class="lead">
-                    Cuando estés listo, pulsa y déjate llevar.
-                </div>
-
-                <div class="single">
-                    Esta experiencia solo se vive una vez
-                </div>
-
-                <label class="consent-row" for="consentCheck">
-                    <input type="checkbox" id="consentCheck" required>
-                    <span>
-                        Acepto vivir esta experiencia, la grabación de mi reacción y las
-                        <a href="/condiciones" target="_blank" style="color:white;">condiciones</a> y
-                        <a href="/privacidad" target="_blank" style="color:white;">política de privacidad</a>.
-                    </span>
-                </label>
-
-                <button id="startBtn" type="button" onclick="startExperience()" disabled>
-                    Vivirlo
-                </button>
-            </div>
-        </div>
-
-        <div id="experience" class="screen hidden">
+        <div class="screen">
             <div id="content"></div>
             <div id="statusMsg"></div>
         </div>
@@ -2212,21 +2289,6 @@ def pedido(recipient_token: str):
             let mediaMimeType = "video/webm";
             let uploadStarted = false;
             let experienceStarted = false;
-
-            document.addEventListener("DOMContentLoaded", () => {{
-                const consentCheck = document.getElementById("consentCheck");
-                const startBtn = document.getElementById("startBtn");
-
-                function updateButton() {{
-                    const enabled = consentCheck.checked && !experienceStarted;
-                    startBtn.disabled = !enabled;
-                    if (enabled) startBtn.classList.add("enabled");
-                    else startBtn.classList.remove("enabled");
-                }}
-
-                consentCheck.addEventListener("change", updateButton);
-                updateButton();
-            }});
 
             function wait(ms) {{
                 return new Promise(resolve => setTimeout(resolve, ms));
@@ -2247,6 +2309,23 @@ def pedido(recipient_token: str):
                 await wait(scene.duration || 2000);
             }}
 
+            async function showCountdown() {{
+                const content = document.getElementById("content");
+                const steps = ["3", "2", "1"];
+
+                for (const step of steps) {{
+                    content.classList.remove("visible");
+                    await wait(120);
+                    content.innerHTML = `<h2 style="font-size:72px; line-height:1;">${{step}}</h2>`;
+                    await wait(40);
+                    content.classList.add("visible");
+                    await wait(850);
+                }}
+
+                content.classList.remove("visible");
+                await wait(150);
+            }}
+
             async function lockExperienceStart() {{
                 const formData = new FormData();
                 formData.append("recipient_token", "{safe_attr(order['recipient_token'])}");
@@ -2257,6 +2336,7 @@ def pedido(recipient_token: str):
                 }});
 
                 const data = await response.json();
+
                 if (data.status === "already_completed" || data.status === "already_started") {{
                     window.location.href = data.redirect_url || "/preview-emocion/{safe_attr(order['recipient_token'])}";
                     return false;
@@ -2270,7 +2350,10 @@ def pedido(recipient_token: str):
                     if (!chunks.length) return null;
 
                     const ext = mediaMimeType.includes("mp4") ? "mp4" : "webm";
-                    const blob = new Blob(chunks, {{ type: ext === "mp4" ? "video/mp4" : "video/webm" }});
+                    const blob = new Blob(chunks, {{
+                        type: ext === "mp4" ? "video/mp4" : "video/webm"
+                    }});
+
                     if (!blob || blob.size === 0) return null;
 
                     const formData = new FormData();
@@ -2284,6 +2367,7 @@ def pedido(recipient_token: str):
 
                     if (!response.ok) return null;
                     return await response.json();
+
                 }} catch (err) {{
                     return null;
                 }}
@@ -2326,22 +2410,19 @@ def pedido(recipient_token: str):
             }}
 
             const scenes = [
-                {{ html: "<h2>…</h2>", duration: 1200 }},
+                {{ html: "<h2>…</h2>", duration: 1000 }},
                 {{ html: "<h2>{phrase_1}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_2}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_3}</h2>", duration: 2200 }},
                 {{
                     html: "<h2>Esto también era para ti</h2><p>Alguien ha querido cuidarte de esta manera</p><div class='amount'>{gift_amount}</div>",
-                    duration: 5000
+                    duration: 10000
                 }}
             ];
 
             async function startExperience() {{
                 if (experienceStarted) return;
                 experienceStarted = true;
-
-                const startBtn = document.getElementById("startBtn");
-                startBtn.disabled = true;
 
                 try {{
                     if (!window.MediaRecorder) {{
@@ -2381,9 +2462,7 @@ def pedido(recipient_token: str):
                             audioBitsPerSecond: 64000
                         }};
                     }} else {{
-                        currentStream.getTracks().forEach(track => track.stop());
-                        currentStream = null;
-                        throw new Error("Formato de grabación no soportado");
+                        throw new Error("Formato no soportado");
                     }}
 
                     const lockOk = await lockExperienceStart();
@@ -2401,10 +2480,11 @@ def pedido(recipient_token: str):
                         if (e.data && e.data.size > 0) chunks.push(e.data);
                     }};
 
-                    recorder.start(300);
+                    await wait(300);
 
-                    document.getElementById("start").classList.add("hidden");
-                    document.getElementById("experience").classList.remove("hidden");
+                    // empieza a grabar en la cuenta atrás
+                    recorder.start(300);
+                    await showCountdown();
 
                     for (const scene of scenes) {{
                         await showScene(scene);
@@ -2418,11 +2498,11 @@ def pedido(recipient_token: str):
                         currentStream = null;
                     }}
                     alert("Necesitamos acceso a cámara y micrófono para continuar.");
-                    experienceStarted = false;
-                    startBtn.disabled = false;
-                    window.location.reload();
+                    window.location.href = "/pedido/{safe_attr(order['recipient_token'])}";
                 }}
             }}
+
+            startExperience();
         </script>
     </body>
     </html>
@@ -2430,7 +2510,87 @@ def pedido(recipient_token: str):
 
 
 # =========================================================
-# SUBIR VIDEO
+# START EXPERIENCE LOCK
+# =========================================================
+
+@app.post("/start-experience")
+def start_experience(recipient_token: str = Form(...)):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+    result = try_start_experience(order["id"])
+
+    if result == "not_paid":
+        raise HTTPException(status_code=403, detail="Pedido no pagado")
+
+    if result == "already_completed":
+        return JSONResponse({
+            "status": "already_completed",
+            "redirect_url": f"/preview-emocion/{recipient_token}",
+        })
+
+    if result in {"already_started", "blocked"}:
+        return JSONResponse({
+            "status": "already_started",
+            "redirect_url": f"/bloqueado/{recipient_token}",
+        })
+
+    return JSONResponse({"status": "ok"})
+
+
+@app.get("/bloqueado/{recipient_token}", response_class=HTMLResponse)
+def bloqueado(recipient_token: str):
+    order = get_order_by_recipient_token_or_404(recipient_token)
+
+    if bool(order.get("experience_completed")):
+        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+
+    return """
+    <!DOCTYPE html>
+    <html lang="es">
+    <head>
+        <meta charset="UTF-8">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>ETERNA</title>
+        <style>
+            html, body { margin: 0; min-height: 100%; background: #000; }
+            body {
+                min-height: 100vh;
+                background:
+                    radial-gradient(circle at top, rgba(255,255,255,0.08), transparent 35%),
+                    linear-gradient(180deg, #050505 0%, #000000 100%);
+                color: white;
+                font-family: Arial, sans-serif;
+                display: flex;
+                justify-content: center;
+                align-items: center;
+                padding: 24px;
+                text-align: center;
+            }
+            .card {
+                width: 100%;
+                max-width: 760px;
+                background: rgba(255,255,255,0.04);
+                border: 1px solid rgba(255,255,255,0.08);
+                border-radius: 28px;
+                padding: 40px 28px;
+            }
+            h1 { margin: 0 0 16px 0; font-size: 38px; }
+            .lead { font-size: 18px; color: rgba(255,255,255,0.82); line-height: 1.8; }
+        </style>
+    </head>
+    <body>
+        <div class="card">
+            <h1>Esta ETERNA ya empezó</h1>
+            <div class="lead">
+                Esta experiencia solo puede vivirse una vez.
+            </div>
+        </div>
+    </body>
+    </html>
+    """
+
+
+# =========================================================
+# UPLOAD VIDEO
 # =========================================================
 
 @app.post("/upload-video")
@@ -2464,6 +2624,7 @@ async def upload_video(
     video_extension = detect_video_extension(video)
     filepath = reaction_video_path(order["id"], video_extension)
     final_content_type = "video/mp4" if video_extension == "mp4" else "video/webm"
+
     total_size = 0
 
     try:
@@ -2510,6 +2671,7 @@ async def upload_video(
 
         updated_order = get_order_by_id(order["id"])
 
+        # IMPORTANTE: el pack vuelve al regalante aquí, no al cobrar
         try:
             try_send_sender_sms(updated_order)
         except Exception as e:
@@ -2522,22 +2684,21 @@ async def upload_video(
             "sender_pack_url": sender_pack_url_from_order(updated_order),
             "public_video_url": updated_order.get("reaction_video_public_url"),
         })
+
     finally:
         await video.close()
 
 
 # =========================================================
-# VIDEO FILE PRIVADO
+# VIDEO FILES
 # =========================================================
 
 @app.get("/video/sender/{sender_token}")
 def get_video_for_sender(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
-
     filepath = order.get("reaction_video_local")
     if not filepath or not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Vídeo no encontrado")
-
     media_type = guess_media_type_from_path(filepath)
     return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
 
@@ -2545,17 +2706,15 @@ def get_video_for_sender(sender_token: str):
 @app.get("/video/reaction/{recipient_token}")
 def get_video_for_recipient_preview(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
-
     filepath = order.get("reaction_video_local")
     if not filepath or not os.path.exists(filepath):
         raise HTTPException(status_code=404, detail="Vídeo no encontrado")
-
     media_type = guess_media_type_from_path(filepath)
     return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
 
 
 # =========================================================
-# PREVIEW ANTES DE ENVIAR AL REGALANTE
+# PREVIEW EMOCION
 # =========================================================
 
 @app.get("/preview-emocion/{recipient_token}", response_class=HTMLResponse)
@@ -2580,14 +2739,6 @@ def preview_emocion(recipient_token: str):
 
     video_url = order.get("reaction_video_public_url") or f"/video/reaction/{order['recipient_token']}"
     video_type = guess_media_type_from_url(video_url)
-
-    phrases_json = json.dumps([
-        order["phrase_1"],
-        order["phrase_2"],
-        order["phrase_3"],
-    ])
-
-    sender_pack_url = sender_pack_url_from_order(order)
     sender_sms_sent = bool(order.get("sender_sms_sent_at"))
 
     return f"""
@@ -2598,16 +2749,8 @@ def preview_emocion(recipient_token: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Vista previa emoción</title>
         <style>
-            * {{
-                box-sizing: border-box;
-            }}
-
-            html, body {{
-                margin: 0;
-                min-height: 100%;
-                background: #000;
-            }}
-
+            * {{ box-sizing: border-box; }}
+            html, body {{ margin: 0; min-height: 100%; background: #000; }}
             body {{
                 min-height: 100vh;
                 background:
@@ -2616,91 +2759,40 @@ def preview_emocion(recipient_token: str):
                 color: white;
                 font-family: Arial, sans-serif;
             }}
-
-            .wrap {{
-                min-height: 100vh;
-                display: flex;
-                flex-direction: column;
+            .wrap {{ min-height: 100vh; display: flex; flex-direction: column; }}
+            .header {{
+                padding: 28px 20px 10px;
+                text-align: center;
             }}
-
+            .header-title {{
+                font-size: 24px;
+                line-height: 1.5;
+                color: rgba(255,255,255,0.92);
+            }}
             .top {{
                 flex: 1;
-                min-height: 46vh;
-                background: #000;
+                min-height: 50vh;
                 display: flex;
                 align-items: center;
                 justify-content: center;
-                overflow: hidden;
+                padding: 0 16px;
             }}
-
-            .bottom {{
-                flex: 1;
-                min-height: 34vh;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                text-align: center;
-                padding: 24px;
-                border-top: 1px solid rgba(255,255,255,0.08);
-            }}
-
-            .actions {{
-                padding: 24px;
-                border-top: 1px solid rgba(255,255,255,0.08);
-                background: rgba(255,255,255,0.03);
-            }}
-
-            .video-box {{
-                width: 100%;
-                height: 100%;
-            }}
-
             video {{
                 width: 100%;
-                height: 100%;
-                object-fit: cover;
-                display: block;
+                max-width: 460px;
+                border-radius: 18px;
                 background: #111;
+                display: block;
             }}
-
-            .text-box {{
-                width: 100%;
-                max-width: 900px;
+            .actions {{
+                padding: 24px 16px 30px;
             }}
-
-            .eyebrow {{
-                font-size: 12px;
-                text-transform: uppercase;
-                letter-spacing: 1.6px;
-                color: rgba(255,255,255,0.45);
-                margin-bottom: 18px;
-            }}
-
-            .phrase {{
-                font-size: 32px;
-                line-height: 1.45;
-                font-weight: 600;
-                opacity: 0;
-                transform: translateY(10px);
-                transition: opacity 0.35s ease, transform 0.35s ease;
-                min-height: 96px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-            }}
-
-            .phrase.visible {{
-                opacity: 1;
-                transform: translateY(0);
-            }}
-
             .buttons {{
                 display: grid;
                 gap: 12px;
                 max-width: 760px;
                 margin: 0 auto;
             }}
-
             .btn {{
                 width: 100%;
                 padding: 16px 24px;
@@ -2713,59 +2805,44 @@ def preview_emocion(recipient_token: str):
                 text-decoration: none;
                 text-align: center;
             }}
-
             .primary {{
                 background: white;
                 color: black;
             }}
-
             .ghost {{
                 background: rgba(255,255,255,0.10);
                 color: white;
                 border: 1px solid rgba(255,255,255,0.10);
             }}
-
             .soft {{
                 margin-top: 14px;
                 color: rgba(255,255,255,0.45);
                 font-size: 13px;
                 text-align: center;
             }}
-
-            @media (max-width: 768px) {{
-                .phrase {{
-                    font-size: 24px;
-                    min-height: 88px;
-                }}
-            }}
         </style>
     </head>
     <body>
         <div class="wrap">
-            <div class="top">
-                <div class="video-box">
-                    <video id="video" playsinline controls autoplay preload="metadata">
-                        <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
-                        Tu navegador no puede reproducir este vídeo.
-                    </video>
-                </div>
+            <div class="header">
+                <div class="header-title">Este momento ya es vuestro</div>
             </div>
 
-            <div class="bottom">
-                <div class="text-box">
-                    <div class="eyebrow">Vista previa antes de enviar al regalante</div>
-                    <div id="phrase" class="phrase"></div>
-                </div>
+            <div class="top">
+                <video playsinline controls autoplay preload="metadata">
+                    <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
+                    Tu navegador no puede reproducir este vídeo.
+                </video>
             </div>
 
             <div class="actions">
                 <div class="buttons">
-                    <a class="btn primary" href="{safe_attr(sender_pack_url)}" target="_blank" rel="noopener noreferrer">
-                        Abrir sender pack
+                    <a class="btn primary" href="/cobrar/{safe_attr(recipient_token)}">
+                        Seguir
                     </a>
 
-                    <a class="btn ghost" href="/cobrar/{safe_attr(recipient_token)}">
-                        Seguir al cobro
+                    <a class="btn ghost" href="{safe_attr(sender_pack_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
+                        Abrir sender pack
                     </a>
                 </div>
 
@@ -2774,78 +2851,6 @@ def preview_emocion(recipient_token: str):
                 </div>
             </div>
         </div>
-
-        <script>
-            const phrases = {phrases_json};
-            const phraseEl = document.getElementById("phrase");
-            const video = document.getElementById("video");
-
-            const phraseWindows = [
-                {{ start: 0, end: 3, text: phrases[0] || "" }},
-                {{ start: 3, end: 6, text: phrases[1] || "" }},
-                {{ start: 6, end: 999999, text: phrases[2] || "" }}
-            ];
-
-            let rafId = null;
-            let currentPhraseText = null;
-
-            function setPhrase(text) {{
-                if (currentPhraseText === text) return;
-                currentPhraseText = text;
-                phraseEl.classList.remove("visible");
-                window.setTimeout(() => {{
-                    phraseEl.textContent = text || "";
-                    if (text) {{
-                        phraseEl.classList.add("visible");
-                    }}
-                }}, 120);
-            }}
-
-            function getPhraseForTime(t) {{
-                for (const w of phraseWindows) {{
-                    if (t >= w.start && t < w.end) return w.text;
-                }}
-                return phrases[phrases.length - 1] || "";
-            }}
-
-            function syncPhraseToVideo() {{
-                setPhrase(getPhraseForTime(video.currentTime || 0));
-            }}
-
-            function stopLoop() {{
-                if (rafId) {{
-                    cancelAnimationFrame(rafId);
-                    rafId = null;
-                }}
-            }}
-
-            function startLoop() {{
-                stopLoop();
-                function tick() {{
-                    if (!video.paused && !video.ended) {{
-                        syncPhraseToVideo();
-                        rafId = requestAnimationFrame(tick);
-                    }}
-                }}
-                tick();
-            }}
-
-            video.addEventListener("loadedmetadata", syncPhraseToVideo);
-            video.addEventListener("play", () => {{
-                syncPhraseToVideo();
-                startLoop();
-            }});
-            video.addEventListener("pause", () => {{
-                stopLoop();
-                syncPhraseToVideo();
-            }});
-            video.addEventListener("seeking", syncPhraseToVideo);
-            video.addEventListener("timeupdate", syncPhraseToVideo);
-            video.addEventListener("ended", () => {{
-                stopLoop();
-                syncPhraseToVideo();
-            }});
-        </script>
     </body>
     </html>
     """
@@ -2863,24 +2868,10 @@ def cobrar(recipient_token: str):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if not bool(order.get("experience_completed")):
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos preparando tu cobro…</h1></div>
-        </body>
-        </html>
-        """)
+        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
 
     if not reaction_exists(order):
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos guardando este momento…</h1></div>
-        </body>
-        </html>
-        """)
+        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
 
     cashout_status = compute_cashout_status(order)
     gift_amount = float(order.get("gift_amount") or 0)
@@ -2906,11 +2897,7 @@ def cobrar(recipient_token: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
         <style>
-            html, body {{
-                margin: 0;
-                min-height: 100%;
-                background: #000;
-            }}
+            html, body {{ margin: 0; min-height: 100%; background: #000; }}
             body {{
                 min-height: 100vh;
                 background:
@@ -2932,10 +2919,7 @@ def cobrar(recipient_token: str):
                 border-radius: 28px;
                 padding: 40px 28px;
             }}
-            h1 {{
-                margin: 0 0 16px 0;
-                font-size: 40px;
-            }}
+            h1 {{ margin: 0 0 16px 0; font-size: 40px; }}
             .lead {{
                 font-size: 18px;
                 color: rgba(255,255,255,0.85);
@@ -2954,7 +2938,6 @@ def cobrar(recipient_token: str):
                 background: white;
                 color: black;
                 font-weight: bold;
-                cursor: pointer;
                 font-size: 15px;
                 width: 100%;
                 display: block;
@@ -2972,17 +2955,11 @@ def cobrar(recipient_token: str):
     <body>
         <div class="card">
             <h1>Esto ya es tuyo</h1>
-
             <div class="lead">
                 Para cobrarlo de verdad, Stripe te pedirá tus datos en una página segura.
             </div>
-
             <div class="amount">{amount_text}</div>
-
-            <a class="btn" href="{button_href}">
-                {button_text}
-            </a>
-
+            <a class="btn" href="{button_href}">{button_text}</a>
             <div class="soft">
                 ETERNA no guarda tu IBAN. Stripe se encarga del proceso seguro.
             </div>
@@ -2993,7 +2970,7 @@ def cobrar(recipient_token: str):
 
 
 # =========================================================
-# STRIPE CONNECT ONBOARDING
+# STRIPE CONNECT
 # =========================================================
 
 @app.get("/iniciar-cobro-real/{recipient_token}")
@@ -3001,9 +2978,6 @@ def iniciar_cobro_real(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not bool(order.get("paid")):
-        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
-
-    if not bool(order.get("experience_started")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if not bool(order.get("experience_completed")):
@@ -3053,10 +3027,8 @@ def iniciar_cobro_real(recipient_token: str):
 @app.get("/connect/refresh/{recipient_token}")
 def connect_refresh(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
-
     if bool(order.get("gift_refunded")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
-
     link_url = create_connect_onboarding_link(order)
     return RedirectResponse(url=link_url, status_code=303)
 
@@ -3068,20 +3040,32 @@ def connect_return(recipient_token: str):
     if bool(order.get("gift_refunded")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
 
-    ready = refresh_connect_status(order)
+    try:
+        ready = refresh_connect_status(order)
+    except Exception as e:
+        log_error("connect_return refresh_connect_status", e)
+        ready = False
 
-    if ready:
-        result = process_gift_transfer_for_order(order)
+    refreshed = get_order_by_recipient_token_or_404(recipient_token)
 
-        if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
-            return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+    if ready or bool(refreshed.get("connect_onboarding_completed")):
+        try:
+            result = process_gift_transfer_for_order(refreshed)
+            log_info("connect_return transfer result", result)
+
+            if result.get("status") in {
+                "ok",
+                "already_transferred",
+                "no_gift",
+                "stripe_disabled_test_mode",
+            }:
+                return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+        except Exception as e:
+            log_error("connect_return process_gift_transfer_for_order", e)
 
     return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
 
-
-# =========================================================
-# VERIFICANDO COBRO
-# =========================================================
 
 @app.get("/verificando-cobro/{recipient_token}", response_class=HTMLResponse)
 def verificando_cobro(recipient_token: str):
@@ -3093,44 +3077,51 @@ def verificando_cobro(recipient_token: str):
     gift_amount = float(order.get("gift_amount") or 0)
 
     if gift_amount <= 0:
-        if bool(order.get("cashout_completed")):
-            return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
-    else:
+        if not bool(order.get("cashout_completed")):
+            update_order(
+                order["id"],
+                cashout_completed=1,
+                transfer_completed=1,
+                connect_onboarding_completed=1,
+                transfer_in_progress=0,
+            )
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    try:
         if bool(order.get("stripe_connected_account_id")) and not bool(order.get("connect_onboarding_completed")):
-            try:
-                refresh_connect_status(order)
-            except Exception as e:
-                log_error("refresh_connect_status error", e)
+            refresh_connect_status(order)
+    except Exception as e:
+        log_error("verificando_cobro refresh_connect_status", e)
 
-        refreshed = get_order_by_recipient_token_or_404(recipient_token)
+    refreshed = get_order_by_recipient_token_or_404(recipient_token)
 
-        if bool(refreshed.get("connect_onboarding_completed")) and not bool(refreshed.get("transfer_completed")):
-            try:
-                result = process_gift_transfer_for_order(refreshed)
-                if result.get("status") in {"ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"}:
-                    return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
-            except Exception as e:
-                log_error("process_gift_transfer_for_order error", e)
+    if bool(refreshed.get("connect_onboarding_completed")) and not bool(refreshed.get("transfer_completed")):
+        try:
+            result = process_gift_transfer_for_order(refreshed)
+            log_info("verificando_cobro transfer result", result)
+        except Exception as e:
+            log_error("verificando_cobro process_gift_transfer_for_order", e)
 
-        latest = get_order_by_recipient_token_or_404(recipient_token)
-        if bool(latest.get("transfer_completed")):
-            return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+    latest = get_order_by_recipient_token_or_404(recipient_token)
 
-    return f"""
+    if bool(latest.get("transfer_completed")) or bool(latest.get("cashout_completed")):
+        return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
+
+    return """
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="7">
+        <meta http-equiv="refresh" content="5">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>Verificando cobro</title>
         <style>
-            html, body {{
+            html, body {
                 margin: 0;
                 min-height: 100%;
                 background: #000;
-            }}
-            body {{
+            }
+            body {
                 min-height: 100vh;
                 background:
                     radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
@@ -3142,30 +3133,30 @@ def verificando_cobro(recipient_token: str):
                 justify-content: center;
                 text-align: center;
                 padding: 24px;
-            }}
-            .card {{
+            }
+            .card {
                 width: 100%;
                 max-width: 760px;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
                 padding: 42px 30px;
-            }}
-            h1 {{
+            }
+            h1 {
                 margin: 0 0 18px 0;
                 font-size: 40px;
-            }}
-            .lead {{
+            }
+            .lead {
                 color: rgba(255,255,255,0.88);
                 line-height: 1.8;
                 font-size: 20px;
-            }}
-            .soft {{
+            }
+            .soft {
                 margin-top: 18px;
                 color: rgba(255,255,255,0.50);
                 font-size: 14px;
                 line-height: 1.7;
-            }}
+            }
         </style>
     </head>
     <body>
@@ -3184,16 +3175,9 @@ def verificando_cobro(recipient_token: str):
     """
 
 
-# =========================================================
-# GRACIAS COBRO
-# =========================================================
-
 @app.get("/gracias-cobro/{recipient_token}", response_class=HTMLResponse)
 def gracias_cobro(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
-
-    if not bool(order.get("experience_started")):
-        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if not bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
@@ -3205,37 +3189,18 @@ def gracias_cobro(recipient_token: str):
         lead = "El regalo ha quedado cancelado"
         soft = (
             f"Han pasado {GIFT_REFUND_DAYS} días sin completar el cobro. "
-            "El importe regalado se ha devuelto al comprador. "
-            "La experiencia sigue completada."
+            "El importe regalado se ha devuelto al comprador."
         )
     else:
         if gift_amount > 0 and not bool(order.get("transfer_completed")):
             return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
-
-        if gift_amount <= 0 and not bool(order.get("cashout_completed")):
-            return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
-
         title = "Ya está"
         lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
         soft = (
-            "Stripe ya ha recibido tus datos y el cobro ha quedado preparado. El dinero seguirá los tiempos habituales del banco y del proveedor de pago."
-            if gift_amount > 0
-            else "La experiencia ha quedado cerrada correctamente."
+            "Stripe ya ha recibido tus datos y el cobro ha quedado preparado."
+            if gift_amount > 0 else
+            "La experiencia ha quedado cerrada correctamente."
         )
-
-    gift_video_url = order.get("gift_video_url") or DEFAULT_GIFT_VIDEO_URL
-
-    video_block = ""
-    if gift_video_url:
-        video_type = guess_media_type_from_url(gift_video_url)
-        video_block = f"""
-            <div class="video-wrap">
-                <video controls playsinline preload="metadata">
-                    <source src="{safe_attr(gift_video_url)}" type="{safe_attr(video_type)}">
-                    Tu navegador no puede reproducir este vídeo.
-                </video>
-            </div>
-        """
 
     return f"""
     <!DOCTYPE html>
@@ -3288,14 +3253,17 @@ def gracias_cobro(recipient_token: str):
                 font-size: 14px;
                 line-height: 1.7;
             }}
-            .video-wrap {{
+            .btn {{
                 margin-top: 28px;
-            }}
-            video {{
+                display: inline-block;
                 width: 100%;
-                border-radius: 18px;
-                background: #111;
-                display: block;
+                max-width: 420px;
+                padding: 16px 24px;
+                border-radius: 999px;
+                background: white;
+                color: black;
+                text-decoration: none;
+                font-weight: bold;
             }}
         </style>
     </head>
@@ -3304,35 +3272,13 @@ def gracias_cobro(recipient_token: str):
             <h1>{safe_text(title)}</h1>
             <div class="lead">{safe_text(lead)}</div>
             <div class="soft">{safe_text(soft)}</div>
-            {video_block}
+            <a class="btn" href="/preview-emocion/{safe_attr(recipient_token)}">
+                Volver a ver mi vídeo
+            </a>
         </div>
     </body>
     </html>
     """
-
-
-# =========================================================
-# REACCION
-# =========================================================
-
-@app.get("/reaccion/{recipient_token}", response_class=HTMLResponse)
-def reaccion(recipient_token: str):
-    order = get_order_by_recipient_token_or_404(recipient_token)
-
-    if not bool(order.get("experience_started")):
-        return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
-
-    if not bool(order.get("experience_completed")):
-        return HTMLResponse("""
-        <!DOCTYPE html>
-        <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos guardando este momento…</h1></div>
-        </body>
-        </html>
-        """)
-
-    return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
 
 
 # =========================================================
@@ -3342,6 +3288,16 @@ def reaccion(recipient_token: str):
 @app.get("/sender/{sender_token}", response_class=HTMLResponse)
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
+
+    if not reaction_exists(order):
+        return HTMLResponse("""
+        <!DOCTYPE html>
+        <html lang="es">
+        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
+            <div><h1>Estamos preparando este momento…</h1></div>
+        </body>
+        </html>
+        """)
 
     video_url = (
         order.get("reaction_video_public_url")
@@ -3379,18 +3335,17 @@ def sender_pack(sender_token: str):
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
-                padding: 32px 24px;
+                padding: 28px 22px 32px;
             }}
-            h2 {{
-                margin: 0 0 18px 0;
-                font-size: 34px;
-                line-height: 1.4;
+            .intro {{
+                margin-bottom: 20px;
+                font-size: 24px;
+                line-height: 1.5;
+                color: rgba(255,255,255,0.92);
             }}
-            .soft {{
-                color: rgba(255,255,255,0.6);
-                font-size: 14px;
-                line-height: 1.7;
-                margin-bottom: 22px;
+            .video-wrap {{
+                position: relative;
+                margin-top: 10px;
             }}
             video {{
                 width: 100%;
@@ -3399,6 +3354,12 @@ def sender_pack(sender_token: str):
                 background: #111;
                 display: block;
                 margin: 0 auto;
+            }}
+            .outro {{
+                margin-top: 20px;
+                font-size: 16px;
+                line-height: 1.7;
+                color: rgba(255,255,255,0.70);
             }}
             .buttons {{
                 display: grid;
@@ -3430,15 +3391,16 @@ def sender_pack(sender_token: str):
     </head>
     <body>
         <div class="card">
-            <h2>Lo que creaste… volvió a ti 💙</h2>
-            <div class="soft">
-                Aquí tienes el momento de vuelta.
+            <div class="intro">Este momento ya es vuestro</div>
+
+            <div class="video-wrap">
+                <video controls autoplay playsinline preload="metadata">
+                    <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
+                    Tu navegador no puede reproducir este vídeo.
+                </video>
             </div>
 
-            <video controls autoplay playsinline>
-                <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
+            <div class="outro">Hay momentos que merecen quedarse para siempre</div>
 
             <div class="buttons">
                 <button class="btn primary" onclick="shareVideo()">Compartir</button>
@@ -3448,17 +3410,16 @@ def sender_pack(sender_token: str):
 
         <script>
             async function shareVideo() {{
-                const url = "{safe_attr(video_url)}";
+                const url = window.location.href;
 
                 if (navigator.share) {{
                     try {{
                         await navigator.share({{
                             title: "ETERNA",
-                            text: "Lo que creaste volvió a ti 💙",
+                            text: "Este momento ya es vuestro",
                             url: url
                         }});
-                    }} catch (e) {{
-                    }}
+                    }} catch (e) {{}}
                 }} else {{
                     window.open(url, "_blank");
                 }}
@@ -3470,7 +3431,7 @@ def sender_pack(sender_token: str):
 
 
 # =========================================================
-# ADMIN / DEBUG
+# ADMIN / HEALTH
 # =========================================================
 
 @app.get("/admin/process-refunds")
