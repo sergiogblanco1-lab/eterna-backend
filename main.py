@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
 
-app = FastAPI(title="ETERNA FINAL BLINDADO")
+app = FastAPI(title="ETERNA FINAL PRODUCTO")
 
 
 # =========================================================
@@ -240,7 +240,7 @@ def init_db():
     add_column_if_missing("orders", "stripe_payment_intent_id", "ALTER TABLE orders ADD COLUMN stripe_payment_intent_id TEXT")
     add_column_if_missing("orders", "stripe_connected_account_id", "ALTER TABLE orders ADD COLUMN stripe_connected_account_id TEXT")
     add_column_if_missing("orders", "stripe_transfer_id", "ALTER TABLE orders ADD COLUMN stripe_transfer_id TEXT")
-    add_column_if_missing("orders", "gift_refund_deadline_at", "ALTER TABLE orders ADD COLUMN gift_refund_deadline_at TEXT")
+    add_column_if_missing("orders", "gift_refund_deadline_at", "ALTER TABLE orders ADD COLUMN gift_refund_deadLINE_at TEXT".replace("DEADLINE", "deadline"))
     add_column_if_missing("orders", "gift_refunded", "ALTER TABLE orders ADD COLUMN gift_refunded INTEGER NOT NULL DEFAULT 0")
     add_column_if_missing("orders", "stripe_gift_refund_id", "ALTER TABLE orders ADD COLUMN stripe_gift_refund_id TEXT")
     add_column_if_missing("orders", "recipient_sms_sent_at", "ALTER TABLE orders ADD COLUMN recipient_sms_sent_at TEXT")
@@ -266,16 +266,6 @@ def now_dt() -> datetime:
 
 def now_iso() -> str:
     return now_dt().isoformat()
-
-
-def parse_iso(value: Optional[str]) -> Optional[datetime]:
-    raw = (value or "").strip()
-    if not raw:
-        return None
-    try:
-        return datetime.fromisoformat(raw)
-    except Exception:
-        return None
 
 
 def gift_refund_deadline_iso() -> str:
@@ -310,6 +300,23 @@ def normalize_phone(p: str) -> str:
         raw = raw[1:]
     digits = "".join(ch for ch in raw if ch.isdigit())
     return digits
+
+
+def to_e164(phone: str) -> str:
+    normalized = normalize_phone(phone)
+    if not normalized:
+        return ""
+
+    if normalized.startswith("34") and len(normalized) == 11:
+        return f"+{normalized}"
+
+    if len(normalized) == 9:
+        return f"+34{normalized}"
+
+    if len(normalized) >= 10:
+        return f"+{normalized}"
+
+    return ""
 
 
 def new_order_id() -> str:
@@ -558,13 +565,6 @@ def get_phrases_by_type(message_type: str):
 
 def twilio_enabled() -> bool:
     return bool(TWILIO_ACCOUNT_SID and TWILIO_AUTH_TOKEN and TWILIO_FROM_NUMBER)
-
-
-def to_e164(phone: str) -> str:
-    normalized = normalize_phone(phone)
-    if not normalized:
-        return ""
-    return f"+{normalized}"
 
 
 def send_sms(phone: str, message: str) -> dict:
@@ -1062,11 +1062,11 @@ def render_create_form() -> str:
                     <div class="section-title">Tus datos</div>
                     <input name="customer_name" placeholder="Tu nombre" required>
                     <input name="customer_email" type="email" placeholder="Tu email">
-                    <input name="customer_phone" placeholder="Tu teléfono / SMS" required>
+                    <input name="customer_phone" placeholder="Tu teléfono (ej. 674123456)" required>
 
                     <div class="section-title">Persona que recibe</div>
                     <input name="recipient_name" placeholder="Nombre de la persona" required>
-                    <input name="recipient_phone" placeholder="Teléfono / SMS de la persona" required>
+                    <input name="recipient_phone" placeholder="Teléfono de la persona (ej. 674123456)" required>
 
                     <div class="section-title">Elige la emoción</div>
 
@@ -1560,13 +1560,13 @@ def resumen(order_id: str):
     sms_sent = bool(order.get("recipient_sms_sent_at"))
 
     if sms_sent:
-        status_line = "Ya se ha enviado tu mensaje."
-        sub_line = f"Espera a que {recipient_name} reciba su regalo."
+        status_line = "Estamos creando tu momento."
+        sub_line = f"{recipient_name} ya tiene su mensaje."
         soft_line = "Pronto tendrás noticias."
     else:
-        status_line = "Tu ETERNA ya está preparada."
+        status_line = "Estamos creando tu momento."
         sub_line = f"Estamos intentando enviar el mensaje a {recipient_name}."
-        soft_line = "Si no llega todavía, vuelve a entrar en unos instantes."
+        soft_line = "Pronto tendrás noticias."
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -1646,12 +1646,20 @@ def pedido(recipient_token: str):
                 border-radius: 28px;
                 padding: 40px 28px;
             }}
-            h1 {{ font-size: 40px; margin: 0 0 14px 0; }}
-            .line {{ font-size: 18px; line-height: 1.9; color: rgba(255,255,255,0.82); margin-top: 10px; }}
-            .soft {{ font-size: 14px; line-height: 1.8; color: rgba(255,255,255,0.55); margin-top: 24px; }}
+            h1 {{
+                font-size: 40px;
+                margin: 0 0 18px 0;
+                line-height: 1.25;
+            }}
+            .line {{
+                font-size: 22px;
+                line-height: 1.8;
+                color: rgba(255,255,255,0.88);
+                margin-top: 8px;
+            }}
             .btn {{
                 width: 100%;
-                margin-top: 28px;
+                margin-top: 30px;
                 padding: 17px 22px;
                 border-radius: 999px;
                 border: 0;
@@ -1661,23 +1669,15 @@ def pedido(recipient_token: str):
                 font-size: 15px;
                 cursor: pointer;
             }}
-            .shhh {{ font-size: 22px; margin-bottom: 12px; opacity: 0.86; }}
-            .magic {{ margin-top: 18px; font-size: 24px; letter-spacing: 0.4px; }}
         </style>
     </head>
     <body>
         <div class="card">
-            <div class="shhh">Shhh…</div>
             <h1>Esto es solo para ti</h1>
-            <div class="line">Busca un momento a solas.</div>
-            <div class="line">Sin ruido.</div>
-            <div class="line">Sin prisa.</div>
-            <div class="magic">Lo que estás a punto de vivir no se repite.</div>
 
-            <div class="soft">
-                Al continuar, aceptas vivir esta experiencia y que tu reacción pueda ser grabada
-                y compartida con quien creó este momento.
-            </div>
+            <div class="line">Busca un momento a solas</div>
+            <div class="line">Sin ruido</div>
+            <div class="line">Sin prisa</div>
 
             <button class="btn" onclick="goExperience()">Vivirlo</button>
         </div>
@@ -1754,12 +1754,13 @@ def experiencia(recipient_token: str):
                 transform: translateY(0);
             }}
             #content h2 {{
-                font-size: 44px;
-                line-height: 1.35;
+                font-size: 42px;
+                line-height: 1.4;
                 margin: 0;
-                font-weight: 600;
+                font-weight: 500;
                 color: white;
                 white-space: pre-line;
+                opacity: 0.95;
             }}
             #content .amount {{
                 margin-top: 20px;
@@ -1809,23 +1810,6 @@ def experiencia(recipient_token: str):
                 await wait(40);
                 content.classList.add("visible");
                 await wait(scene.duration || 2000);
-            }}
-
-            async function showCountdown() {{
-                const content = document.getElementById("content");
-                const steps = ["3", "2", "1"];
-
-                for (const step of steps) {{
-                    content.classList.remove("visible");
-                    await wait(120);
-                    content.innerHTML = `<h2 style="font-size:72px; line-height:1;">${{step}}</h2>`;
-                    await wait(40);
-                    content.classList.add("visible");
-                    await wait(850);
-                }}
-
-                content.classList.remove("visible");
-                await wait(150);
             }}
 
             async function lockExperienceStart() {{
@@ -1914,6 +1898,10 @@ def experiencia(recipient_token: str):
             }}
 
             const scenes = [
+                {{ html: "<h2>Esto no es un vídeo.</h2>", duration: 2000 }},
+                {{ html: "<h2>No es solo un momento.</h2>", duration: 2000 }},
+                {{ html: "<h2>Esto es magia.</h2>", duration: 2400 }},
+
                 {{ html: "<h2>{phrase_1}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_2}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_3}</h2>", duration: 2200 }},
@@ -1986,8 +1974,6 @@ def experiencia(recipient_token: str):
                     await wait(300);
                     recorder.start(300);
 
-                    await showCountdown();
-
                     for (const scene of scenes) {{
                         await showScene(scene);
                     }}
@@ -2030,33 +2016,6 @@ def start_experience(recipient_token: str = Form(...)):
         })
 
     return JSONResponse({"status": "ok"})
-
-
-@app.get("/bloqueado/{recipient_token}", response_class=HTMLResponse)
-def bloqueado(recipient_token: str):
-    order = get_order_by_recipient_token_or_404(recipient_token)
-
-    if bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
-
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>ETERNA</title>
-    </head>
-    <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;justify-content:center;align-items:center;padding:24px;text-align:center;">
-        <div style="width:100%;max-width:760px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:28px;padding:40px 28px;">
-            <h1 style="margin:0 0 16px 0;font-size:38px;">Esta ETERNA ya empezó</h1>
-            <div style="font-size:18px;color:rgba(255,255,255,0.82);line-height:1.8;">
-                Si algo falló, vuelve a abrir el enlace desde tu teléfono.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
 
 
 # =========================================================
@@ -2492,7 +2451,7 @@ def mi_video(recipient_token: str):
 
 
 # =========================================================
-# SENDER PACK (DOUBLE VIDEO)
+# SENDER PACK
 # =========================================================
 
 @app.get("/sender/{sender_token}", response_class=HTMLResponse)
@@ -2510,7 +2469,7 @@ def sender_pack(sender_token: str):
         return HTMLResponse("""
         <!DOCTYPE html>
         <html lang="es">
-        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
+        <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial,sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
             <div style="width:100%;max-width:760px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:28px;padding:40px 28px;">
                 <h1 style="margin:0 0 14px 0;">Estamos preparando este momento…</h1>
                 <div style="color:rgba(255,255,255,0.7);line-height:1.7;">
@@ -2529,23 +2488,6 @@ def sender_pack(sender_token: str):
 
     experience_video_type = guess_media_type_from_url(experience_video_url) if experience_video_url else "video/mp4"
     reaction_video_type = guess_media_type_from_url(reaction_video_url)
-
-    left_block = f"""
-    <div class="video-box">
-        <div class="video-label">Tu vídeo</div>
-        <div class="video-frame">
-            <video id="videoOriginal" playsinline preload="metadata" controls>
-                <source src="{safe_attr(experience_video_url)}" type="{safe_attr(experience_video_type)}">
-                Tu navegador no puede reproducir este vídeo.
-            </video>
-        </div>
-    </div>
-    """ if experience_video_url else """
-    <div class="video-box">
-        <div class="video-label">Tu vídeo</div>
-        <div class="missing-box">Todavía no hay vídeo original conectado.</div>
-    </div>
-    """
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -2580,14 +2522,13 @@ def sender_pack(sender_token: str):
                 font-size: 28px;
                 line-height: 1.45;
                 color: rgba(255,255,255,0.95);
-                margin-bottom: 22px;
+                margin-bottom: 10px;
             }}
             .intro-soft {{
                 text-align: center;
                 font-size: 15px;
                 line-height: 1.7;
                 color: rgba(255,255,255,0.55);
-                margin-top: -4px;
                 margin-bottom: 18px;
             }}
             .pack-grid {{
@@ -2621,17 +2562,7 @@ def sender_pack(sender_token: str):
                 max-height: 72vh;
                 display: block;
                 background: #111;
-            }}
-            .missing-box {{
-                min-height: 280px;
-                display: flex;
-                align-items: center;
-                justify-content: center;
-                border-radius: 16px;
-                background: #111;
-                color: rgba(255,255,255,0.5);
-                padding: 20px;
-                line-height: 1.7;
+                pointer-events: none;
             }}
             .controls {{
                 display: grid;
@@ -2681,25 +2612,31 @@ def sender_pack(sender_token: str):
     </head>
     <body>
         <div class="card">
-            <div class="intro">Lo que creaste…<br>fue magia.</div>
-            <div class="intro-soft">Aquí tienes el momento original y su reacción, juntos.</div>
+            <div class="intro">Lo que creaste volvió a ti.</div>
+            <div class="intro-soft">Lo que vio y lo que sintió. Juntos.</div>
 
             <div class="pack-grid">
-                {left_block}
+                <div class="video-box">
+                    <div class="video-label">Lo que vio</div>
+                    <div class="video-frame">
+                        <video id="videoOriginal" playsinline preload="auto">
+                            <source src="{safe_attr(experience_video_url)}" type="{safe_attr(experience_video_type)}">
+                        </video>
+                    </div>
+                </div>
 
                 <div class="video-box">
-                    <div class="video-label">Su reacción</div>
+                    <div class="video-label">Lo que sintió</div>
                     <div class="video-frame">
-                        <video id="videoReaction" playsinline preload="metadata" controls>
+                        <video id="videoReaction" playsinline preload="auto">
                             <source src="{safe_attr(reaction_video_url)}" type="{safe_attr(reaction_video_type)}">
-                            Tu navegador no puede reproducir este vídeo.
                         </video>
                     </div>
                 </div>
             </div>
 
             <div class="controls">
-                <button class="btn primary" onclick="playBoth()">Reproducir los dos</button>
+                <button class="btn primary" onclick="playBoth()">Reproducir</button>
                 <button class="btn ghost" onclick="pauseBoth()">Pausar</button>
                 <button class="btn ghost" onclick="restartBoth()">Volver al principio</button>
                 <button class="btn ghost" onclick="sharePack()">Compartir</button>
@@ -2712,6 +2649,16 @@ def sender_pack(sender_token: str):
         <script>
             const original = document.getElementById("videoOriginal");
             const reaction = document.getElementById("videoReaction");
+            let syncing = false;
+
+            function safePlay(v) {{
+                if (!v) return Promise.resolve();
+                try {{
+                    return v.play();
+                }} catch (e) {{
+                    return Promise.resolve();
+                }}
+            }}
 
             function safePause(v) {{
                 if (!v) return;
@@ -2724,18 +2671,21 @@ def sender_pack(sender_token: str):
                 try {{ v.currentTime = 0; }} catch (e) {{}}
             }}
 
-            function playIndividually(v) {{
-                if (!v) return Promise.resolve();
+            function syncTime(source, target) {{
+                if (!source || !target || syncing) return;
+                syncing = true;
                 try {{
-                    return v.play();
-                }} catch (e) {{
-                    return Promise.resolve();
-                }}
+                    if (Math.abs((target.currentTime || 0) - (source.currentTime || 0)) > 0.25) {{
+                        target.currentTime = source.currentTime || 0;
+                    }}
+                }} catch (e) {{}}
+                syncing = false;
             }}
 
-            function restartBoth() {{
-                safeReset(original);
-                safeReset(reaction);
+            function playBoth() {{
+                syncTime(original, reaction);
+                syncTime(reaction, original);
+                Promise.allSettled([safePlay(original), safePlay(reaction)]);
             }}
 
             function pauseBoth() {{
@@ -2743,51 +2693,39 @@ def sender_pack(sender_token: str):
                 safePause(reaction);
             }}
 
-            async function playBoth() {{
-                restartBoth();
-                await new Promise(resolve => setTimeout(resolve, 100));
-
-                await Promise.allSettled([
-                    playIndividually(original),
-                    playIndividually(reaction)
-                ]);
+            function restartBoth() {{
+                safeReset(original);
+                safeReset(reaction);
             }}
 
-            function bindManualPause(source, other) {{
-                if (!source || !other) return;
+            original.addEventListener("play", () => {{
+                syncTime(original, reaction);
+                if (reaction.paused) safePlay(reaction);
+            }});
 
-                source.addEventListener("pause", () => {{
-                    if (Math.abs((source.currentTime || 0) - (source.duration || 0)) < 0.25) return;
-                    if (!other.paused) safePause(other);
-                }});
+            reaction.addEventListener("play", () => {{
+                syncTime(reaction, original);
+                if (original.paused) safePlay(original);
+            }});
+
+            original.addEventListener("pause", () => {{
+                if (!reaction.paused) safePause(reaction);
+            }});
+
+            reaction.addEventListener("pause", () => {{
+                if (!original.paused) safePause(original);
+            }});
+
+            original.addEventListener("seeking", () => syncTime(original, reaction));
+            reaction.addEventListener("seeking", () => syncTime(reaction, original));
+
+            function endedReset() {{
+                pauseBoth();
+                setTimeout(() => restartBoth(), 80);
             }}
 
-            function bindEndedReset(videoA, videoB) {{
-                if (!videoA || !videoB) return;
-
-                let resetting = false;
-
-                function handleEnd() {{
-                    if (resetting) return;
-                    resetting = true;
-
-                    safePause(videoA);
-                    safePause(videoB);
-
-                    setTimeout(() => {{
-                        safeReset(videoA);
-                        safeReset(videoB);
-                        resetting = false;
-                    }}, 80);
-                }}
-
-                videoA.addEventListener("ended", handleEnd);
-                videoB.addEventListener("ended", handleEnd);
-            }}
-
-            bindManualPause(original, reaction);
-            bindManualPause(reaction, original);
-            bindEndedReset(original, reaction);
+            original.addEventListener("ended", endedReset);
+            reaction.addEventListener("ended", endedReset);
 
             async function sharePack() {{
                 const url = window.location.href;
@@ -2796,7 +2734,7 @@ def sender_pack(sender_token: str):
                     try {{
                         await navigator.share({{
                             title: "ETERNA",
-                            text: "Lo que creaste fue magia",
+                            text: "Mira lo que provocaste…",
                             url: url
                         }});
                     }} catch (e) {{}}
