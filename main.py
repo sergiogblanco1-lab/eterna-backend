@@ -507,7 +507,6 @@ def build_recipient_message(order: dict) -> str:
 def build_sender_ready_message(order: dict) -> str:
     return (
         "Tu ETERNA ha vuelto.\n\n"
-        "Mira lo que provocaste…\n\n"
         f"{sender_pack_url_from_order(order)}"
     )
 
@@ -1906,7 +1905,7 @@ def experiencia(recipient_token: str):
                 {{ html: "<h2>{phrase_2}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_3}</h2>", duration: 2200 }},
                 {{
-                    html: "<h2>Esto también era para ti.</h2><div class='amount'>{gift_amount}</div>",
+                    html: "<h2>Esto es para ti.</h2><div class='amount'>{gift_amount}</div>",
                     duration: 5000
                 }}
             ];
@@ -2590,13 +2589,6 @@ def sender_pack(sender_token: str):
                 color: white;
                 border: 1px solid rgba(255,255,255,0.10);
             }}
-            .outro {{
-                margin-top: 18px;
-                text-align: center;
-                font-size: 17px;
-                line-height: 1.7;
-                color: rgba(255,255,255,0.72);
-            }}
             @media (max-width: 860px) {{
                 .pack-grid {{
                     grid-template-columns: 1fr;
@@ -2636,20 +2628,18 @@ def sender_pack(sender_token: str):
             </div>
 
             <div class="controls">
-                <button class="btn primary" onclick="playBoth()">Reproducir</button>
-                <button class="btn ghost" onclick="pauseBoth()">Pausar</button>
-                <button class="btn ghost" onclick="restartBoth()">Volver al principio</button>
+                <button class="btn primary" id="toggleBtn" onclick="toggleBoth()">Reproducir</button>
                 <button class="btn ghost" onclick="sharePack()">Compartir</button>
                 <a class="btn ghost" href="/crear">Crear otra ETERNA</a>
             </div>
-
-            <div class="outro">Mira lo que provocaste…</div>
         </div>
 
         <script>
             const original = document.getElementById("videoOriginal");
             const reaction = document.getElementById("videoReaction");
+            const toggleBtn = document.getElementById("toggleBtn");
             let syncing = false;
+            let endedHandled = false;
 
             function safePlay(v) {{
                 if (!v) return Promise.resolve();
@@ -2682,50 +2672,83 @@ def sender_pack(sender_token: str):
                 syncing = false;
             }}
 
-            function playBoth() {{
+            function isAnyPlaying() {{
+                return (
+                    (original && !original.paused && !original.ended) ||
+                    (reaction && !reaction.paused && !reaction.ended)
+                );
+            }}
+
+            function setButtonState() {{
+                toggleBtn.textContent = isAnyPlaying() ? "Pausar" : "Reproducir";
+            }}
+
+            async function playBoth() {{
+                endedHandled = false;
                 syncTime(original, reaction);
                 syncTime(reaction, original);
-                Promise.allSettled([safePlay(original), safePlay(reaction)]);
+                await Promise.allSettled([safePlay(original), safePlay(reaction)]);
+                setButtonState();
             }}
 
             function pauseBoth() {{
                 safePause(original);
                 safePause(reaction);
+                setButtonState();
             }}
 
-            function restartBoth() {{
+            function resetBothToStart() {{
                 safeReset(original);
                 safeReset(reaction);
+                toggleBtn.textContent = "Reproducir";
+            }}
+
+            function toggleBoth() {{
+                if (isAnyPlaying()) {{
+                    pauseBoth();
+                }} else {{
+                    playBoth();
+                }}
             }}
 
             original.addEventListener("play", () => {{
+                endedHandled = false;
                 syncTime(original, reaction);
                 if (reaction.paused) safePlay(reaction);
+                setButtonState();
             }});
 
             reaction.addEventListener("play", () => {{
+                endedHandled = false;
                 syncTime(reaction, original);
                 if (original.paused) safePlay(original);
+                setButtonState();
             }});
 
             original.addEventListener("pause", () => {{
-                if (!reaction.paused) safePause(reaction);
+                if (!endedHandled && reaction && !reaction.paused) safePause(reaction);
+                setButtonState();
             }});
 
             reaction.addEventListener("pause", () => {{
-                if (!original.paused) safePause(original);
+                if (!endedHandled && original && !original.paused) safePause(original);
+                setButtonState();
             }});
 
             original.addEventListener("seeking", () => syncTime(original, reaction));
             reaction.addEventListener("seeking", () => syncTime(reaction, original));
 
-            function endedReset() {{
+            function handleEnded() {{
+                if (endedHandled) return;
+                endedHandled = true;
                 pauseBoth();
-                setTimeout(() => restartBoth(), 80);
+                setTimeout(() => {{
+                    resetBothToStart();
+                }}, 80);
             }}
 
-            original.addEventListener("ended", endedReset);
-            reaction.addEventListener("ended", endedReset);
+            original.addEventListener("ended", handleEnded);
+            reaction.addEventListener("ended", handleEnded);
 
             async function sharePack() {{
                 const url = window.location.href;
@@ -2734,7 +2757,7 @@ def sender_pack(sender_token: str):
                     try {{
                         await navigator.share({{
                             title: "ETERNA",
-                            text: "Mira lo que provocaste…",
+                            text: "ETERNA",
                             url: url
                         }});
                     }} catch (e) {{}}
@@ -2742,6 +2765,8 @@ def sender_pack(sender_token: str):
                     window.open(url, "_blank");
                 }}
             }}
+
+            setButtonState();
         </script>
     </body>
     </html>
