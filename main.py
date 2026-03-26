@@ -40,12 +40,10 @@ GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 FIXED_PLATFORM_FEE = float(os.getenv("ETERNA_FIXED_FEE", "2"))
 GIFT_REFUND_DAYS = int(os.getenv("GIFT_REFUND_DAYS", "20"))
 
-# IMPORTANTE:
-# Este vídeo es el vídeo ORIGINAL que verá:
-# - el regalado en /mi-video
-# - el regalante en el bloque izquierdo del sender pack
-# Debe ser una URL pública real a un vídeo reproducible, preferiblemente MP4.
-DEFAULT_EXPERIENCE_VIDEO_URL = os.getenv("DEFAULT_EXPERIENCE_VIDEO_URL", "").strip()
+DEFAULT_EXPERIENCE_VIDEO_URL = os.getenv(
+    "DEFAULT_EXPERIENCE_VIDEO_URL",
+    f"{PUBLIC_BASE_URL}/static/eterna-base.mp4",
+).strip()
 
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY", "").strip()
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY", "").strip()
@@ -2000,7 +1998,6 @@ def experiencia(recipient_token: str):
                     await wait(300);
                     recorder.start(300);
 
-                    // La cuenta atrás se queda
                     await showCountdown();
 
                     for (const scene of scenes) {{
@@ -2424,7 +2421,7 @@ def mi_video(recipient_token: str):
     if not bool(order.get("cashout_completed")) and not bool(order.get("transfer_completed")) and float(order.get("gift_amount") or 0) > 0:
         return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
 
-    experience_video_url = (order.get("experience_video_url") or "").strip()
+    experience_video_url = (order.get("experience_video_url") or DEFAULT_EXPERIENCE_VIDEO_URL or "").strip()
 
     if not experience_video_url:
         return f"""
@@ -2555,33 +2552,41 @@ def sender_pack(sender_token: str):
         <!DOCTYPE html>
         <html lang="es">
         <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos preparando este momento…</h1></div>
+            <div style="width:100%;max-width:760px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:28px;padding:40px 28px;">
+                <h1 style="margin:0 0 14px 0;">Estamos preparando este momento…</h1>
+                <div style="color:rgba(255,255,255,0.7);line-height:1.7;">
+                    La reacción todavía no ha llegado.
+                </div>
+            </div>
         </body>
         </html>
         """)
 
-    experience_video_url = (order.get("experience_video_url") or "").strip()
-    reaction_video_url = order.get("reaction_video_public_url") or f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}"
+    experience_video_url = (order.get("experience_video_url") or DEFAULT_EXPERIENCE_VIDEO_URL or "").strip()
+    reaction_video_url = (order.get("reaction_video_public_url") or "").strip()
+
+    if not reaction_video_url:
+        reaction_video_url = f"{PUBLIC_BASE_URL}/video/sender/{order['sender_token']}"
 
     experience_video_type = guess_media_type_from_url(experience_video_url) if experience_video_url else "video/mp4"
     reaction_video_type = guess_media_type_from_url(reaction_video_url)
 
-    if experience_video_url:
-        experience_block = f"""
-        <div class="video-box">
-            <div class="video-label">Tu vídeo</div>
-            <video id="videoOriginal" playsinline controls preload="metadata">
+    left_block = f"""
+    <div class="video-box">
+        <div class="video-label">Tu vídeo</div>
+        <div class="video-frame">
+            <video id="videoOriginal" playsinline preload="metadata" controls>
                 <source src="{safe_attr(experience_video_url)}" type="{safe_attr(experience_video_type)}">
+                Tu navegador no puede reproducir este vídeo.
             </video>
         </div>
-        """
-    else:
-        experience_block = """
-        <div class="video-box">
-            <div class="video-label">Tu vídeo</div>
-            <div class="missing-box">Falta conectar aquí el vídeo original final</div>
-        </div>
-        """
+    </div>
+    """ if experience_video_url else """
+    <div class="video-box">
+        <div class="video-label">Tu vídeo</div>
+        <div class="missing-box">Todavía no hay vídeo original conectado.</div>
+    </div>
+    """
 
     return HTMLResponse(f"""
     <!DOCTYPE html>
@@ -2600,64 +2605,82 @@ def sender_pack(sender_token: str):
                     linear-gradient(180deg, #050505 0%, #000000 100%);
                 color: white;
                 font-family: Arial, sans-serif;
-                text-align: center;
-                padding: 24px;
+                padding: 20px;
             }}
             .card {{
                 width: 100%;
-                max-width: 980px;
+                max-width: 1080px;
                 margin: 0 auto;
                 background: rgba(255,255,255,0.04);
                 border: 1px solid rgba(255,255,255,0.08);
                 border-radius: 28px;
-                padding: 28px 22px 32px;
+                padding: 26px 18px 30px;
             }}
             .intro {{
-                margin-bottom: 20px;
-                font-size: 24px;
-                line-height: 1.5;
-                color: rgba(255,255,255,0.92);
+                text-align: center;
+                font-size: 28px;
+                line-height: 1.45;
+                color: rgba(255,255,255,0.95);
+                margin-bottom: 22px;
+            }}
+            .intro-soft {{
+                text-align: center;
+                font-size: 15px;
+                line-height: 1.7;
+                color: rgba(255,255,255,0.55);
+                margin-top: -4px;
+                margin-bottom: 18px;
             }}
             .pack-grid {{
                 display: grid;
                 grid-template-columns: 1fr 1fr;
                 gap: 16px;
-                margin-top: 12px;
+                align-items: start;
             }}
             .video-box {{
                 background: rgba(255,255,255,0.03);
                 border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 18px;
-                padding: 12px;
+                border-radius: 22px;
+                padding: 14px;
             }}
             .video-label {{
-                font-size: 13px;
+                font-size: 12px;
                 letter-spacing: 1.2px;
                 text-transform: uppercase;
                 color: rgba(255,255,255,0.55);
                 margin-bottom: 10px;
+                text-align: left;
+            }}
+            .video-frame {{
+                width: 100%;
+                background: #101010;
+                border-radius: 16px;
+                overflow: hidden;
             }}
             video {{
                 width: 100%;
-                border-radius: 14px;
-                background: #111;
+                max-height: 72vh;
                 display: block;
+                background: #111;
             }}
             .missing-box {{
                 min-height: 280px;
-                display:flex;
-                align-items:center;
-                justify-content:center;
-                border-radius:14px;
-                background:#111;
-                color:rgba(255,255,255,0.5);
-                padding:20px;
-                line-height:1.6;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                border-radius: 16px;
+                background: #111;
+                color: rgba(255,255,255,0.5);
+                padding: 20px;
+                line-height: 1.7;
             }}
             .controls {{
                 display: grid;
                 gap: 12px;
                 margin-top: 20px;
+                max-width: 820px;
+                margin-left: auto;
+                margin-right: auto;
             }}
             .btn {{
                 width: 100%;
@@ -2678,33 +2701,46 @@ def sender_pack(sender_token: str):
                 border: 1px solid rgba(255,255,255,0.10);
             }}
             .outro {{
-                margin-top: 16px;
-                font-size: 16px;
+                margin-top: 18px;
+                text-align: center;
+                font-size: 17px;
                 line-height: 1.7;
-                color: rgba(255,255,255,0.70);
+                color: rgba(255,255,255,0.72);
             }}
-            @media (max-width: 820px) {{
-                .pack-grid {{ grid-template-columns: 1fr; }}
+            @media (max-width: 860px) {{
+                .pack-grid {{
+                    grid-template-columns: 1fr;
+                }}
+                .intro {{
+                    font-size: 24px;
+                }}
+                video {{
+                    max-height: none;
+                }}
             }}
         </style>
     </head>
     <body>
         <div class="card">
             <div class="intro">Lo que creaste…<br>fue magia.</div>
+            <div class="intro-soft">Aquí tienes el momento original y su reacción, juntos.</div>
 
             <div class="pack-grid">
-                {experience_block}
+                {left_block}
 
                 <div class="video-box">
                     <div class="video-label">Su reacción</div>
-                    <video id="videoReaction" playsinline controls preload="metadata">
-                        <source src="{safe_attr(reaction_video_url)}" type="{safe_attr(reaction_video_type)}">
-                    </video>
+                    <div class="video-frame">
+                        <video id="videoReaction" playsinline preload="metadata" controls>
+                            <source src="{safe_attr(reaction_video_url)}" type="{safe_attr(reaction_video_type)}">
+                            Tu navegador no puede reproducir este vídeo.
+                        </video>
+                    </div>
                 </div>
             </div>
 
             <div class="controls">
-                <button class="btn primary" onclick="playBoth()">Play</button>
+                <button class="btn primary" onclick="playBoth()">Reproducir los dos</button>
                 <button class="btn ghost" onclick="pauseBoth()">Pausar</button>
                 <button class="btn ghost" onclick="restartBoth()">Volver al principio</button>
                 <button class="btn ghost" onclick="sharePack()">Compartir</button>
@@ -2718,61 +2754,82 @@ def sender_pack(sender_token: str):
             const original = document.getElementById("videoOriginal");
             const reaction = document.getElementById("videoReaction");
 
-            function playSafe(video) {{
-                if (!video) return;
-                video.play().catch(() => {{}});
+            function safePause(v) {{
+                if (!v) return;
+                try {{ v.pause(); }} catch (e) {{}}
             }}
 
-            function pauseSafe(video) {{
-                if (!video) return;
-                try {{ video.pause(); }} catch (e) {{}}
+            function safeReset(v) {{
+                if (!v) return;
+                safePause(v);
+                try {{ v.currentTime = 0; }} catch (e) {{}}
             }}
 
-            function resetSafe(video) {{
-                if (!video) return;
-                pauseSafe(video);
-                try {{ video.currentTime = 0; }} catch (e) {{}}
-            }}
-
-            function syncPauseFrom(source, other) {{
-                if (!source || !other) return;
-                source.addEventListener("pause", () => {{
-                    if (!other.paused) pauseSafe(other);
-                }});
-            }}
-
-            function syncEndedFrom(source, other) {{
-                if (!source || !other) return;
-                source.addEventListener("ended", () => {{
-                    pauseSafe(other);
-                    try {{ other.currentTime = source.currentTime; }} catch (e) {{}}
-                }});
-            }}
-
-            function playBoth() {{
-                if (original) resetSafe(original);
-                if (reaction) resetSafe(reaction);
-
-                setTimeout(() => {{
-                    playSafe(original);
-                    playSafe(reaction);
-                }}, 80);
-            }}
-
-            function pauseBoth() {{
-                pauseSafe(original);
-                pauseSafe(reaction);
+            function playIndividually(v) {{
+                if (!v) return Promise.resolve();
+                try {{
+                    return v.play();
+                }} catch (e) {{
+                    return Promise.resolve();
+                }}
             }}
 
             function restartBoth() {{
-                resetSafe(original);
-                resetSafe(reaction);
+                safeReset(original);
+                safeReset(reaction);
             }}
 
-            syncPauseFrom(original, reaction);
-            syncPauseFrom(reaction, original);
-            syncEndedFrom(original, reaction);
-            syncEndedFrom(reaction, original);
+            function pauseBoth() {{
+                safePause(original);
+                safePause(reaction);
+            }}
+
+            async function playBoth() {{
+                restartBoth();
+
+                await new Promise(resolve => setTimeout(resolve, 100));
+
+                await Promise.allSettled([
+                    playIndividually(original),
+                    playIndividually(reaction)
+                ]);
+            }}
+
+            function bindManualPause(source, other) {{
+                if (!source || !other) return;
+
+                source.addEventListener("pause", () => {{
+                    if (Math.abs((source.currentTime || 0) - (source.duration || 0)) < 0.25) return;
+                    if (!other.paused) safePause(other);
+                }});
+            }}
+
+            function bindEndedReset(videoA, videoB) {{
+                if (!videoA || !videoB) return;
+
+                let resetting = false;
+
+                function handleEnd() {{
+                    if (resetting) return;
+                    resetting = true;
+
+                    safePause(videoA);
+                    safePause(videoB);
+
+                    setTimeout(() => {{
+                        safeReset(videoA);
+                        safeReset(videoB);
+                        resetting = false;
+                    }}, 80);
+                }}
+
+                videoA.addEventListener("ended", handleEnd);
+                videoB.addEventListener("ended", handleEnd);
+            }}
+
+            bindManualPause(original, reaction);
+            bindManualPause(reaction, original);
+            bindEndedReset(original, reaction);
 
             async function sharePack() {{
                 const url = window.location.href;
@@ -2804,6 +2861,31 @@ def admin_process_refunds(token: str = ""):
     if not ADMIN_TOKEN or token != ADMIN_TOKEN:
         raise HTTPException(status_code=403, detail="No autorizado")
     return JSONResponse({"ok": True})
+
+
+@app.get("/admin/fix-experience-videos")
+def admin_fix_experience_videos(token: str = ""):
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="No autorizado")
+
+    conn = db_conn()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE orders
+        SET experience_video_url = ?, updated_at = ?
+        WHERE experience_video_url IS NULL OR TRIM(experience_video_url) = ''
+    """, (DEFAULT_EXPERIENCE_VIDEO_URL, now_iso()))
+
+    conn.commit()
+    updated = cur.rowcount
+    conn.close()
+
+    return JSONResponse({
+        "ok": True,
+        "updated_orders": updated,
+        "experience_video_url": DEFAULT_EXPERIENCE_VIDEO_URL,
+    })
 
 
 @app.get("/health")
