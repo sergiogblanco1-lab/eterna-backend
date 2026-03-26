@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
 
-app = FastAPI(title="ETERNA MAGIC FINAL")
+app = FastAPI(title="ETERNA RENDER FINAL")
 
 
 # =========================================================
@@ -40,7 +40,7 @@ GIFT_COMMISSION_RATE = float(os.getenv("GIFT_COMMISSION_RATE", "0.05"))
 FIXED_PLATFORM_FEE = float(os.getenv("ETERNA_FIXED_FEE", "2"))
 GIFT_REFUND_DAYS = int(os.getenv("GIFT_REFUND_DAYS", "20"))
 
-DEFAULT_GIFT_VIDEO_URL = os.getenv("DEFAULT_GIFT_VIDEO_URL", "").strip()
+DEFAULT_EXPERIENCE_VIDEO_URL = os.getenv("DEFAULT_EXPERIENCE_VIDEO_URL", "").strip()
 
 R2_ACCESS_KEY = os.getenv("R2_ACCESS_KEY", "").strip()
 R2_SECRET_KEY = os.getenv("R2_SECRET_KEY", "").strip()
@@ -150,6 +150,9 @@ def init_db():
         sender_id INTEGER NOT NULL,
         recipient_id INTEGER NOT NULL,
 
+        message_type TEXT,
+        phrase_mode TEXT NOT NULL DEFAULT 'auto',
+
         phrase_1 TEXT NOT NULL,
         phrase_2 TEXT NOT NULL,
         phrase_3 TEXT NOT NULL,
@@ -184,7 +187,7 @@ def init_db():
 
         reaction_video_local TEXT,
         reaction_video_public_url TEXT,
-        gift_video_url TEXT,
+        experience_video_url TEXT,
 
         gift_refund_deadline_at TEXT,
 
@@ -218,6 +221,16 @@ def init_db():
 
     add_column_if_missing(
         "orders",
+        "message_type",
+        "ALTER TABLE orders ADD COLUMN message_type TEXT",
+    )
+    add_column_if_missing(
+        "orders",
+        "phrase_mode",
+        "ALTER TABLE orders ADD COLUMN phrase_mode TEXT NOT NULL DEFAULT 'auto'",
+    )
+    add_column_if_missing(
+        "orders",
         "sender_notified",
         "ALTER TABLE orders ADD COLUMN sender_notified INTEGER NOT NULL DEFAULT 0",
     )
@@ -238,13 +251,13 @@ def init_db():
     )
     add_column_if_missing(
         "orders",
-        "gift_video_url",
-        "ALTER TABLE orders ADD COLUMN gift_video_url TEXT",
+        "reaction_video_local",
+        "ALTER TABLE orders ADD COLUMN reaction_video_local TEXT",
     )
     add_column_if_missing(
         "orders",
-        "reaction_video_local",
-        "ALTER TABLE orders ADD COLUMN reaction_video_local TEXT",
+        "experience_video_url",
+        "ALTER TABLE orders ADD COLUMN experience_video_url TEXT",
     )
     add_column_if_missing(
         "orders",
@@ -577,15 +590,15 @@ def recipient_experience_url_from_order(order: dict) -> str:
 def build_recipient_message(order: dict) -> str:
     return (
         "ETERNA\n\n"
-        "Tienes algo que ver...\n\n"
+        "Tienes algo que ver…\n\n"
         f"{recipient_experience_url_from_order(order)}"
     )
 
 
 def build_sender_ready_message(order: dict) -> str:
     return (
-        "Lo que creaste volvió a ti.\n\n"
-        "Mira lo que provocaste...\n\n"
+        "Tu ETERNA ha vuelto.\n\n"
+        "Mira lo que provocaste…\n\n"
         f"{sender_pack_url_from_order(order)}"
     )
 
@@ -607,65 +620,50 @@ def calculate_fees(gift_amount: float) -> dict:
 
 def get_phrases_by_type(message_type: str):
     templates = {
+        "cumpleanos": [
+            "Hoy no es un día cualquiera.",
+            "Es tu historia celebrándose.",
+            "Y lo mejor… aún está por venir.",
+        ],
         "amor": [
-            "No sé en qué momento pasó…",
-            "Pero ahora no imagino mi vida sin ti",
-            "Y eso lo cambia todo",
+            "Si volviera a empezar,",
+            "te elegiría otra vez.",
+            "Siempre tú.",
+        ],
+        "familia": [
+            "Todo empieza contigo.",
+            "Todo vuelve a ti.",
+            "Gracias por tanto.",
+        ],
+        "superacion": [
+            "Nunca dejaste de intentarlo.",
+            "Y eso lo cambia todo.",
+            "Creemos en ti.",
+        ],
+        "esfuerzo": [
+            "Todo lo que has dado",
+            "no ha pasado desapercibido.",
+            "Y lo valoramos más de lo que imaginas.",
         ],
         "agradecimiento": [
-            "Nunca te lo digo suficiente",
-            "Pero has estado en todo lo importante",
-            "Gracias por no fallar nunca",
-        ],
-        "cumpleanos": [
-            "Hoy todo el mundo te felicita",
-            "Pero hay algo que quiero que sepas",
-            "Tu vida importa más de lo que imaginas",
+            "Nunca te lo digo suficiente.",
+            "Pero has estado en todo lo importante.",
+            "Gracias por no fallar nunca.",
         ],
         "sorpresa": [
             "Pensabas que hoy era un día normal…",
-            "Pero alguien ha estado pensando en ti",
-            "Mucho más de lo que imaginas",
-        ],
-        "amistad": [
-            "No todo el mundo deja huella",
-            "Pero tú sí",
-            "Y eso no se olvida",
-        ],
-        "distancia": [
-            "Aunque no estemos cerca",
-            "Hay cosas que no cambian",
-            "Como lo que siento por ti",
-        ],
-        "familia": [
-            "Hay cosas que das por hecho",
-            "Hasta que te das cuenta de lo importantes que son",
-            "Y tú eres una de ellas",
-        ],
-        "regalo": [
-            "Esto no era solo un vídeo",
-            "Era una forma de decirte algo",
-            "Y también hay algo para ti…",
-        ],
-        "minimal": [
-            "Esto es para ti",
-            "Sin motivo",
-            "O quizás sí",
-        ],
-        "intenso": [
-            "Hay cosas que no se dicen",
-            "Pero se sienten cada día",
-            "Y tú eres una de ellas",
+            "Pero alguien ha estado pensando en ti.",
+            "Mucho más de lo que imaginas.",
         ],
         "creemos_en_ti": [
-            "Sabemos que no ha sido fácil",
-            "Pero nunca dejaste de seguir adelante",
-            "Y eso lo cambia todo",
+            "Nunca dejaste de intentarlo.",
+            "Y eso lo cambia todo.",
+            "Creemos en ti.",
         ],
         "valoramos": [
-            "Sabemos todo lo que has dado",
-            "Incluso cuando nadie estaba mirando",
-            "Y lo valoramos más de lo que imaginas",
+            "Todo lo que has dado",
+            "no ha pasado desapercibido.",
+            "Y lo valoramos más de lo que imaginas.",
         ],
     }
     return templates.get(message_type, templates["sorpresa"])
@@ -1301,34 +1299,34 @@ def render_create_form() -> str:
                     <div class="section-title">Elige la emoción</div>
 
                     <div class="emotion-grid">
+                        <div class="emotion-card" data-type="cumpleanos">
+                            <div class="emotion-title">Cumpleaños</div>
+                            <div class="emotion-sub">Un día que merece quedarse</div>
+                        </div>
+
                         <div class="emotion-card" data-type="amor">
                             <div class="emotion-title">Amor</div>
                             <div class="emotion-sub">Cuando lo que sientes ya no cabe dentro</div>
                         </div>
 
-                        <div class="emotion-card" data-type="agradecimiento">
-                            <div class="emotion-title">Agradecimiento</div>
-                            <div class="emotion-sub">Para quien ha estado siempre</div>
+                        <div class="emotion-card" data-type="familia">
+                            <div class="emotion-title">Familia</div>
+                            <div class="emotion-sub">Para quien siempre ha estado</div>
                         </div>
 
-                        <div class="emotion-card" data-type="cumpleanos">
-                            <div class="emotion-title">Cumpleaños</div>
-                            <div class="emotion-sub">Un momento que merece quedarse</div>
+                        <div class="emotion-card" data-type="superacion">
+                            <div class="emotion-title">Superación</div>
+                            <div class="emotion-sub">Para recordar todo lo que vale</div>
+                        </div>
+
+                        <div class="emotion-card" data-type="esfuerzo">
+                            <div class="emotion-title">Esfuerzo</div>
+                            <div class="emotion-sub">Para reconocer lo que otros no siempre ven</div>
                         </div>
 
                         <div class="emotion-card" data-type="sorpresa">
                             <div class="emotion-title">Sorpresa</div>
                             <div class="emotion-sub">Cuando quieres tocar el corazón sin avisar</div>
-                        </div>
-
-                        <div class="emotion-card" data-type="creemos_en_ti">
-                            <div class="emotion-title">Creemos en ti</div>
-                            <div class="emotion-sub">Para recordar lo que vale</div>
-                        </div>
-
-                        <div class="emotion-card" data-type="valoramos">
-                            <div class="emotion-title">Valoramos lo que haces</div>
-                            <div class="emotion-sub">Para reconocer lo que otros no siempre ven</div>
                         </div>
                     </div>
 
@@ -1373,7 +1371,7 @@ def render_create_form() -> str:
                     </div>
 
                     <div class="hint">
-                        ETERNA puede escribir el mensaje por ti, con la delicadeza que este momento merece.
+                        No es un vídeo. Es un momento. Es magia.
                     </div>
 
                     <div class="buttons">
@@ -1506,11 +1504,12 @@ def create_order_and_redirect(
     ))
     recipient_id = cur.lastrowid
 
-    placeholders = ", ".join(["?"] * 40)
+    placeholders = ", ".join(["?"] * 42)
 
     cur.execute(f"""
         INSERT INTO orders (
             id, sender_id, recipient_id,
+            message_type, phrase_mode,
             phrase_1, phrase_2, phrase_3,
             gift_amount, platform_fixed_fee, platform_variable_fee, platform_total_fee, total_amount,
             paid, delivered_to_recipient, reaction_uploaded, cashout_completed, transfer_completed,
@@ -1518,7 +1517,7 @@ def create_order_and_redirect(
             gift_refunded,
             stripe_session_id, stripe_payment_status, stripe_payment_intent_id, stripe_connected_account_id, stripe_transfer_id, stripe_gift_refund_id,
             recipient_token, sender_token,
-            reaction_video_local, reaction_video_public_url, gift_video_url,
+            reaction_video_local, reaction_video_public_url, experience_video_url,
             gift_refund_deadline_at,
             recipient_sms_sent_at, sender_sms_sent_at,
             recipient_sms_sid, sender_sms_sid,
@@ -1527,6 +1526,7 @@ def create_order_and_redirect(
         VALUES ({placeholders})
     """, (
         order_id, sender_id, recipient_id,
+        message_type, phrase_mode,
         phrase_1, phrase_2, phrase_3,
         fees["gift_amount"],
         fees["fixed_fee"],
@@ -1538,7 +1538,7 @@ def create_order_and_redirect(
         0,
         None, None, None, None, None, None,
         recipient_token, sender_token,
-        None, None, DEFAULT_GIFT_VIDEO_URL or None,
+        None, None, DEFAULT_EXPERIENCE_VIDEO_URL or None,
         None,
         None, None,
         None, None,
@@ -1665,7 +1665,7 @@ def home():
                 Hay momentos que merecen quedarse para siempre
             </div>
             <div class="soft">
-                No es un vídeo. Es un momento.
+                No es un vídeo.<br>Es un momento.<br>Es magia.
             </div>
             <a class="btn" href="/crear">CREAR MI ETERNA</a>
         </div>
@@ -1877,11 +1877,11 @@ def resumen(order_id: str):
     sms_sent = bool(order.get("recipient_sms_sent_at"))
 
     if reaction_ready:
-        status_line = "Lo que creaste… volvió a ti"
-        soft_line = "Tu pack ya está listo."
+        status_line = "Tu ETERNA ha vuelto"
+        soft_line = "El sender pack ya está listo."
         main_button = f"""
             <a href="{safe_attr(sender_pack_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
-                <button class="primary">Abrir mi ETERNA</button>
+                <button class="primary">Abrir sender pack</button>
             </a>
         """
         estado_texto = "Volvió a ti"
@@ -2002,7 +2002,7 @@ def resumen(order_id: str):
 
 
 # =========================================================
-# PRELUDIO / MAGIA
+# PRELUDIO / LATIDOS / EXPERIENCIA
 # =========================================================
 
 @app.get("/pedido/{recipient_token}", response_class=HTMLResponse)
@@ -2020,7 +2020,7 @@ def pedido(recipient_token: str):
         """)
 
     if bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     return f"""
     <!DOCTYPE html>
@@ -2099,11 +2099,14 @@ def pedido(recipient_token: str):
     <body>
         <div class="card">
             <div class="shhh">Shhh…</div>
-            <h1>Hay algo para ti</h1>
-            <div class="line">Busca un lugar tranquilo.</div>
-            <div class="line">A solas. Sin distracciones.</div>
-            <div class="magic">Esto no es un vídeo. Es magia.</div>
-            <div class="line">Este momento se vive una sola vez.</div>
+            <h1>Esto es solo para ti</h1>
+            <div class="line">Busca un momento a solas.</div>
+            <div class="line">Sin ruido.</div>
+            <div class="line">Sin prisa.</div>
+            <div class="magic">Lo que estás a punto de vivir no se repite.</div>
+            <div class="line">No es un vídeo.</div>
+            <div class="line">Es algo más.</div>
+            <div class="line">Es magia.</div>
 
             <div class="soft">
                 Al continuar, aceptas vivir esta experiencia y que tu reacción pueda ser grabada
@@ -2153,13 +2156,14 @@ def latido_page(recipient_token: str):
                 text-align: center;
             }}
             .text {{
-                opacity: 0.4;
-                letter-spacing: 1px;
+                opacity: 0.6;
+                font-size: 28px;
+                line-height: 2;
             }}
         </style>
     </head>
     <body>
-        <div class="text">…</div>
+        <div class="text">Pum…<br>Pum…<br>Pum…</div>
 
         <audio id="heart" preload="auto">
             <source src="/static/heartbeat.mp3" type="audio/mpeg">
@@ -2174,16 +2178,12 @@ def latido_page(recipient_token: str):
 
             setTimeout(() => {{
                 window.location.href = "/experiencia/{safe_attr(recipient_token)}";
-            }}, 3600);
+            }}, 3200);
         </script>
     </body>
     </html>
     """
 
-
-# =========================================================
-# EXPERIENCE
-# =========================================================
 
 @app.get("/experiencia/{recipient_token}", response_class=HTMLResponse)
 def experiencia(recipient_token: str):
@@ -2193,7 +2193,7 @@ def experiencia(recipient_token: str):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     phrase_1 = safe_text(order["phrase_1"])
     phrase_2 = safe_text(order["phrase_2"])
@@ -2337,8 +2337,13 @@ def experiencia(recipient_token: str):
 
                 const data = await response.json();
 
-                if (data.status === "already_completed" || data.status === "already_started") {{
-                    window.location.href = data.redirect_url || "/preview-emocion/{safe_attr(order['recipient_token'])}";
+                if (data.status === "already_completed") {{
+                    window.location.href = data.redirect_url || "/mi-video/{safe_attr(order['recipient_token'])}";
+                    return false;
+                }}
+
+                if (data.status === "already_started") {{
+                    window.location.href = data.redirect_url || "/bloqueado/{safe_attr(order['recipient_token'])}";
                     return false;
                 }}
 
@@ -2399,24 +2404,34 @@ def experiencia(recipient_token: str):
 
             async function finishFlow() {{
                 setStatus("Guardando este momento…");
-                const uploadResult = await stopRecordingAndUpload();
-
-                if (uploadResult && uploadResult.preview_url) {{
-                    window.location.href = uploadResult.preview_url;
-                    return;
-                }}
-
-                window.location.href = "/cobrar/{safe_attr(order['recipient_token'])}";
+                await stopRecordingAndUpload();
+                window.location.href = "/mi-video/{safe_attr(order['recipient_token'])}";
             }}
 
             const scenes = [
-                {{ html: "<h2>…</h2>", duration: 1000 }},
+                {{ html: "<h2>Déjate llevar.</h2><p>La magia empieza ahora.</p>", duration: 1700 }},
                 {{ html: "<h2>{phrase_1}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_2}</h2>", duration: 2200 }},
                 {{ html: "<h2>{phrase_3}</h2>", duration: 2200 }},
                 {{
-                    html: "<h2>Esto también era para ti</h2><p>Alguien ha querido cuidarte de esta manera</p><div class='amount'>{gift_amount}</div>",
-                    duration: 10000
+                    html: "<h2>Esto también era para ti.</h2><p>Alguien ha querido cuidarte de esta manera.</p><div class='amount'>{gift_amount}</div>",
+                    duration: 8000
+                }},
+                {{
+                    html: "<h2>No es un vídeo.</h2>",
+                    duration: 1200
+                }},
+                {{
+                    html: "<h2>No es un momento.</h2>",
+                    duration: 1200
+                }},
+                {{
+                    html: "<h2>Es magia.</h2>",
+                    duration: 1800
+                }},
+                {{
+                    html: "<h2>A veces la magia no se explica.</h2><p>Se siente.</p>",
+                    duration: 2200
                 }}
             ];
 
@@ -2481,8 +2496,6 @@ def experiencia(recipient_token: str):
                     }};
 
                     await wait(300);
-
-                    // empieza a grabar en la cuenta atrás
                     recorder.start(300);
                     await showCountdown();
 
@@ -2524,7 +2537,7 @@ def start_experience(recipient_token: str = Form(...)):
     if result == "already_completed":
         return JSONResponse({
             "status": "already_completed",
-            "redirect_url": f"/preview-emocion/{recipient_token}",
+            "redirect_url": f"/mi-video/{recipient_token}",
         })
 
     if result in {"already_started", "blocked"}:
@@ -2541,7 +2554,7 @@ def bloqueado(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     return """
     <!DOCTYPE html>
@@ -2606,8 +2619,7 @@ async def upload_video(
     if bool(order.get("reaction_uploaded")) or reaction_exists(order):
         return JSONResponse({
             "status": "already_uploaded",
-            "preview_url": f"{PUBLIC_BASE_URL}/preview-emocion/{order['recipient_token']}",
-            "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{order['recipient_token']}",
+            "recipient_video_url": f"{PUBLIC_BASE_URL}/mi-video/{order['recipient_token']}",
             "sender_pack_url": sender_pack_url_from_order(order),
             "public_video_url": order.get("reaction_video_public_url"),
         })
@@ -2671,7 +2683,6 @@ async def upload_video(
 
         updated_order = get_order_by_id(order["id"])
 
-        # IMPORTANTE: el pack vuelve al regalante aquí, no al cobrar
         try:
             try_send_sender_sms(updated_order)
         except Exception as e:
@@ -2679,8 +2690,7 @@ async def upload_video(
 
         return JSONResponse({
             "status": "ok",
-            "preview_url": f"{PUBLIC_BASE_URL}/preview-emocion/{updated_order['recipient_token']}",
-            "cashout_url": f"{PUBLIC_BASE_URL}/cobrar/{updated_order['recipient_token']}",
+            "recipient_video_url": f"{PUBLIC_BASE_URL}/mi-video/{updated_order['recipient_token']}",
             "sender_pack_url": sender_pack_url_from_order(updated_order),
             "public_video_url": updated_order.get("reaction_video_public_url"),
         })
@@ -2703,22 +2713,12 @@ def get_video_for_sender(sender_token: str):
     return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
 
 
-@app.get("/video/reaction/{recipient_token}")
-def get_video_for_recipient_preview(recipient_token: str):
-    order = get_order_by_recipient_token_or_404(recipient_token)
-    filepath = order.get("reaction_video_local")
-    if not filepath or not os.path.exists(filepath):
-        raise HTTPException(status_code=404, detail="Vídeo no encontrado")
-    media_type = guess_media_type_from_path(filepath)
-    return FileResponse(filepath, media_type=media_type, filename=os.path.basename(filepath))
-
-
 # =========================================================
-# PREVIEW EMOCION
+# MI VÍDEO DEL REGALADO
 # =========================================================
 
-@app.get("/preview-emocion/{recipient_token}", response_class=HTMLResponse)
-def preview_emocion(recipient_token: str):
+@app.get("/mi-video/{recipient_token}", response_class=HTMLResponse)
+def mi_video(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not bool(order.get("experience_started")):
@@ -2727,19 +2727,23 @@ def preview_emocion(recipient_token: str):
     if not bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
-    if not reaction_exists(order):
-        return HTMLResponse("""
+    experience_video_url = (order.get("experience_video_url") or "").strip()
+
+    if not experience_video_url:
+        return f"""
         <!DOCTYPE html>
         <html lang="es">
         <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-            <div><h1>Estamos preparando la vista previa…</h1></div>
+            <div>
+                <h1>Tu momento ya ha ocurrido.</h1>
+                <p>La reacción se ha guardado y ya ha vuelto a quien lo creó.</p>
+                <a href="/crear" style="display:inline-block;margin-top:20px;padding:14px 22px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">Crear otra ETERNA</a>
+            </div>
         </body>
         </html>
-        """)
+        """
 
-    video_url = order.get("reaction_video_public_url") or f"/video/reaction/{order['recipient_token']}"
-    video_type = guess_media_type_from_url(video_url)
-    sender_sms_sent = bool(order.get("sender_sms_sent_at"))
+    video_type = guess_media_type_from_url(experience_video_url)
 
     return f"""
     <!DOCTYPE html>
@@ -2747,7 +2751,7 @@ def preview_emocion(recipient_token: str):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Vista previa emoción</title>
+        <title>Mi vídeo</title>
         <style>
             * {{ box-sizing: border-box; }}
             html, body {{ margin: 0; min-height: 100%; background: #000; }}
@@ -2825,39 +2829,52 @@ def preview_emocion(recipient_token: str):
     <body>
         <div class="wrap">
             <div class="header">
-                <div class="header-title">Este momento ya es vuestro</div>
+                <div class="header-title">Este momento ya es tuyo</div>
             </div>
 
             <div class="top">
                 <video playsinline controls autoplay preload="metadata">
-                    <source src="{safe_attr(video_url)}" type="{safe_attr(video_type)}">
+                    <source src="{safe_attr(experience_video_url)}" type="{safe_attr(video_type)}">
                     Tu navegador no puede reproducir este vídeo.
                 </video>
             </div>
 
             <div class="actions">
                 <div class="buttons">
-                    <a class="btn primary" href="/cobrar/{safe_attr(recipient_token)}">
-                        Seguir
-                    </a>
-
-                    <a class="btn ghost" href="{safe_attr(sender_pack_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
-                        Abrir sender pack
-                    </a>
+                    <button class="btn primary" onclick="sharePage()">Compartir</button>
+                    <a class="btn ghost" href="{safe_attr(experience_video_url)}" download>Guardar vídeo</a>
+                    <a class="btn ghost" href="/crear">Crear otra ETERNA</a>
                 </div>
 
                 <div class="soft">
-                    {"El SMS al regalante ya se ha enviado automáticamente." if sender_sms_sent else "Si Twilio está configurado, el SMS al regalante se enviará automáticamente al guardar la reacción."}
+                    La reacción grabada no se muestra aquí. Este espacio es solo para tu momento.
                 </div>
             </div>
         </div>
+
+        <script>
+            async function sharePage() {{
+                const url = window.location.href;
+                if (navigator.share) {{
+                    try {{
+                        await navigator.share({{
+                            title: "ETERNA",
+                            text: "Este momento ya es tuyo",
+                            url: url
+                        }});
+                    }} catch (e) {{}}
+                }} else {{
+                    window.open(url, "_blank");
+                }}
+            }}
+        </script>
     </body>
     </html>
     """
 
 
 # =========================================================
-# COBRAR
+# COBRO
 # =========================================================
 
 @app.get("/cobrar/{recipient_token}", response_class=HTMLResponse)
@@ -2868,10 +2885,7 @@ def cobrar(recipient_token: str):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if not bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
-
-    if not reaction_exists(order):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     cashout_status = compute_cashout_status(order)
     gift_amount = float(order.get("gift_amount") or 0)
@@ -2884,7 +2898,7 @@ def cobrar(recipient_token: str):
 
     amount_text = format_amount_display(order["gift_amount"])
     button_href = f"/iniciar-cobro-real/{safe_attr(recipient_token)}"
-    button_text = "Cobrar"
+    button_text = "RECIBIR"
 
     if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
         button_text = "Finalizar cobro"
@@ -2956,7 +2970,7 @@ def cobrar(recipient_token: str):
         <div class="card">
             <h1>Esto ya es tuyo</h1>
             <div class="lead">
-                Para cobrarlo de verdad, Stripe te pedirá tus datos en una página segura.
+                Para recibirlo, continúa.
             </div>
             <div class="amount">{amount_text}</div>
             <a class="btn" href="{button_href}">{button_text}</a>
@@ -2981,7 +2995,7 @@ def iniciar_cobro_real(recipient_token: str):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
     if not bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     if bool(order.get("gift_refunded")):
         return RedirectResponse(url=f"/gracias-cobro/{recipient_token}", status_code=303)
@@ -3180,12 +3194,12 @@ def gracias_cobro(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if not bool(order.get("experience_completed")):
-        return RedirectResponse(url=f"/preview-emocion/{recipient_token}", status_code=303)
+        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     gift_amount = float(order.get("gift_amount") or 0)
 
     if bool(order.get("gift_refunded")):
-        title = "Ya está"
+        title = "Ya está."
         lead = "El regalo ha quedado cancelado"
         soft = (
             f"Han pasado {GIFT_REFUND_DAYS} días sin completar el cobro. "
@@ -3194,8 +3208,8 @@ def gracias_cobro(recipient_token: str):
     else:
         if gift_amount > 0 and not bool(order.get("transfer_completed")):
             return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
-        title = "Ya está"
-        lead = "Tu cobro ya está preparado" if gift_amount > 0 else "Todo ha quedado completado"
+        title = "Ya está."
+        lead = "Tu momento ha quedado guardado."
         soft = (
             "Stripe ya ha recibido tus datos y el cobro ha quedado preparado."
             if gift_amount > 0 else
@@ -3272,8 +3286,8 @@ def gracias_cobro(recipient_token: str):
             <h1>{safe_text(title)}</h1>
             <div class="lead">{safe_text(lead)}</div>
             <div class="soft">{safe_text(soft)}</div>
-            <a class="btn" href="/preview-emocion/{safe_attr(recipient_token)}">
-                Volver a ver mi vídeo
+            <a class="btn" href="/mi-video/{safe_attr(recipient_token)}">
+                Volver a mi vídeo
             </a>
         </div>
     </body>
@@ -3391,7 +3405,7 @@ def sender_pack(sender_token: str):
     </head>
     <body>
         <div class="card">
-            <div class="intro">Este momento ya es vuestro</div>
+            <div class="intro">Lo que creaste…<br>fue magia.</div>
 
             <div class="video-wrap">
                 <video controls autoplay playsinline preload="metadata">
@@ -3400,7 +3414,7 @@ def sender_pack(sender_token: str):
                 </video>
             </div>
 
-            <div class="outro">Hay momentos que merecen quedarse para siempre</div>
+            <div class="outro">Mira lo que provocaste…</div>
 
             <div class="buttons">
                 <button class="btn primary" onclick="shareVideo()">Compartir</button>
@@ -3416,7 +3430,7 @@ def sender_pack(sender_token: str):
                     try {{
                         await navigator.share({{
                             title: "ETERNA",
-                            text: "Este momento ya es vuestro",
+                            text: "Lo que creaste fue magia",
                             url: url
                         }});
                     }} catch (e) {{}}
@@ -3448,4 +3462,5 @@ def health():
         "service": "ETERNA",
         "twilio_enabled": twilio_enabled(),
         "r2_enabled": r2_enabled(),
+        "stripe_enabled": bool(STRIPE_SECRET_KEY),
     }
