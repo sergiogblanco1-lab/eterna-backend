@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
 
-app = FastAPI(title="ETERNA FINAL LIMPIO")
+app = FastAPI(title="ETERNA FINAL BLINDADO")
 
 
 # =========================================================
@@ -202,6 +202,11 @@ def init_db():
         recipient_sms_sid TEXT,
         sender_sms_sid TEXT,
 
+        recipient_sms_attempts INTEGER NOT NULL DEFAULT 0,
+        sender_sms_attempts INTEGER NOT NULL DEFAULT 0,
+        recipient_sms_error TEXT,
+        sender_sms_error TEXT,
+
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
 
@@ -242,6 +247,10 @@ def init_db():
     add_column_if_missing("orders", "sender_sms_sent_at", "ALTER TABLE orders ADD COLUMN sender_sms_sent_at TEXT")
     add_column_if_missing("orders", "recipient_sms_sid", "ALTER TABLE orders ADD COLUMN recipient_sms_sid TEXT")
     add_column_if_missing("orders", "sender_sms_sid", "ALTER TABLE orders ADD COLUMN sender_sms_sid TEXT")
+    add_column_if_missing("orders", "recipient_sms_attempts", "ALTER TABLE orders ADD COLUMN recipient_sms_attempts INTEGER NOT NULL DEFAULT 0")
+    add_column_if_missing("orders", "sender_sms_attempts", "ALTER TABLE orders ADD COLUMN sender_sms_attempts INTEGER NOT NULL DEFAULT 0")
+    add_column_if_missing("orders", "recipient_sms_error", "ALTER TABLE orders ADD COLUMN recipient_sms_error TEXT")
+    add_column_if_missing("orders", "sender_sms_error", "ALTER TABLE orders ADD COLUMN sender_sms_error TEXT")
 
 
 init_db()
@@ -558,16 +567,24 @@ def to_e164(phone: str) -> str:
     return f"+{normalized}"
 
 
-def send_sms(phone: str, message: str) -> Optional[str]:
+def send_sms(phone: str, message: str) -> dict:
     to_phone = to_e164(phone)
 
     if not to_phone:
         log_info("SMS skipped", "invalid phone")
-        return None
+        return {
+            "ok": False,
+            "sid": None,
+            "error": "invalid_phone",
+        }
 
     if not twilio_enabled():
         log_info("SMS skipped", "twilio not configured")
-        return None
+        return {
+            "ok": False,
+            "sid": None,
+            "error": "twilio_not_configured",
+        }
 
     try:
         client = Client(TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN)
@@ -577,43 +594,99 @@ def send_sms(phone: str, message: str) -> Optional[str]:
             to=to_phone,
         )
         log_info("SMS sent", {"to": to_phone, "sid": sms.sid, "status": sms.status})
-        return sms.sid
+        return {
+            "ok": True,
+            "sid": sms.sid,
+            "error": None,
+        }
     except Exception as e:
         log_error("Twilio SMS error", e)
-        return None
+        return {
+            "ok": False,
+            "sid": None,
+            "error": str(e),
+        }
 
 
-def try_send_recipient_sms(order: dict) -> Optional[str]:
+def try_send_recipient_sms(order: dict) -> dict:
     if order.get("recipient_sms_sent_at"):
-        return order.get("recipient_sms_sid")
+        return {
+            "ok": True,
+            "sid": order.get("recipient_sms_sid"),
+            "already_sent": True,
+            "error": None,
+        }
 
-    sms_sid = send_sms(order.get("recipient_phone", ""), build_recipient_message(order))
+    attempts = int(order.get("recipient_sms_attempts") or 0) + 1
+    result = send_sms(order.get("recipient_phone", ""), build_recipient_message(order))
 
-    if sms_sid:
+    if result["ok"]:
         update_order(
             order["id"],
             recipient_sms_sent_at=now_iso(),
-            recipient_sms_sid=sms_sid,
+            recipient_sms_sid=result["sid"],
+            recipient_sms_attempts=attempts,
+            recipient_sms_error=None,
         )
+        return {
+            "ok": True,
+            "sid": result["sid"],
+            "already_sent": False,
+            "error": None,
+        }
 
-    return sms_sid
+    update_order(
+        order["id"],
+        recipient_sms_attempts=attempts,
+        recipient_sms_error=result["error"],
+    )
+    return {
+        "ok": False,
+        "sid": None,
+        "already_sent": False,
+        "error": result["error"],
+    }
 
 
-def try_send_sender_sms(order: dict) -> Optional[str]:
+def try_send_sender_sms(order: dict) -> dict:
     if order.get("sender_sms_sent_at"):
-        return order.get("sender_sms_sid")
+        return {
+            "ok": True,
+            "sid": order.get("sender_sms_sid"),
+            "already_sent": True,
+            "error": None,
+        }
 
-    sms_sid = send_sms(order.get("sender_phone", ""), build_sender_ready_message(order))
+    attempts = int(order.get("sender_sms_attempts") or 0) + 1
+    result = send_sms(order.get("sender_phone", ""), build_sender_ready_message(order))
 
-    if sms_sid:
+    if result["ok"]:
         update_order(
             order["id"],
             sender_sms_sent_at=now_iso(),
-            sender_sms_sid=sms_sid,
+            sender_sms_sid=result["sid"],
+            sender_sms_attempts=attempts,
+            sender_sms_error=None,
             sender_notified=1,
         )
+        return {
+            "ok": True,
+            "sid": result["sid"],
+            "already_sent": False,
+            "error": None,
+        }
 
-    return sms_sid
+    update_order(
+        order["id"],
+        sender_sms_attempts=attempts,
+        sender_sms_error=result["error"],
+    )
+    return {
+        "ok": False,
+        "sid": None,
+        "already_sent": False,
+        "error": result["error"],
+    }
 
 
 def try_acquire_transfer_lock(order_id: str) -> bool:
@@ -659,11 +732,6 @@ def compute_cashout_status(order: dict) -> str:
 
 
 def try_start_experience(order_id: str) -> str:
-    """
-    Versión segura:
-    no bloquea para siempre si algo falla a mitad.
-    Solo impide volver a entrar cuando ya está completada.
-    """
     order = get_order_by_id(order_id)
 
     if not bool(order.get("paid")):
@@ -1192,7 +1260,7 @@ def create_order_and_redirect(
     """, (recipient_name, recipient_phone_norm, created_at))
     recipient_id = cur.lastrowid
 
-    placeholders = ", ".join(["?"] * 42)
+    placeholders = ", ".join(["?"] * 46)
 
     cur.execute(f"""
         INSERT INTO orders (
@@ -1209,6 +1277,7 @@ def create_order_and_redirect(
             reaction_video_local, reaction_video_public_url, experience_video_url,
             gift_refund_deadline_at,
             recipient_sms_sent_at, sender_sms_sent_at, recipient_sms_sid, sender_sms_sid,
+            recipient_sms_attempts, sender_sms_attempts, recipient_sms_error, sender_sms_error,
             created_at, updated_at
         )
         VALUES ({placeholders})
@@ -1226,6 +1295,7 @@ def create_order_and_redirect(
         None, None, DEFAULT_EXPERIENCE_VIDEO_URL or None,
         None,
         None, None, None, None,
+        0, 0, None, None,
         created_at, created_at
     ))
 
@@ -1477,9 +1547,28 @@ def post_pago(order_id: str):
 
 @app.get("/resumen/{order_id}", response_class=HTMLResponse)
 def resumen(order_id: str):
-    get_order_by_id(order_id)
+    order = get_order_by_id(order_id)
 
-    return HTMLResponse("""
+    if not order.get("recipient_sms_sent_at"):
+        try:
+            try_send_recipient_sms(order)
+            order = get_order_by_id(order_id)
+        except Exception as e:
+            log_error("resumen try_send_recipient_sms", e)
+
+    recipient_name = safe_text(order.get("recipient_name") or "esa persona")
+    sms_sent = bool(order.get("recipient_sms_sent_at"))
+
+    if sms_sent:
+        status_line = "Ya se ha enviado tu mensaje."
+        sub_line = f"Espera a que {recipient_name} reciba su regalo."
+        soft_line = "Pronto tendrás noticias."
+    else:
+        status_line = "Tu ETERNA ya está preparada."
+        sub_line = f"Estamos intentando enviar el mensaje a {recipient_name}."
+        soft_line = "Si no llega todavía, vuelve a entrar en unos instantes."
+
+    return HTMLResponse(f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
@@ -1487,19 +1576,18 @@ def resumen(order_id: str):
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
         <title>ETERNA</title>
     </head>
-    <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;justify-content:center;align-items:center;text-align:center;padding:24px;">
-        <div style="max-width:700px;">
-            <h1 style="font-size:40px;margin-bottom:20px;">
-                El proceso ha terminado.
+    <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial,sans-serif;display:flex;justify-content:center;align-items:center;text-align:center;padding:24px;box-sizing:border-box;">
+        <div style="max-width:720px;width:100%;">
+            <h1 style="font-size:42px;line-height:1.2;margin:0 0 22px 0;font-weight:700;">
+                {status_line}
             </h1>
 
-            <div style="font-size:20px;line-height:1.8;color:rgba(255,255,255,0.8);">
-                Todo lo demás<br>
-                se vive en el teléfono.
+            <div style="font-size:22px;line-height:1.8;color:rgba(255,255,255,0.86);">
+                {sub_line}
             </div>
 
-            <div style="margin-top:30px;font-size:14px;color:rgba(255,255,255,0.4);">
-                Puedes cerrar esta ventana.
+            <div style="margin-top:28px;font-size:16px;line-height:1.7;color:rgba(255,255,255,0.45);">
+                {soft_line}
             </div>
         </div>
     </body>
@@ -2411,6 +2499,13 @@ def mi_video(recipient_token: str):
 def sender_pack(sender_token: str):
     order = get_order_by_sender_token_or_404(sender_token)
 
+    if reaction_exists(order) and not order.get("sender_sms_sent_at"):
+        try:
+            try_send_sender_sms(order)
+            order = get_order_by_sender_token_or_404(sender_token)
+        except Exception as e:
+            log_error("sender_pack try_send_sender_sms", e)
+
     if not reaction_exists(order):
         return HTMLResponse("""
         <!DOCTYPE html>
@@ -2751,6 +2846,44 @@ def admin_fix_experience_videos(token: str = ""):
     })
 
 
+@app.get("/admin/retry-recipient-message/{order_id}")
+def admin_retry_recipient_message(order_id: str, token: str = ""):
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="No autorizado")
+
+    order = get_order_by_id(order_id)
+    result = try_send_recipient_sms(order)
+    updated = get_order_by_id(order_id)
+
+    return JSONResponse({
+        "ok": result.get("ok", False),
+        "result": result,
+        "recipient_sms_sent_at": updated.get("recipient_sms_sent_at"),
+        "recipient_sms_sid": updated.get("recipient_sms_sid"),
+        "recipient_sms_attempts": updated.get("recipient_sms_attempts"),
+        "recipient_sms_error": updated.get("recipient_sms_error"),
+    })
+
+
+@app.get("/admin/retry-sender-message/{order_id}")
+def admin_retry_sender_message(order_id: str, token: str = ""):
+    if not ADMIN_TOKEN or token != ADMIN_TOKEN:
+        raise HTTPException(status_code=403, detail="No autorizado")
+
+    order = get_order_by_id(order_id)
+    result = try_send_sender_sms(order)
+    updated = get_order_by_id(order_id)
+
+    return JSONResponse({
+        "ok": result.get("ok", False),
+        "result": result,
+        "sender_sms_sent_at": updated.get("sender_sms_sent_at"),
+        "sender_sms_sid": updated.get("sender_sms_sid"),
+        "sender_sms_attempts": updated.get("sender_sms_attempts"),
+        "sender_sms_error": updated.get("sender_sms_error"),
+    })
+
+
 @app.get("/health")
 def health():
     return {
@@ -2759,4 +2892,5 @@ def health():
         "twilio_enabled": twilio_enabled(),
         "r2_enabled": r2_enabled(),
         "stripe_enabled": bool(STRIPE_SECRET_KEY),
+        "default_experience_video_url": DEFAULT_EXPERIENCE_VIDEO_URL,
     }
