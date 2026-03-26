@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Redirect
 from fastapi.staticfiles import StaticFiles
 from twilio.rest import Client
 
-app = FastAPI(title="ETERNA FINAL DEFINITIVO")
+app = FastAPI(title="ETERNA FINAL LIMPIO")
 
 
 # =========================================================
@@ -643,51 +643,41 @@ def compute_cashout_status(order: dict) -> str:
     if bool(order.get("gift_refunded")):
         return "gift_refunded"
 
-    if gift_amount <= 0 and bool(order.get("cashout_completed")):
+    if gift_amount <= 0:
         return "completed"
 
-    if gift_amount > 0 and bool(order.get("transfer_completed")):
+    if bool(order.get("transfer_completed")) or bool(order.get("cashout_completed")):
         return "completed"
 
     if bool(order.get("transfer_in_progress")):
         return "verifying"
 
-    if gift_amount > 0 and bool(order.get("connect_onboarding_completed")):
+    if bool(order.get("connect_onboarding_completed")):
         return "ready_to_finalize"
 
     return "pending"
 
 
 def try_start_experience(order_id: str) -> str:
-    conn = db_conn()
-    cur = conn.cursor()
+    """
+    Versión segura:
+    no bloquea para siempre si algo falla a mitad.
+    Solo impide volver a entrar cuando ya está completada.
+    """
+    order = get_order_by_id(order_id)
 
-    cur.execute("""
-        UPDATE orders
-        SET experience_started = 1,
-            delivered_to_recipient = 1,
-            updated_at = ?
-        WHERE id = ?
-          AND paid = 1
-          AND experience_started = 0
-          AND experience_completed = 0
-    """, (now_iso(), order_id))
-
-    conn.commit()
-    changed = cur.rowcount
-    conn.close()
-
-    if changed > 0:
-        return "started"
-
-    refreshed = get_order_by_id(order_id)
-    if not bool(refreshed.get("paid")):
+    if not bool(order.get("paid")):
         return "not_paid"
-    if bool(refreshed.get("experience_completed")):
+
+    if bool(order.get("experience_completed")):
         return "already_completed"
-    if bool(refreshed.get("experience_started")):
-        return "already_started"
-    return "blocked"
+
+    update_order(
+        order_id,
+        experience_started=1,
+        delivered_to_recipient=1,
+    )
+    return "started"
 
 
 # =========================================================
@@ -1487,119 +1477,34 @@ def post_pago(order_id: str):
 
 @app.get("/resumen/{order_id}", response_class=HTMLResponse)
 def resumen(order_id: str):
-    order = get_order_by_id(order_id)
-    reaction_ready = reaction_exists(order)
-    sms_sent = bool(order.get("recipient_sms_sent_at"))
+    get_order_by_id(order_id)
 
-    if reaction_ready:
-        status_line = "Tu ETERNA ha vuelto"
-        soft_line = "El pack del regalante ya está listo."
-        main_button = f"""
-            <a href="{safe_attr(sender_pack_url_from_order(order))}" target="_blank" rel="noopener noreferrer">
-                <button class="primary">Abrir sender pack</button>
-            </a>
-        """
-        estado_texto = "Volvió a ti"
-    else:
-        status_line = "Tu ETERNA está lista"
-        soft_line = (
-            "El SMS se ha enviado automáticamente."
-            if sms_sent else
-            "El SMS se enviará automáticamente tras el pago si Twilio está configurado."
-        )
-        main_button = '<button class="primary" disabled>Esperando a que lo viva</button>'
-        estado_texto = "Pendiente de vivir"
-
-    return f"""
+    return HTMLResponse("""
     <!DOCTYPE html>
     <html lang="es">
     <head>
         <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Resumen ETERNA</title>
-        <style>
-            * {{ box-sizing: border-box; }}
-            html, body {{ margin: 0; min-height: 100%; background: #000; }}
-            body {{
-                min-height: 100vh;
-                background:
-                    radial-gradient(circle at top, rgba(255,255,255,0.06), transparent 30%),
-                    linear-gradient(180deg, #050505 0%, #000000 100%);
-                color: white;
-                font-family: Arial, sans-serif;
-                display: flex;
-                justify-content: center;
-                align-items: center;
-                padding: 24px;
-            }}
-            .card {{
-                width: 100%;
-                max-width: 760px;
-                background: rgba(255,255,255,0.04);
-                border: 1px solid rgba(255,255,255,0.08);
-                border-radius: 24px;
-                padding: 32px 28px;
-                text-align: center;
-            }}
-            .stat {{
-                background: rgba(255,255,255,0.05);
-                border: 1px solid rgba(255,255,255,0.06);
-                border-radius: 16px;
-                padding: 16px;
-                margin-top: 12px;
-            }}
-            .label {{
-                font-size: 12px;
-                letter-spacing: 1.2px;
-                text-transform: uppercase;
-                color: rgba(255,255,255,0.5);
-            }}
-            .value {{
-                font-size: 22px;
-                font-weight: bold;
-                margin-top: 6px;
-            }}
-            .buttons {{ margin-top: 24px; }}
-            button {{
-                width: 100%;
-                padding: 16px 22px;
-                border-radius: 999px;
-                border: 0;
-                font-weight: bold;
-                font-size: 15px;
-            }}
-            .primary {{ background: white; color: black; }}
-            .primary[disabled] {{ opacity: 0.7; }}
-            a {{ text-decoration: none; }}
-            .soft {{ margin-top: 14px; color: rgba(255,255,255,0.45); font-size: 13px; }}
-        </style>
+        <title>ETERNA</title>
     </head>
-    <body>
-        <div class="card">
-            <h1>{safe_text(status_line)}</h1>
+    <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;justify-content:center;align-items:center;text-align:center;padding:24px;">
+        <div style="max-width:700px;">
+            <h1 style="font-size:40px;margin-bottom:20px;">
+                El proceso ha terminado.
+            </h1>
 
-            <div class="stat">
-                <div class="label">Regalo</div>
-                <div class="value">{money(order["gift_amount"])}€</div>
+            <div style="font-size:20px;line-height:1.8;color:rgba(255,255,255,0.8);">
+                Todo lo demás<br>
+                se vive en el teléfono.
             </div>
 
-            <div class="stat">
-                <div class="label">Comisión</div>
-                <div class="value">{money(order["platform_total_fee"])}€</div>
+            <div style="margin-top:30px;font-size:14px;color:rgba(255,255,255,0.4);">
+                Puedes cerrar esta ventana.
             </div>
-
-            <div class="stat">
-                <div class="label">Estado</div>
-                <div class="value">{safe_text(estado_texto)}</div>
-            </div>
-
-            <div class="buttons">{main_button}</div>
-            <div class="soft">{safe_text(soft_line)}</div>
         </div>
     </body>
     </html>
-    """
+    """)
 
 
 # =========================================================
@@ -1851,11 +1756,6 @@ def experiencia(recipient_token: str):
                     return false;
                 }}
 
-                if (data.status === "already_started") {{
-                    window.location.href = data.redirect_url || "/bloqueado/{safe_attr(order['recipient_token'])}";
-                    return false;
-                }}
-
                 return true;
             }}
 
@@ -2041,12 +1941,6 @@ def start_experience(recipient_token: str = Form(...)):
             "redirect_url": f"/cobrar/{recipient_token}",
         })
 
-    if result in {"already_started", "blocked"}:
-        return JSONResponse({
-            "status": "already_started",
-            "redirect_url": f"/bloqueado/{recipient_token}",
-        })
-
     return JSONResponse({"status": "ok"})
 
 
@@ -2069,7 +1963,7 @@ def bloqueado(recipient_token: str):
         <div style="width:100%;max-width:760px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:28px;padding:40px 28px;">
             <h1 style="margin:0 0 16px 0;font-size:38px;">Esta ETERNA ya empezó</h1>
             <div style="font-size:18px;color:rgba(255,255,255,0.82);line-height:1.8;">
-                Esta experiencia solo puede vivirse una vez.
+                Si algo falló, vuelve a abrir el enlace desde tu teléfono.
             </div>
         </div>
     </body>
@@ -2321,38 +2215,18 @@ def connect_return(recipient_token: str):
 
     if ready or bool(refreshed.get("connect_onboarding_completed")):
         try:
-            result = process_gift_transfer_for_order(refreshed)
-            log_info("connect_return transfer result", result)
-
-            if result.get("status") in {
-                "ok", "already_transferred", "no_gift", "stripe_disabled_test_mode"
-            }:
-                return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
-
+            process_gift_transfer_for_order(refreshed)
         except Exception as e:
             log_error("connect_return process_gift_transfer_for_order", e)
 
-    return RedirectResponse(url=f"/verificando-cobro/{recipient_token}", status_code=303)
+    return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
 
-@app.get("/verificando-cobro/{recipient_token}", response_class=HTMLResponse)
+@app.get("/verificando-cobro/{recipient_token}")
 def verificando_cobro(recipient_token: str):
     order = get_order_by_recipient_token_or_404(recipient_token)
 
     if bool(order.get("gift_refunded")):
-        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
-
-    gift_amount = float(order.get("gift_amount") or 0)
-
-    if gift_amount <= 0:
-        if not bool(order.get("cashout_completed")):
-            update_order(
-                order["id"],
-                cashout_completed=1,
-                transfer_completed=1,
-                connect_onboarding_completed=1,
-                transfer_in_progress=0,
-            )
         return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
     try:
@@ -2369,34 +2243,7 @@ def verificando_cobro(recipient_token: str):
         except Exception as e:
             log_error("verificando_cobro process_gift_transfer_for_order", e)
 
-    latest = get_order_by_recipient_token_or_404(recipient_token)
-
-    if bool(latest.get("transfer_completed")) or bool(latest.get("cashout_completed")):
-        return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
-
-    return """
-    <!DOCTYPE html>
-    <html lang="es">
-    <head>
-        <meta charset="UTF-8">
-        <meta http-equiv="refresh" content="5">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Verificando cobro</title>
-    </head>
-    <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
-        <div style="width:100%;max-width:760px;background:rgba(255,255,255,0.04);border:1px solid rgba(255,255,255,0.08);border-radius:28px;padding:42px 30px;">
-            <h1 style="margin:0 0 18px 0;font-size:40px;">Estamos verificando tu cobro</h1>
-            <div style="color:rgba(255,255,255,0.88);line-height:1.8;font-size:20px;">
-                Stripe está terminando el proceso seguro.<br>
-                No necesitas volver a empezar.
-            </div>
-            <div style="margin-top:18px;color:rgba(255,255,255,0.50);font-size:14px;line-height:1.7;">
-                Esta pantalla se actualizará sola en unos segundos.
-            </div>
-        </div>
-    </body>
-    </html>
-    """
+    return RedirectResponse(url=f"/mi-video/{recipient_token}", status_code=303)
 
 
 @app.get("/gracias-cobro/{recipient_token}", response_class=HTMLResponse)
@@ -2418,28 +2265,32 @@ def mi_video(recipient_token: str):
     if not bool(order.get("experience_completed")):
         return RedirectResponse(url=f"/pedido/{recipient_token}", status_code=303)
 
-    if not bool(order.get("cashout_completed")) and not bool(order.get("transfer_completed")) and float(order.get("gift_amount") or 0) > 0:
-        return RedirectResponse(url=f"/cobrar/{recipient_token}", status_code=303)
-
     experience_video_url = (order.get("experience_video_url") or DEFAULT_EXPERIENCE_VIDEO_URL or "").strip()
 
     if not experience_video_url:
-        return f"""
+        return HTMLResponse("""
         <!DOCTYPE html>
         <html lang="es">
         <body style="margin:0;min-height:100vh;background:#000;color:white;font-family:Arial, sans-serif;display:flex;align-items:center;justify-content:center;text-align:center;padding:24px;">
             <div>
                 <h1>Tu momento ya es tuyo.</h1>
                 <p>Falta conectar el vídeo original final de esta ETERNA.</p>
-                <a href="/crear" style="display:inline-block;margin-top:20px;padding:14px 22px;border-radius:999px;background:white;color:black;text-decoration:none;font-weight:bold;">Crear otra ETERNA</a>
             </div>
         </body>
         </html>
-        """
+        """)
 
     video_type = guess_media_type_from_url(experience_video_url)
+    gift_amount = float(order.get("gift_amount") or 0)
+    cashout_done = bool(order.get("cashout_completed")) or bool(order.get("transfer_completed")) or gift_amount <= 0
 
-    return f"""
+    status_text = (
+        "Tu dinero ya se ha procesado."
+        if cashout_done else
+        "Tu dinero ya está en camino. Puede tardar unos días en aparecer en tu cuenta."
+    )
+
+    return HTMLResponse(f"""
     <!DOCTYPE html>
     <html lang="es">
     <head>
@@ -2474,6 +2325,15 @@ def mi_video(recipient_token: str):
                 border-radius: 18px;
                 background: #111;
                 display: block;
+            }}
+            .status {{
+                max-width: 760px;
+                margin: 0 auto;
+                padding: 0 16px;
+                text-align: center;
+                color: rgba(255,255,255,0.70);
+                line-height: 1.7;
+                font-size: 15px;
             }}
             .actions {{ padding: 24px 16px 30px; }}
             .buttons {{ display: grid; gap: 12px; max-width: 760px; margin: 0 auto; }}
@@ -2510,6 +2370,10 @@ def mi_video(recipient_token: str):
                 </video>
             </div>
 
+            <div class="status">
+                {safe_text(status_text)}
+            </div>
+
             <div class="actions">
                 <div class="buttons">
                     <button class="btn primary" onclick="sharePage()">Compartir</button>
@@ -2536,7 +2400,7 @@ def mi_video(recipient_token: str):
         </script>
     </body>
     </html>
-    """
+    """)
 
 
 # =========================================================
@@ -2786,7 +2650,6 @@ def sender_pack(sender_token: str):
 
             async function playBoth() {{
                 restartBoth();
-
                 await new Promise(resolve => setTimeout(resolve, 100));
 
                 await Promise.allSettled([
